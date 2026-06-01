@@ -1,0 +1,47 @@
+{
+  "name": "review-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron desktop app for reviewing inference records and curating ground truth.",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "electron": "npm run build && electron .",
+    "build": "npm run build:metadata && npm run build:main && npm run build:renderer",
+    "build:metadata": "node scripts/generate-version.mjs",
+    "build:main": "esbuild src/main/main.ts src/preload/preload.ts src/agent/agent-process.ts --bundle --platform=node --target=node20 --format=cjs --outbase=src --outdir=dist --external:electron",
+    "build:renderer": "vite build",
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run --config vitest.config.ts tests/unit",
+    "test:integration": "vitest run --config vitest.config.ts tests/integration",
+    "test:ui": "vitest run --config vitest.config.ts tests/ui",
+    "test:e2e": "npm run build && playwright test",
+    "smoke": "npm run build && node scripts/smoke.mjs",
+    "check": "npm run lint && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:ui && npm run test:e2e && npm run smoke"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "@azure/storage-blob": "^12.26.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "vite": "^6.0.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "electron": "^33.2.1",
+    "esbuild": "^0.24.2",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

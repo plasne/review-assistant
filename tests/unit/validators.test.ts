@@ -1,0 +1,87 @@
+import { describe, expect, it } from 'vitest';
+import {
+  assertAgentStatus,
+  assertBootstrap,
+  assertChatStreamChunk,
+  assertChatStreamStart,
+  assertChatMessage,
+  assertNewProjectId,
+  assertOpenProjectResult,
+  assertProjectId,
+  assertRecordDetail,
+  assertRecordId,
+  ValidationError
+} from '../../src/shared/validators';
+
+describe('IPC boundary validators', () => {
+  it('accepts valid identifiers and rejects traversal-style input', () => {
+    expect(assertProjectId('sample-project')).toBe('sample-project');
+    expect(assertRecordId('valid-record')).toBe('valid-record');
+    expect(assertNewProjectId('new-project')).toBe('new-project');
+
+    expect(() => assertProjectId('../sample-project')).toThrow(ValidationError);
+    expect(() => assertProjectId('nested/project')).toThrow(ValidationError);
+    expect(() => assertRecordId('..\\valid-record')).toThrow(ValidationError);
+    expect(() => assertNewProjectId('Bad Name')).toThrow('Project name must be 3-63 characters');
+  });
+
+  it('requires chat messages to be non-empty and bounded', () => {
+    expect(assertChatMessage('review this')).toBe('review this');
+    expect(() => assertChatMessage('')).toThrow('Chat message must be non-empty');
+    expect(() => assertChatMessage('x'.repeat(20001))).toThrow('Chat message must be non-empty');
+  });
+
+  it('validates response shapes that cross preload and IPC boundaries', () => {
+    expect(
+      assertBootstrap({
+        backendKind: 'local',
+        projects: [{ id: 'sample-project', name: 'sample-project' }],
+        version: 'v0.1.0-test'
+      })
+    ).toMatchObject({ backendKind: 'local' });
+
+    expect(
+      assertOpenProjectResult({
+        project: { id: 'sample-project', name: 'sample-project' },
+        schema: { type: 'object' },
+        records: [{ id: 'valid-record', displayName: 'valid-record' }],
+        projectConfig: { LOCAL_PATH: '/tmp/projects', IGNORED: 123 }
+      }).projectConfig
+    ).toEqual({ LOCAL_PATH: '/tmp/projects' });
+
+    expect(
+      assertRecordDetail({
+        projectId: 'sample-project',
+        recordId: 'valid-record',
+        displayName: 'valid-record',
+        data: {},
+        schema: {},
+        validationIssues: [],
+        renderTree: { kind: 'object', label: 'record', children: [], validationIssues: [] }
+      }).recordId
+    ).toBe('valid-record');
+
+    expect(() => assertBootstrap({ projects: [] })).toThrow(ValidationError);
+    expect(() => assertOpenProjectResult({ projectConfig: {}, records: [] })).toThrow(ValidationError);
+    expect(() => assertRecordDetail({ projectId: 'sample-project', recordId: 'valid-record' })).toThrow(ValidationError);
+  });
+
+  it('validates streamed chat IPC payloads', () => {
+    expect(
+      assertAgentStatus({
+        provider: { id: 'github-copilot', name: 'GitHub Copilot' },
+        availability: 'ready'
+      }).availability
+    ).toBe('ready');
+    expect(assertChatStreamStart({ requestId: 'request-1', messageId: 'message-1' })).toEqual({
+      requestId: 'request-1',
+      messageId: 'message-1'
+    });
+    expect(assertChatStreamChunk({ requestId: 'request-1', messageId: 'message-1', content: 'partial' }).content).toBe('partial');
+    expect(() => assertAgentStatus({ provider: { id: 'github-copilot', name: 'GitHub Copilot' }, availability: 'offline' })).toThrow(
+      ValidationError
+    );
+    expect(() => assertChatStreamStart({ requestId: 'request-1' })).toThrow(ValidationError);
+    expect(() => assertChatStreamChunk({ requestId: 'request-1', messageId: 'message-1' })).toThrow(ValidationError);
+  });
+});

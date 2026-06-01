@@ -1,0 +1,23 @@
+.PHONY: smoke lint typecheck test check ci audit-harness entropy-check
+
+smoke:
+	./scripts/harness/smoke.sh
+
+lint:
+	./scripts/harness/lint.sh
+
+typecheck:
+	./scripts/harness/typecheck.sh
+
+test:
+	./scripts/harness/test.sh
+
+check: lint typecheck
+
+ci: check test smoke audit-harness entropy-check
+
+audit-harness:
+	./scripts/audit_harness.sh
+
+entropy-check:
+	./scripts/harness/entropy_check.sh

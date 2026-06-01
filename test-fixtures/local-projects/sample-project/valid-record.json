@@ -1,0 +1,13 @@
+{
+  "persona": "developer",
+  "question": "How do I run the harness?",
+  "answer": "Run npm run check.",
+  "evidence": [
+    {
+      "id": "doc-1",
+      "source": "README",
+      "uri": "https://example.com/readme",
+      "content": "The harness is run with npm run check."
+    }
+  ]
+}

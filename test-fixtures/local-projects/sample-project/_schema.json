@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "properties": {
+    "persona": {
+      "type": "string",
+      "description": "The persona that might ask this question.",
+      "enum": ["TPM", "developer", "SME"]
+    },
+    "question": {
+      "type": "string",
+      "description": "The question that was asked."
+    },
+    "answer": {
+      "type": "string",
+      "description": "The answer that the agent gave."
+    },
+    "evidence": {
+      "type": "array",
+      "description": "The evidence that was found to support the answer.",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "source", "uri", "content"]
+      }
+    }
+  },
+  "required": ["question", "evidence"]
+}
