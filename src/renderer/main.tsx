@@ -1020,19 +1020,11 @@ const RenderTree = ({
       </section>
     );
   }
-  const nodeHistory = node.path ? history?.[node.path] : undefined;
-  const latestEdit = latestEditValue(nodeHistory);
-  const displayedValue = latestEdit ?? formatValue(node.value);
-  const isEdited = latestEdit !== undefined;
   return (
     <section className="field">
       <FieldHeading label={node.label} description={node.description} />
       {issues}
-      {node.enumValues ? (
-        <EnumValue node={node} value={displayedValue} edited={isEdited} />
-      ) : (
-        <output className={isEdited ? 'edited-value' : undefined}>{displayedValue}</output>
-      )}
+      {node.enumValues ? <EnumValue node={node} /> : <output>{formatValue(node.value)}</output>}
       <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
     </section>
   );
@@ -1062,7 +1054,7 @@ const FeedbackPanel = ({
   const path = node.path;
   const config = path && feedbackConfig ? feedbackConfigEntryForPath(feedbackConfig, path) : undefined;
   const nodeHistory = path ? history?.[path] : undefined;
-  const initialEditValue = editableValue(node, nodeHistory);
+  const initialEditValue = editableValue(node);
   const [feedbackValue, setFeedbackValue] = useState('');
   const [commentValue, setCommentValue] = useState('');
   const [editValue, setEditValue] = useState(initialEditValue);
@@ -1072,7 +1064,7 @@ const FeedbackPanel = ({
   if (!path || !config || !onSubmitFeedback) {
     return null;
   }
-  const allHistory = collectHistory(nodeHistory, editableValue(node));
+  const allHistory = collectHistory(nodeHistory);
   const hasFeedbackControls = config.feedback !== 'none' || config.comments || config.editable;
   const usernameValid = projectUser?.valid === true;
   const showFeedbackControls = hasFeedbackControls && usernameValid;
@@ -1222,15 +1214,10 @@ const EditInput = ({ node, value, onChange }: { node: RenderNode; value: string;
   return <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={2} />;
 };
 
-const latestEditValue = (history: FeedbackHistory | undefined): string | undefined =>
-  [...(history?.edits ?? [])].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))[0]?.value;
-
-const editableValue = (node: RenderNode, history?: FeedbackHistory): string =>
-  latestEditValue(history) ?? (node.kind === 'value' ? formatValue(node.value) : '');
+const editableValue = (node: RenderNode): string => (node.kind === 'value' ? formatValue(node.value) : '');
 
 const collectHistory = (
-  history: FeedbackHistory | undefined,
-  originalValue = ''
+  history: FeedbackHistory | undefined
 ): Array<{ username: string; timestamp: string; feedback?: string; comment?: string; edit?: string; original?: string }> => {
   const items = new Map<string, { username: string; timestamp: string; feedback?: string; comment?: string; edit?: string; original?: string }>();
   const upsert = (entry: FeedbackEntry, patch: { feedback?: string; comment?: string; edit?: string }) => {
@@ -1247,7 +1234,7 @@ const collectHistory = (
     upsert(entry, { edit: entry.value });
   }
   const sorted = [...items.values()].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
-  return history?.edits.length && originalValue ? [...sorted, { username: '', timestamp: '', original: originalValue }] : sorted;
+  return history?.original !== undefined ? [...sorted, { username: '', timestamp: '', original: history.original }] : sorted;
 };
 
 const formatRelativeTime = (timestamp: string): string => {
@@ -1278,7 +1265,8 @@ const getObjectIdentifier = (node: Extract<RenderNode, { kind: 'object' }>): str
   return firstChild.label;
 };
 
-const EnumValue = ({ node, value, edited }: { node: Extract<RenderNode, { kind: 'value' }>; value: string; edited: boolean }) => {
+const EnumValue = ({ node }: { node: Extract<RenderNode, { kind: 'value' }> }) => {
+  const value = formatValue(node.value);
   const enumOptions = node.enumValues ?? [];
   const selectedOption = enumOptions.find((option) => formatValue(option) === value);
   const selectedValue = selectedOption === undefined ? enumOptionValue(value) : enumOptionValue(selectedOption);
@@ -1287,7 +1275,7 @@ const EnumValue = ({ node, value, edited }: { node: Extract<RenderNode, { kind: 
   return (
     <select
       aria-label={node.label}
-      className={`enum-select${edited ? ' edited-value' : ''}`}
+      className="enum-select"
       value={selectedValue}
       onChange={(event) => {
         event.currentTarget.value = selectedValue;

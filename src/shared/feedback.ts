@@ -18,11 +18,12 @@ const ARRAY_ITEM_PATH_SEGMENT = '~2';
 
 type JsonSchema = Record<string, unknown>;
 type FeedbackRecord = {
+  original?: string;
   feedback?: string;
   comment?: string;
   edit?: string;
-  username: string;
-  timestamp: string;
+  username?: string;
+  timestamp?: string;
 };
 
 export const getProjectUser = (values: Record<string, string>): ProjectUser => {
@@ -178,9 +179,13 @@ export const mergeFeedbackEntries = (
     username: validUsername,
     timestamp
   };
-  const existingRecords = readFeedbackRecords(record[names.feedback]);
+  const existingRecords = readFeedbackRecordsForStorage(record[names.feedback]);
   const current = existingRecords.length > 0 ? existingRecords : feedbackHistoryToRecords(readFeedbackHistory(record, input.propertyPath));
-  record[names.feedback] = [entry, ...current];
+  const original = readFeedbackOriginal(record[names.feedback]) ?? (edit ? formatStoredValue(readPropertyValue(record, input.propertyPath)) : undefined);
+  record[names.feedback] = [...(original !== undefined ? [{ original }] : []), ...current, entry];
+  if (edit) {
+    writePropertyValue(record, input.propertyPath, edit);
+  }
   delete record[names.comments];
   delete record[names.edits];
   return [
@@ -250,7 +255,7 @@ const collectWildcardFeedbackHistory = (record: Record<string, unknown>, targetP
     const propertyPath = `/${targetSegments
       .map((segment) => (segment === ARRAY_ITEM_PATH_SEGMENT ? wildcardValues[wildcardIndex++] : segment))
       .join('/')}`;
-    const kind = match[match.length - 1] as keyof FeedbackHistory;
+    const kind = match[match.length - 1] as 'feedback' | 'edits' | 'comments';
     if (kind === 'feedback') {
       history[propertyPath] = readFeedbackHistory(record, propertyPath);
     } else if (!history[propertyPath]) {
@@ -267,17 +272,20 @@ const readFeedbackHistory = (record: Record<string, unknown>, propertyPath: stri
   return {
     feedback: unified.feedback.length > 0 ? unified.feedback : readFeedbackEntries(record[names.feedback]),
     comments: unified.comments.length > 0 ? unified.comments : readFeedbackEntries(record[names.comments]),
-    edits: unified.edits.length > 0 ? unified.edits : readFeedbackEntries(record[names.edits])
+    edits: unified.edits.length > 0 ? unified.edits : readFeedbackEntries(record[names.edits]),
+    ...(unified.original !== undefined ? { original: unified.original } : {})
   };
 };
 
 const readFeedbackHistoryNode = (value: unknown): FeedbackHistory => {
   const records = readFeedbackRecords(value);
+  const original = readFeedbackOriginal(value);
   if (records.length > 0) {
     return {
       feedback: records.flatMap((record) => (record.feedback ? [{ value: record.feedback, username: record.username, timestamp: record.timestamp }] : [])),
       comments: records.flatMap((record) => (record.comment ? [{ value: record.comment, username: record.username, timestamp: record.timestamp }] : [])),
-      edits: records.flatMap((record) => (record.edit ? [{ value: record.edit, username: record.username, timestamp: record.timestamp }] : []))
+      edits: records.flatMap((record) => (record.edit ? [{ value: record.edit, username: record.username, timestamp: record.timestamp }] : [])),
+      ...(original !== undefined ? { original } : {})
     };
   }
   if (!isPlainRecord(value)) {
@@ -286,11 +294,19 @@ const readFeedbackHistoryNode = (value: unknown): FeedbackHistory => {
   return {
     feedback: readFeedbackEntries(value.feedback),
     comments: readFeedbackEntries(value.comments),
-    edits: readFeedbackEntries(value.edits)
+    edits: readFeedbackEntries(value.edits),
+    ...(typeof value.original === 'string' ? { original: value.original } : {})
   };
 };
 
-const readFeedbackRecords = (value: unknown): FeedbackRecord[] => {
+const readFeedbackRecords = (value: unknown): Array<FeedbackRecord & { username: string; timestamp: string }> => {
+  return parseFeedbackRecords(value).sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
+};
+
+const readFeedbackRecordsForStorage = (value: unknown): Array<FeedbackRecord & { username: string; timestamp: string }> =>
+  parseFeedbackRecords(value).sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp));
+
+const parseFeedbackRecords = (value: unknown): Array<FeedbackRecord & { username: string; timestamp: string }> => {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -305,7 +321,13 @@ const readFeedbackRecords = (value: unknown): FeedbackRecord[] => {
         : [];
     })
     .filter((entry) => entry.timestamp.endsWith('Z') && !Number.isNaN(Date.parse(entry.timestamp)))
-    .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
+};
+
+const readFeedbackOriginal = (value: unknown): string | undefined => {
+  if (Array.isArray(value)) {
+    return value.filter(isPlainRecord).find((entry) => typeof entry.original === 'string')?.original as string | undefined;
+  }
+  return isPlainRecord(value) && typeof value.original === 'string' ? value.original : undefined;
 };
 
 const feedbackHistoryToRecords = (history: FeedbackHistory): FeedbackRecord[] =>
@@ -313,7 +335,7 @@ const feedbackHistoryToRecords = (history: FeedbackHistory): FeedbackRecord[] =>
     ...history.feedback.map((entry) => ({ feedback: entry.value, username: entry.username, timestamp: entry.timestamp })),
     ...history.comments.map((entry) => ({ comment: entry.value, username: entry.username, timestamp: entry.timestamp })),
     ...history.edits.map((entry) => ({ edit: entry.value, username: entry.username, timestamp: entry.timestamp }))
-  ].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
+  ].sort((left, right) => Date.parse(left.timestamp ?? '') - Date.parse(right.timestamp ?? ''));
 
 const readFeedbackEntries = (value: unknown): FeedbackEntry[] => {
   if (!Array.isArray(value)) {
@@ -328,6 +350,40 @@ const readFeedbackEntries = (value: unknown): FeedbackEntry[] => {
     )
     .filter((entry) => entry.timestamp.endsWith('Z') && !Number.isNaN(Date.parse(entry.timestamp)))
     .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
+};
+
+const readPropertyValue = (record: Record<string, unknown>, propertyPath: string): unknown => {
+  let current: unknown = record;
+  for (const segment of propertyPath.split('/').filter(Boolean).map(unescapePointer)) {
+    if (!isPlainRecord(current) && !Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+};
+
+const writePropertyValue = (record: Record<string, unknown>, propertyPath: string, value: string): void => {
+  const segments = propertyPath.split('/').filter(Boolean).map(unescapePointer);
+  let current: unknown = record;
+  for (const segment of segments.slice(0, -1)) {
+    if (!isPlainRecord(current) && !Array.isArray(current)) {
+      throw new Error('Feedback edit path does not exist in the record.');
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  const leaf = segments[segments.length - 1];
+  if (!leaf || (!isPlainRecord(current) && !Array.isArray(current))) {
+    throw new Error('Feedback edit path does not exist in the record.');
+  }
+  (current as Record<string, unknown>)[leaf] = value;
+};
+
+const formatStoredValue = (value: unknown): string => {
+  if (value === undefined) {
+    return '(missing)';
+  }
+  return typeof value === 'string' ? value : JSON.stringify(value);
 };
 
 const resolveSchema = (schema: JsonSchema): JsonSchema => {

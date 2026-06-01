@@ -412,12 +412,6 @@ pre {
   white-space: pre-wrap;
 }
 
-.field output.edited-value,
-.enum-select.edited-value {
-  background: #2a1d12;
-  border-color: #d97706;
-}
-
 .feedback-panel {
   background: #13243a;
   border: 1px solid #30415f;

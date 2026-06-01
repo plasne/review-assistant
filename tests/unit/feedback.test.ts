@@ -113,15 +113,30 @@ describe('feedback helpers', () => {
     );
 
     expect(record.answer_feedback).toMatchObject([
+      { original: 'Answer' },
       { feedback: 'good', comment: 'Useful', edit: 'Better answer', username: 'alice@example.com' }
     ]);
     expect(record.answer_comments).toBeUndefined();
     expect(record.answer_edits).toBeUndefined();
-    expect(stripFeedbackProperties(record)).toEqual({ question: 'What?', answer: 'Answer', nested: {} });
+    expect(stripFeedbackProperties(record)).toEqual({ question: 'What?', answer: 'Better answer', nested: {} });
     const history = extractFeedbackHistory(record, [{ path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true }]);
+    expect(history['/answer'].original).toBe('Answer');
     expect(history['/answer'].feedback[0]).toMatchObject({ value: 'good', username: 'alice@example.com' });
     expect(history['/answer'].comments[0]).toMatchObject({ value: 'Useful', username: 'alice@example.com' });
     expect(history['/answer'].edits[0]).toMatchObject({ value: 'Better answer', username: 'alice@example.com' });
+
+    mergeFeedbackEntries(
+      record,
+      { propertyPath: '/answer', editValue: 'Best answer' },
+      'bob@example.com',
+      new Date('2026-06-01T16:00:00.000Z')
+    );
+    expect(record.answer).toBe('Best answer');
+    expect(record.answer_feedback).toMatchObject([
+      { original: 'Answer' },
+      { feedback: 'good', comment: 'Useful', edit: 'Better answer', username: 'alice@example.com' },
+      { edit: 'Best answer', username: 'bob@example.com' }
+    ]);
   });
 
   it('extracts feedback history for concrete array item paths from wildcard targets', () => {

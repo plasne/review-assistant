@@ -192,9 +192,13 @@ describe('local project creation', () => {
     });
 
     expect(submitted.username).toBe('updated@example.com');
-    expect(submitted.record.data).toEqual({ answer: 'Original' });
+    expect(submitted.record.data).toEqual({ answer: 'Updated answer' });
     expect(submitted.record.validationIssues).toEqual([]);
+    expect(submitted.record.feedbackHistory?.['/answer'].original).toBe('Original');
     expect(submitted.record.feedbackHistory?.['/answer'].feedback[0]).toMatchObject({ value: 'good', username: 'updated@example.com' });
+    const stored = JSON.parse(await fs.readFile(path.join(tempRoot, 'feedback-project', 'record-1.json'), 'utf8')) as Record<string, unknown>;
+    expect(stored.answer).toBe('Updated answer');
+    expect(stored.answer_feedback).toMatchObject([{ original: 'Original' }, { edit: 'Updated answer', username: 'updated@example.com' }]);
 
     const updated = await tempAdapter.updateRecord('feedback-project', 'record-1', { answer: 'Core update' });
     expect(updated.data).toEqual({ answer: 'Core update' });

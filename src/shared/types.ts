@@ -113,6 +113,7 @@ export type FeedbackHistory = {
   feedback: FeedbackEntry[];
   edits: FeedbackEntry[];
   comments: FeedbackEntry[];
+  original?: string;
 };
 
 export type FeedbackSubmissionInput = {

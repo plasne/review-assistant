@@ -721,12 +721,12 @@ describe('review UI', () => {
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({ propertyPath: '/persona', editValue: 'SME' }));
   });
 
-  it('uses the latest edit as the current value and shows the original value in history', async () => {
+  it('uses the stored current value and shows the stored original value in history', async () => {
     const node: RenderNode = {
       kind: 'value',
       label: 'persona',
       path: '/persona',
-      value: 'developer',
+      value: 'SME',
       enumValues: ['TPM', 'developer', 'SME'],
       validationIssues: []
     };
@@ -754,7 +754,8 @@ describe('review UI', () => {
             edits: [
               { value: 'TPM', username: 'sme@example.com', timestamp: '2026-06-01T20:00:00.000Z' },
               { value: 'SME', username: 'sme@example.com', timestamp: '2026-06-01T20:01:00.000Z' }
-            ]
+            ],
+            original: 'developer'
           }
         }}
         projectUser={{ username: 'sme@example.com', valid: true }}
@@ -763,7 +764,7 @@ describe('review UI', () => {
     );
 
     expect(screen.getByLabelText('persona')).toHaveDisplayValue('SME');
-    expect(screen.getByLabelText('persona')).toHaveClass('edited-value');
+    expect(screen.getByLabelText('persona')).not.toHaveClass('edited-value');
     expect(screen.getByLabelText('Edit')).toHaveDisplayValue('SME');
     expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeDisabled();
 
