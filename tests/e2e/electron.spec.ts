@@ -1,5 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 test('real Electron app opens a local project and reviews a record', async () => {
@@ -128,4 +129,65 @@ test('real Electron app lets Copilot read the displayed record through the local
   await expect(page.getByText('Record question: What is the E2E flow of a purchase - technically?')).toBeVisible();
 
   await electronApp.close();
+});
+
+test('real Electron app configures feedback and shows subsequent users collapsed history', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-feedback-'));
+  const projectPath = path.join(tempRoot, 'feedback-project');
+  const appEnv = path.join(tempRoot, 'app.env');
+  fs.mkdirSync(projectPath);
+  fs.writeFileSync(
+    path.join(projectPath, '_schema.json'),
+    JSON.stringify({ type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] }, null, 2)
+  );
+  fs.writeFileSync(path.join(projectPath, 'record-1.json'), JSON.stringify({ answer: 'Initial answer' }, null, 2));
+  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=first@example.com\n`);
+
+  const launch = () =>
+    electron.launch({
+      args: ['.'],
+      env: {
+        ...process.env,
+        REVIEW_ASSISTANT_APP_ENV: appEnv,
+        REVIEW_ASSISTANT_COPILOT_COMMAND: process.execPath,
+        REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS: path.resolve('test-fixtures/fake-copilot.mjs')
+      }
+    });
+
+  const firstApp = await launch();
+  const firstPage = await firstApp.firstWindow();
+  await firstPage.getByLabel('Current project').selectOption('feedback-project');
+  await expect(firstPage.getByLabel('Current feedback username')).toContainText('first@example.com');
+  await firstPage.getByRole('button', { name: 'Configure' }).click();
+  await firstPage.getByLabel('Answer feedback mode').selectOption('good_fair_bad');
+  await firstPage.getByLabel('Answer comment').check();
+  await firstPage.getByRole('button', { name: 'Save' }).click();
+  await firstPage.getByRole('button', { name: 'record-1', exact: true }).click();
+  await firstPage.getByRole('radio', { name: 'Good' }).check();
+  await firstPage.getByLabel('Comment').fill('Looks good to me');
+  await firstPage.getByRole('button', { name: 'Submit feedback' }).click();
+  await expect(firstPage.getByText('History (1)')).toBeVisible();
+  await firstApp.close();
+
+  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=second@example.com\n`);
+  const secondApp = await launch();
+  const secondPage = await secondApp.firstWindow();
+  await secondPage.getByLabel('Current project').selectOption('feedback-project');
+  await expect(secondPage.getByLabel('Current feedback username')).toContainText('second@example.com');
+  await secondPage.getByRole('button', { name: 'record-1', exact: true }).click();
+  await expect(secondPage.getByText('History (1)')).toBeVisible();
+  await expect(secondPage.getByText('Looks good to me')).not.toBeVisible();
+  await secondPage.getByText('History (1)').click();
+  await expect(secondPage.getByText('Looks good to me')).toBeVisible();
+
+  await secondPage.getByRole('button', { name: 'Configure' }).click();
+  await secondPage.getByLabel('Answer editable').check();
+  await secondPage.getByRole('button', { name: 'Save' }).click();
+  await expect(secondPage.getByLabel('Edit')).toBeVisible();
+  await secondPage.getByLabel('Edit').fill('Second user edit');
+  await secondPage.getByRole('button', { name: 'Submit feedback' }).click();
+  await expect(secondPage.getByText('History (2)')).toBeVisible();
+
+  await secondApp.close();
+  fs.rmSync(tempRoot, { recursive: true, force: true });
 });

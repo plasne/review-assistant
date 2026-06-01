@@ -25,6 +25,10 @@ const api: Api = {
   createProject: vi.fn(),
   openProject: vi.fn(),
   getRecord: vi.fn(),
+  getFeedbackConfig: vi.fn(),
+  saveFeedbackConfig: vi.fn(),
+  getProjectUser: vi.fn(),
+  submitFeedback: vi.fn(),
   getAgentStatus: vi.fn(),
   startChat: vi.fn(),
   cancelChat: vi.fn(),
@@ -64,6 +68,8 @@ beforeEach(() => {
     provider: { id: 'github-copilot', name: 'GitHub Copilot' },
     availability: 'ready'
   });
+  vi.mocked(api.getProjectUser).mockResolvedValue({ username: 'sme@example.com', valid: true });
+  vi.mocked(api.saveFeedbackConfig).mockImplementation(async (_projectId, config) => config);
   window.reviewAssistant = api;
 });
 
@@ -97,7 +103,9 @@ describe('review UI', () => {
     vi.mocked(api.startChat).mockResolvedValue({ requestId: 'request-1', messageId: 'assistant-1' });
 
     render(<App />);
+    expect(await screen.findByRole('button', { name: 'Configure' })).toBeDisabled();
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await waitFor(() => expect(screen.getByLabelText('Current feedback username')).toHaveTextContent('sme@example.com'));
     const recordList = await screen.findByRole('region', { name: 'Records list' });
     const recordButton = await screen.findByRole('button', { name: 'valid-record' });
     expect(recordList).toContainElement(recordButton);
@@ -449,6 +457,171 @@ describe('review UI', () => {
     expect(await screen.findByText('new-project records')).toBeInTheDocument();
   });
 
+  it('hides empty unconfigured feedback when USERNAME is missing', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: { type: 'object', properties: { answer: { type: 'string' } } },
+      records: [{ id: 'valid-record', displayName: 'valid-record' }],
+      feedbackConfig: {
+        properties: {
+          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none', comments: false, editable: false }
+        }
+      }
+    });
+    vi.mocked(api.getProjectUser).mockResolvedValue({
+      valid: false,
+      validationMessage: 'USERNAME environment variable not configured. Please set USERNAME in your .env file.'
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'valid-record',
+      displayName: 'valid-record',
+      data: { answer: 'Run npm run check.' },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        path: '',
+        children: [{ kind: 'value', label: 'answer', path: '/answer', value: 'Run npm run check.', validationIssues: [] }],
+        validationIssues: []
+      },
+      feedbackHistory: { '/answer': { feedback: [], edits: [], comments: [] } }
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+    expect(await screen.findByText('Run npm run check.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('answer feedback')).not.toBeInTheDocument();
+    expect(screen.queryByText('No feedback configured')).not.toBeInTheDocument();
+    expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your .env file.')).not.toBeInTheDocument();
+    expect(screen.queryByText('History (0)')).not.toBeInTheDocument();
+  });
+
+  it('configures feedback, submits, and toggles history', async () => {
+    const feedbackConfig = {
+      properties: {
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none' as const, comments: false, editable: false },
+        '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', supportsEdit: false, feedback: 'none' as const, comments: false, editable: false },
+        '/evidence/~2/id': { path: '/evidence/~2/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true, feedback: 'none' as const, comments: false, editable: false }
+      }
+    };
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {
+        type: 'object',
+        properties: {
+          answer: { type: 'string' },
+          evidence: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' } } } }
+        }
+      },
+      records: [{ id: 'valid-record', displayName: 'valid-record' }],
+      feedbackConfig
+    });
+    vi.mocked(api.getProjectUser).mockResolvedValue({ username: 'sme@example.com', valid: true });
+    const submittedAt = new Date(Date.now() - 60000).toISOString();
+    vi.mocked(api.getRecord)
+      .mockResolvedValueOnce({
+        projectId: 'sample-project',
+        recordId: 'valid-record',
+        displayName: 'valid-record',
+        data: { answer: 'Run npm run check.' },
+        schema: {},
+        validationIssues: [],
+        renderTree: {
+          kind: 'object',
+          label: 'record',
+          path: '',
+          children: [{ kind: 'value', label: 'answer', path: '/answer', value: 'Run npm run check.', validationIssues: [] }],
+          validationIssues: []
+        },
+        feedbackHistory: { '/answer': { feedback: [], edits: [], comments: [] } }
+      })
+      .mockResolvedValue({
+        projectId: 'sample-project',
+        recordId: 'valid-record',
+        displayName: 'valid-record',
+        data: { answer: 'Run npm run check.' },
+        schema: {},
+        validationIssues: [],
+        renderTree: {
+          kind: 'object',
+          label: 'record',
+          path: '',
+          children: [{ kind: 'value', label: 'answer', path: '/answer', value: 'Run npm run check.', validationIssues: [] }],
+          validationIssues: []
+        },
+        feedbackHistory: {
+          '/answer': {
+            feedback: [{ value: 'good', username: 'sme@example.com', timestamp: submittedAt }],
+            comments: [{ value: 'Looks right', username: 'sme@example.com', timestamp: submittedAt }],
+            edits: []
+          }
+        }
+      });
+    vi.mocked(api.saveFeedbackConfig).mockImplementation(async (_projectId, config) => config);
+    vi.mocked(api.submitFeedback).mockImplementation(async () => ({
+      username: 'sme@example.com',
+      record: await api.getRecord('sample-project', 'valid-record')
+    }));
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'Configure' }));
+    expect(await screen.findByRole('dialog', { name: 'Feedback configuration' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'TAB' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Evidence feedback mode')).toBeInTheDocument();
+    expect(screen.getByLabelText('Evidence > Id feedback mode')).toBeInTheDocument();
+    expect(screen.getByLabelText('Evidence editable')).toBeDisabled();
+    expect(screen.getByLabelText('Evidence > Id editable')).not.toBeDisabled();
+    expect(screen.queryByRole('option', { name: 'text_only' })).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('Answer feedback mode'), 'good_fair_bad');
+    await userEvent.click(screen.getByLabelText('Answer comment'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(api.saveFeedbackConfig).toHaveBeenCalledWith(
+        'sample-project',
+        expect.objectContaining({
+          properties: expect.objectContaining({
+            '/answer': expect.objectContaining({ feedback: 'good_fair_bad', comments: true })
+          })
+        })
+      )
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+    expect(await screen.findByText('Run npm run check.')).toBeInTheDocument();
+    expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your .env file.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeDisabled();
+    expect(screen.getByLabelText('Current feedback username')).toHaveTextContent('sme@example.com');
+    expect(screen.queryByText(/Feedback mode:/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: 'Good' }));
+    await userEvent.type(screen.getByLabelText('Comment'), 'Looks right');
+    await userEvent.click(screen.getByRole('button', { name: 'Submit feedback' }));
+    await waitFor(() => expect(api.submitFeedback).toHaveBeenCalledWith('sample-project', 'valid-record', expect.objectContaining({ propertyPath: '/answer' })));
+
+    const historySummary = await screen.findByText('History (1)');
+    await userEvent.click(historySummary);
+    expect(screen.getByText('feedback:').closest('.history-line')).toHaveTextContent('feedback:good');
+    expect(screen.getByText('comment:').closest('.history-line')).toHaveTextContent('comment:Looks right');
+    expect(screen.getAllByText('good').find((element) => element.closest('.history-entry'))).toBeVisible();
+    expect(screen.getByText('Looks right')).toBeVisible();
+    expect(screen.getAllByText(/ago|just now/).length).toBeGreaterThan(0);
+  });
+
   it('renders schema descriptions inline, enum values as drop-downs, and array objects collapsed with counts', async () => {
     const node: RenderNode = {
       kind: 'object',
@@ -506,6 +679,98 @@ describe('review UI', () => {
 
     await userEvent.click(screen.getByText('doc-1', { selector: '.array-item-identifier' }));
     expect(screen.getByText('README')).toBeVisible();
+  });
+
+  it('renders editable enum feedback as a drop-down', async () => {
+    const node: RenderNode = {
+      kind: 'value',
+      label: 'persona',
+      path: '/persona',
+      value: 'developer',
+      enumValues: ['TPM', 'developer', 'SME'],
+      validationIssues: []
+    };
+    const submit = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <RenderTree
+        node={node}
+        feedbackConfig={{
+          properties: {
+            '/persona': {
+              path: '/persona',
+              target: 'Persona',
+              tab: 'Main',
+              supportsEdit: true,
+              feedback: 'none',
+              comments: false,
+              editable: true
+            }
+          }
+        }}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={submit}
+      />
+    );
+
+    expect(screen.getByLabelText('Edit')).toHaveDisplayValue('developer');
+    expect(screen.queryByRole('option', { name: 'Choose edit' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeDisabled();
+    await userEvent.selectOptions(screen.getByLabelText('Edit'), 'SME');
+    await userEvent.click(screen.getByRole('button', { name: 'Submit feedback' }));
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ propertyPath: '/persona', editValue: 'SME' }));
+  });
+
+  it('uses the latest edit as the current value and shows the original value in history', async () => {
+    const node: RenderNode = {
+      kind: 'value',
+      label: 'persona',
+      path: '/persona',
+      value: 'developer',
+      enumValues: ['TPM', 'developer', 'SME'],
+      validationIssues: []
+    };
+
+    render(
+      <RenderTree
+        node={node}
+        feedbackConfig={{
+          properties: {
+            '/persona': {
+              path: '/persona',
+              target: 'Persona',
+              tab: 'Main',
+              supportsEdit: true,
+              feedback: 'none',
+              comments: false,
+              editable: true
+            }
+          }
+        }}
+        history={{
+          '/persona': {
+            feedback: [],
+            comments: [],
+            edits: [
+              { value: 'TPM', username: 'sme@example.com', timestamp: '2026-06-01T20:00:00.000Z' },
+              { value: 'SME', username: 'sme@example.com', timestamp: '2026-06-01T20:01:00.000Z' }
+            ]
+          }
+        }}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    expect(screen.getByLabelText('persona')).toHaveDisplayValue('SME');
+    expect(screen.getByLabelText('persona')).toHaveClass('edited-value');
+    expect(screen.getByLabelText('Edit')).toHaveDisplayValue('SME');
+    expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeDisabled();
+
+    const historySummary = screen.getByText('History (3)');
+    await userEvent.click(historySummary);
+    const historyLines = screen.getAllByText(/^(original:|edit:)$/).map((element) => element.closest('.history-line')?.textContent);
+    expect(historyLines).toEqual(['edit:SME', 'edit:TPM', 'original:developer']);
   });
 
   it('supports keyboard-accessible column resizing', async () => {

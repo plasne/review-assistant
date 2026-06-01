@@ -72,17 +72,19 @@ export const loadAppConfig = (envPath = getAppEnvPath()): AppConfig => {
   return { backendKind, values, appEnvPath: envPath };
 };
 
-export const loadProjectEnv = (projectEnvPath: string, appValues: Record<string, string>): Record<string, string> => {
+export const loadProjectEnv = (projectEnvPath: string, appValues: Record<string, string>, options: { log?: boolean } = {}): Record<string, string> => {
   const projectValues = readEnvFile(projectEnvPath);
   const backendOverrides = BACKEND_KEYS.filter((key) => key in projectValues);
   if (backendOverrides.length > 0) {
     throw new ConfigError(`Project .env cannot override backend selection keys in v0.1.0: ${backendOverrides.join(', ')}`);
   }
   const merged = { ...appValues, ...projectValues };
-  logInfo('review-assistant.project-config', {
-    source: projectEnvPath,
-    values: redactConfig(merged)
-  });
+  if (options.log !== false) {
+    logInfo('review-assistant.project-config', {
+      source: projectEnvPath,
+      values: redactConfig(merged)
+    });
+  }
   return merged;
 };
 

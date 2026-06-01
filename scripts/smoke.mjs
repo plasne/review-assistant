@@ -33,6 +33,10 @@ if (missingEventBridges.length > 0) {
   throw new Error(`Smoke check failed: missing preload event bridges for ${missingEventBridges.join(', ')}.`);
 }
 
+if (!main.includes('record: stripFeedbackProperties(record.data)')) {
+  throw new Error('Smoke check failed: readRecord must strip feedback properties before returning agent-visible record data.');
+}
+
 console.log('Smoke check passed.');
 
 function extractChannels(content, pattern) {

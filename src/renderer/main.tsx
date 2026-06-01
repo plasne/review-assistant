@@ -1,6 +1,21 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { AgentStatusSnapshot, AppBootstrap, ChatMessage, OpenProjectResult, RecordDetail, RenderNode } from '../shared/types';
+import type {
+  AgentStatusSnapshot,
+  AppBootstrap,
+  ChatMessage,
+  FeedbackConfig,
+  FeedbackConfigEntry,
+  FeedbackEntry,
+  FeedbackHistory,
+  FeedbackMode,
+  FeedbackSubmissionInput,
+  OpenProjectResult,
+  ProjectUser,
+  RecordDetail,
+  RenderNode
+} from '../shared/types';
+import { feedbackConfigEntryForPath, FEEDBACK_MODES } from '../shared/feedback';
 import './styles.css';
 
 type Status = 'idle' | 'loading' | 'error';
@@ -14,6 +29,9 @@ const App = () => {
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [project, setProject] = useState<OpenProjectResult | undefined>();
   const [record, setRecord] = useState<RecordDetail | undefined>();
+  const [feedbackConfig, setFeedbackConfig] = useState<FeedbackConfig | undefined>();
+  const [draftFeedbackConfig, setDraftFeedbackConfig] = useState<FeedbackConfig | undefined>();
+  const [projectUser, setProjectUser] = useState<ProjectUser | undefined>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [agentStatus, setAgentStatus] = useState<AgentStatusSnapshot | undefined>();
@@ -21,6 +39,7 @@ const App = () => {
   const [activeRequestId, setActiveRequestId] = useState<string | undefined>();
   const [newProjectId, setNewProjectId] = useState('');
   const [isCreateProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
+  const [isFeedbackConfigOpen, setFeedbackConfigOpen] = useState(false);
   const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState<string | undefined>();
   const [columns, setColumns] = useState({ records: 22, details: 48, chat: 30 });
@@ -131,6 +150,8 @@ const App = () => {
     setSelectedProjectId(projectId);
     setProject(undefined);
     setRecord(undefined);
+    setFeedbackConfig(undefined);
+    setDraftFeedbackConfig(undefined);
     if (!projectId) {
       return;
     }
@@ -139,6 +160,9 @@ const App = () => {
     try {
       const result = await window.reviewAssistant.openProject(projectId);
       setProject(result);
+      setFeedbackConfig(result.feedbackConfig);
+      setDraftFeedbackConfig(result.feedbackConfig);
+      await refreshProjectUser(projectId);
       setStatus('idle');
     } catch (caught) {
       setStatus('error');
@@ -161,6 +185,14 @@ const App = () => {
     }
   };
 
+  const refreshProjectUser = async (projectId: string) => {
+    try {
+      setProjectUser(await window.reviewAssistant.getProjectUser(projectId));
+    } catch (caught) {
+      setProjectUser({ valid: false, validationMessage: caught instanceof Error ? caught.message : String(caught) });
+    }
+  };
+
   const refreshRecords = async () => {
     if (!selectedProjectId) {
       return;
@@ -170,9 +202,46 @@ const App = () => {
     try {
       const result = await window.reviewAssistant.openProject(selectedProjectId);
       setProject(result);
+      setFeedbackConfig(result.feedbackConfig);
+      setDraftFeedbackConfig(result.feedbackConfig);
       if (record && !result.records.some((item) => item.id === record.recordId)) {
         setRecord(undefined);
       }
+      setStatus('idle');
+    } catch (caught) {
+      setStatus('error');
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const saveFeedbackConfig = async () => {
+    if (!selectedProjectId || !draftFeedbackConfig) {
+      return;
+    }
+    setStatus('loading');
+    setError(undefined);
+    try {
+      const saved = await window.reviewAssistant.saveFeedbackConfig(selectedProjectId, draftFeedbackConfig);
+      setFeedbackConfig(saved);
+      setDraftFeedbackConfig(saved);
+      setFeedbackConfigOpen(false);
+      setStatus('idle');
+    } catch (caught) {
+      setStatus('error');
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const submitFeedback = async (input: FeedbackSubmissionInput) => {
+    if (!selectedProjectId || !record) {
+      return;
+    }
+    setStatus('loading');
+    setError(undefined);
+    try {
+      const result = await window.reviewAssistant.submitFeedback(selectedProjectId, record.recordId, input);
+      setRecord(result.record);
+      await refreshProjectUser(selectedProjectId);
       setStatus('idle');
     } catch (caught) {
       setStatus('error');
@@ -343,7 +412,24 @@ const App = () => {
         >
           Create project
         </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={!selectedProjectId || !project || !draftFeedbackConfig}
+          onClick={() => setFeedbackConfigOpen(true)}
+        >
+          Configure
+        </button>
         <div className="header-spacer" aria-hidden="true" />
+        {selectedProjectId ? (
+          <span className={projectUser?.valid === false ? 'username-badge invalid' : 'username-badge'} aria-label="Current feedback username">
+            {projectUser === undefined
+              ? 'Checking username...'
+              : projectUser.valid && projectUser.username
+                ? projectUser.username
+                : 'USERNAME not configured'}
+          </span>
+        ) : null}
       </header>
 
       {isCreateProjectDialogOpen ? (
@@ -378,6 +464,23 @@ const App = () => {
                 </button>
               </div>
             </form>
+          </section>
+        </div>
+      ) : null}
+
+      {isFeedbackConfigOpen && draftFeedbackConfig ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal feedback-config-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-config-title">
+            <h2 id="feedback-config-title">Feedback configuration</h2>
+            <FeedbackConfigTable config={draftFeedbackConfig} onChange={setDraftFeedbackConfig} />
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={() => setFeedbackConfigOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="create-project-button" onClick={() => void saveFeedbackConfig()}>
+                Save
+              </button>
+            </div>
           </section>
         </div>
       ) : null}
@@ -437,7 +540,11 @@ const App = () => {
         <section className="column details" aria-labelledby="details-heading" tabIndex={0}>
           <h2 id="details-heading">Record details</h2>
           {status === 'loading' ? <p aria-live="polite">Loading...</p> : null}
-          {record ? <RecordDetails record={record} /> : <p className="empty">Choose a record to inspect read-only details.</p>}
+          {record ? (
+            <RecordDetails record={record} feedbackConfig={feedbackConfig} projectUser={projectUser} onSubmitFeedback={submitFeedback} />
+          ) : (
+            <p className="empty">Choose a record to inspect read-only details.</p>
+          )}
         </section>
 
         <ColumnResizer
@@ -683,7 +790,81 @@ const renderInlineMarkdown = (content: string): React.ReactNode[] => {
   return nodes;
 };
 
-const RecordDetails = ({ record }: { record: RecordDetail }) => (
+const FeedbackConfigTable = ({ config, onChange }: { config: FeedbackConfig; onChange: (config: FeedbackConfig) => void }) => {
+  const entries = Object.values(config.properties);
+  const updateEntry = (path: string, patch: Partial<FeedbackConfigEntry>) => {
+    onChange({
+      properties: {
+        ...config.properties,
+        [path]: { ...config.properties[path], ...patch }
+      }
+    });
+  };
+
+  return (
+    <div className="feedback-config-table-wrap">
+      <table className="feedback-config-table">
+        <thead>
+          <tr>
+            <th>TARGET</th>
+            <th>FEEDBACK</th>
+            <th>COMMENT</th>
+            <th>EDITABLE</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((entry) => (
+            <tr key={entry.path}>
+              <td>{entry.target}</td>
+              <td>
+                <select
+                  aria-label={`${entry.target} feedback mode`}
+                  value={entry.feedback}
+                  onChange={(event) => updateEntry(entry.path, { feedback: event.target.value as FeedbackMode })}
+                >
+                  {FEEDBACK_MODES.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {mode}
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td className="checkbox-cell">
+                <input
+                  aria-label={`${entry.target} comment`}
+                  type="checkbox"
+                  checked={entry.comments}
+                  onChange={(event) => updateEntry(entry.path, { comments: event.target.checked })}
+                />
+              </td>
+              <td className="checkbox-cell">
+                <input
+                  aria-label={`${entry.target} editable`}
+                  type="checkbox"
+                  disabled={!entry.supportsEdit}
+                  checked={entry.editable}
+                  onChange={(event) => updateEntry(entry.path, { editable: entry.supportsEdit && event.target.checked })}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const RecordDetails = ({
+  record,
+  feedbackConfig,
+  projectUser,
+  onSubmitFeedback
+}: {
+  record: RecordDetail;
+  feedbackConfig: FeedbackConfig | undefined;
+  projectUser: ProjectUser | undefined;
+  onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
+}) => (
   <div>
     {record.validationIssues.length > 0 ? (
       <section className="validation" aria-label="Validation errors">
@@ -699,25 +880,64 @@ const RecordDetails = ({ record }: { record: RecordDetail }) => (
     ) : (
       <p className="valid">Record passes schema validation.</p>
     )}
-    <RenderTreeRoot node={record.renderTree} />
+    <RenderTreeRoot
+      node={record.renderTree}
+      feedbackConfig={feedbackConfig}
+      history={record.feedbackHistory ?? {}}
+      projectUser={projectUser}
+      onSubmitFeedback={onSubmitFeedback}
+    />
   </div>
 );
 
-const RenderTreeRoot = ({ node }: { node: RenderNode }) => {
+const RenderTreeRoot = ({
+  node,
+  feedbackConfig,
+  history,
+  projectUser,
+  onSubmitFeedback
+}: {
+  node: RenderNode;
+  feedbackConfig?: FeedbackConfig;
+  history: Record<string, FeedbackHistory>;
+  projectUser?: ProjectUser;
+  onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
+}) => {
   if (node.kind === 'object') {
     return (
       <>
         {node.description ? <p>{node.description}</p> : null}
         {node.children.map((child) => (
-          <RenderTree key={child.label} node={child} />
+          <RenderTree
+            key={child.path ?? child.label}
+            node={child}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+          />
         ))}
       </>
     );
   }
-  return <RenderTree node={node} />;
+  return <RenderTree node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />;
 };
 
-const RenderTree = ({ node, collapseObject = false }: { node: RenderNode; collapseObject?: boolean }) => {
+const RenderTree = ({
+  node,
+  collapseObject = false,
+  feedbackConfig,
+  history,
+  projectUser,
+  onSubmitFeedback
+}: {
+  node: RenderNode;
+  collapseObject?: boolean;
+  feedbackConfig?: FeedbackConfig;
+  history?: Record<string, FeedbackHistory>;
+  projectUser?: ProjectUser;
+  onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+}) => {
   const issues = node.validationIssues.length > 0 ? (
     <ul className="field-errors">
       {node.validationIssues.map((issue, index) => (
@@ -739,7 +959,14 @@ const RenderTree = ({ node, collapseObject = false }: { node: RenderNode; collap
           </summary>
           {issues}
           {node.children.map((child) => (
-            <RenderTree key={child.label} node={child} />
+            <RenderTree
+              key={child.path ?? child.label}
+              node={child}
+              feedbackConfig={feedbackConfig}
+              history={history}
+              projectUser={projectUser}
+              onSubmitFeedback={onSubmitFeedback}
+            />
           ))}
         </details>
       );
@@ -748,8 +975,16 @@ const RenderTree = ({ node, collapseObject = false }: { node: RenderNode; collap
       <section className="node">
         <FieldHeading label={node.label} description={node.description} />
         {issues}
+        <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
         {node.children.map((child) => (
-          <RenderTree key={child.label} node={child} />
+          <RenderTree
+            key={child.path ?? child.label}
+            node={child}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+          />
         ))}
       </section>
     );
@@ -759,8 +994,17 @@ const RenderTree = ({ node, collapseObject = false }: { node: RenderNode; collap
       <section className="node array-node">
         <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
         {issues}
+        <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
         {node.items.map((child) => (
-          <RenderTree key={child.label} node={child} collapseObject={child.kind === 'object'} />
+          <RenderTree
+            key={child.path ?? child.label}
+            node={child}
+            collapseObject={child.kind === 'object'}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+          />
         ))}
       </section>
     );
@@ -772,14 +1016,24 @@ const RenderTree = ({ node, collapseObject = false }: { node: RenderNode; collap
         {issues}
         <p className="raw-reason">{node.reason}</p>
         <pre>{JSON.stringify(node.value, null, 2)}</pre>
+        <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
       </section>
     );
   }
+  const nodeHistory = node.path ? history?.[node.path] : undefined;
+  const latestEdit = latestEditValue(nodeHistory);
+  const displayedValue = latestEdit ?? formatValue(node.value);
+  const isEdited = latestEdit !== undefined;
   return (
     <section className="field">
       <FieldHeading label={node.label} description={node.description} />
       {issues}
-      {node.enumValues ? <EnumValue node={node} /> : <output>{formatValue(node.value)}</output>}
+      {node.enumValues ? (
+        <EnumValue node={node} value={displayedValue} edited={isEdited} />
+      ) : (
+        <output className={isEdited ? 'edited-value' : undefined}>{displayedValue}</output>
+      )}
+      <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
     </section>
   );
 };
@@ -792,6 +1046,227 @@ const FieldHeading = ({ label, description, meta }: { label: string; description
   </h3>
 );
 
+const FeedbackPanel = ({
+  node,
+  feedbackConfig,
+  history,
+  projectUser,
+  onSubmitFeedback
+}: {
+  node: RenderNode;
+  feedbackConfig?: FeedbackConfig;
+  history?: Record<string, FeedbackHistory>;
+  projectUser?: ProjectUser;
+  onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+}) => {
+  const path = node.path;
+  const config = path && feedbackConfig ? feedbackConfigEntryForPath(feedbackConfig, path) : undefined;
+  const nodeHistory = path ? history?.[path] : undefined;
+  const initialEditValue = editableValue(node, nodeHistory);
+  const [feedbackValue, setFeedbackValue] = useState('');
+  const [commentValue, setCommentValue] = useState('');
+  const [editValue, setEditValue] = useState(initialEditValue);
+  useEffect(() => {
+    setEditValue(initialEditValue);
+  }, [initialEditValue, path]);
+  if (!path || !config || !onSubmitFeedback) {
+    return null;
+  }
+  const allHistory = collectHistory(nodeHistory, editableValue(node));
+  const hasFeedbackControls = config.feedback !== 'none' || config.comments || config.editable;
+  const usernameValid = projectUser?.valid === true;
+  const showFeedbackControls = hasFeedbackControls && usernameValid;
+  if (!showFeedbackControls && allHistory.length === 0) {
+    return null;
+  }
+  const editChanged = editValue.trim() !== initialEditValue.trim();
+  const canSubmit = Boolean(feedbackValue.trim() || commentValue.trim() || editChanged);
+
+  return (
+    <section className="feedback-panel" aria-label={`${node.label} feedback`}>
+      {showFeedbackControls && config.feedback !== 'none' ? (
+        <FeedbackValueInput mode={config.feedback} label={node.label} value={feedbackValue} onChange={setFeedbackValue} />
+      ) : null}
+      {showFeedbackControls && config.comments ? (
+        <label className="feedback-input">
+          Comment
+          <textarea value={commentValue} onChange={(event) => setCommentValue(event.target.value)} rows={2} />
+        </label>
+      ) : null}
+      {showFeedbackControls && config.editable ? (
+        <label className="feedback-input">
+          Edit
+          <EditInput node={node} value={editValue} onChange={setEditValue} />
+        </label>
+      ) : null}
+      {showFeedbackControls ? (
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={!canSubmit}
+          onClick={() => {
+            void onSubmitFeedback({
+              propertyPath: path,
+              feedbackValue: feedbackValue || undefined,
+              commentValue: commentValue || undefined,
+              editValue: editChanged ? editValue : undefined
+            }).then(() => {
+              setFeedbackValue('');
+              setCommentValue('');
+              setEditValue(initialEditValue);
+            });
+          }}
+        >
+          Submit feedback
+        </button>
+      ) : null}
+      {allHistory.length > 0 ? (
+        <details className="feedback-history">
+          <summary>History ({allHistory.length})</summary>
+          {allHistory.map((entry) => (
+            <article key={`${entry.timestamp}-${entry.username}-${entry.feedback ?? ''}-${entry.comment ?? ''}-${entry.edit ?? ''}-${entry.original ?? ''}`} className="history-entry">
+              {entry.original ? (
+                <p className="history-line">
+                  <strong>original:</strong>
+                  <span>{entry.original}</span>
+                </p>
+              ) : null}
+              {entry.feedback ? (
+                <p className="history-line">
+                  <strong>feedback:</strong>
+                  <span>{entry.feedback}</span>
+                </p>
+              ) : null}
+              {entry.comment ? (
+                <p className="history-line">
+                  <strong>comment:</strong>
+                  <span>{entry.comment}</span>
+                </p>
+              ) : null}
+              {entry.edit ? (
+                <p className="history-line">
+                  <strong>edit:</strong>
+                  <span>{entry.edit}</span>
+                </p>
+              ) : null}
+              {entry.username ? (
+                <small>
+                  {entry.username} - {formatRelativeTime(entry.timestamp)}
+                </small>
+              ) : null}
+            </article>
+          ))}
+        </details>
+      ) : null}
+    </section>
+  );
+};
+
+const FeedbackValueInput = ({
+  mode,
+  label,
+  value,
+  onChange
+}: {
+  mode: FeedbackMode;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) => {
+  const groupName = useId();
+  const options =
+    mode === 'good_fair_bad'
+      ? [
+          { value: 'good', label: 'Good' },
+          { value: 'fair', label: 'Fair' },
+          { value: 'bad', label: 'Bad' }
+        ]
+      : mode === 'thumbs'
+        ? [
+            { value: 'thumbs_up', label: '👍' },
+            { value: 'thumbs_down', label: '👎' }
+          ]
+        : ['1', '2', '3', '4', '5'].map((rating) => ({ value: rating, label: '★'.repeat(Number(rating)) }));
+  return (
+    <fieldset className="feedback-input feedback-options" aria-label={`${label} feedback value`}>
+      <div className="feedback-option-list">
+        {options.map((option) => (
+          <label key={option.value} className="feedback-option">
+            <input
+              type="radio"
+              name={groupName}
+              value={option.value}
+              checked={value === option.value}
+              onChange={(event) => onChange(event.target.value)}
+            />
+            <span>{option.label}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+};
+
+const EditInput = ({ node, value, onChange }: { node: RenderNode; value: string; onChange: (value: string) => void }) => {
+  if (node.kind === 'value' && node.enumValues) {
+    return (
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {node.enumValues.map((option) => (
+          <option key={enumOptionValue(option)} value={formatValue(option)}>
+            {formatValue(option)}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  return <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={2} />;
+};
+
+const latestEditValue = (history: FeedbackHistory | undefined): string | undefined =>
+  [...(history?.edits ?? [])].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))[0]?.value;
+
+const editableValue = (node: RenderNode, history?: FeedbackHistory): string =>
+  latestEditValue(history) ?? (node.kind === 'value' ? formatValue(node.value) : '');
+
+const collectHistory = (
+  history: FeedbackHistory | undefined,
+  originalValue = ''
+): Array<{ username: string; timestamp: string; feedback?: string; comment?: string; edit?: string; original?: string }> => {
+  const items = new Map<string, { username: string; timestamp: string; feedback?: string; comment?: string; edit?: string; original?: string }>();
+  const upsert = (entry: FeedbackEntry, patch: { feedback?: string; comment?: string; edit?: string }) => {
+    const key = `${entry.username}\u0000${entry.timestamp}`;
+    items.set(key, { ...items.get(key), username: entry.username, timestamp: entry.timestamp, ...patch });
+  };
+  for (const entry of history?.feedback ?? []) {
+    upsert(entry, { feedback: entry.value });
+  }
+  for (const entry of history?.comments ?? []) {
+    upsert(entry, { comment: entry.value });
+  }
+  for (const entry of history?.edits ?? []) {
+    upsert(entry, { edit: entry.value });
+  }
+  const sorted = [...items.values()].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
+  return history?.edits.length && originalValue ? [...sorted, { username: '', timestamp: '', original: originalValue }] : sorted;
+};
+
+const formatRelativeTime = (timestamp: string): string => {
+  const elapsedMs = Date.now() - Date.parse(timestamp);
+  const absMs = Math.abs(elapsedMs);
+  const units: Array<[number, string]> = [
+    [86400000, 'day'],
+    [3600000, 'hour'],
+    [60000, 'minute']
+  ];
+  for (const [unitMs, unitName] of units) {
+    if (absMs >= unitMs) {
+      const count = Math.max(1, Math.round(absMs / unitMs));
+      return `${count} ${unitName}${count === 1 ? '' : 's'} ago`;
+    }
+  }
+  return 'just now';
+};
+
 const getObjectIdentifier = (node: Extract<RenderNode, { kind: 'object' }>): string | undefined => {
   const [firstChild] = node.children;
   if (!firstChild) {
@@ -803,21 +1278,22 @@ const getObjectIdentifier = (node: Extract<RenderNode, { kind: 'object' }>): str
   return firstChild.label;
 };
 
-const EnumValue = ({ node }: { node: Extract<RenderNode, { kind: 'value' }> }) => {
-  const selectedValue = enumOptionValue(node.value);
+const EnumValue = ({ node, value, edited }: { node: Extract<RenderNode, { kind: 'value' }>; value: string; edited: boolean }) => {
   const enumOptions = node.enumValues ?? [];
-  const hasSelectedOption = enumOptions.some((value) => enumOptionValue(value) === selectedValue);
+  const selectedOption = enumOptions.find((option) => formatValue(option) === value);
+  const selectedValue = selectedOption === undefined ? enumOptionValue(value) : enumOptionValue(selectedOption);
+  const hasSelectedOption = selectedOption !== undefined;
 
   return (
     <select
       aria-label={node.label}
-      className="enum-select"
+      className={`enum-select${edited ? ' edited-value' : ''}`}
       value={selectedValue}
       onChange={(event) => {
         event.currentTarget.value = selectedValue;
       }}
     >
-      {hasSelectedOption ? null : <option value={selectedValue}>{formatValue(node.value)} (not allowed)</option>}
+      {hasSelectedOption ? null : <option value={selectedValue}>{value} (not allowed)</option>}
       {enumOptions.map((value) => (
         <option key={enumOptionValue(value)} value={enumOptionValue(value)}>
           {formatValue(value)}

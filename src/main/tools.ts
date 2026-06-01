@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentErrorEnvelope, LocalToolMetadata, ToolInvocationRequest, ToolInvocationResponse } from '../shared/types';
+import { stripFeedbackProperties } from '../shared/feedback';
 import type { StorageAdapter } from './storage';
 
 type ToolExecutionContext = {
@@ -67,7 +68,7 @@ const readRecordTool: LocalToolDefinition = {
           projectId: record.projectId,
           recordId: record.recordId,
           contentType: 'application/json',
-          record: record.data,
+          record: stripFeedbackProperties(record.data),
           ...(request.arguments.includeSchema === true ? { schema: record.schema } : {})
         }
       };

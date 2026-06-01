@@ -8,9 +8,13 @@ import {
   assertChatCancelResult,
   assertBootstrap,
   assertChatMessage,
+  assertFeedbackConfig,
+  assertFeedbackSubmissionInput,
+  assertFeedbackSubmissionResult,
   assertNewProjectId,
   assertOpenProjectResult,
   assertProjectId,
+  assertProjectUser,
   assertProjectSummary,
   assertProjectSummaries,
   assertRecordDetail,
@@ -80,6 +84,20 @@ const registerIpc = (): void => {
   );
   ipcMain.handle('records:get', async (_event, projectId: unknown, recordId: unknown) =>
     assertRecordDetail(await requireStorage().getRecord(assertProjectId(projectId), assertRecordId(recordId)))
+  );
+  ipcMain.handle('feedback:getConfig', async (_event, projectId: unknown) =>
+    assertFeedbackConfig(await requireStorage().getFeedbackConfig(assertProjectId(projectId)))
+  );
+  ipcMain.handle('feedback:saveConfig', async (_event, projectId: unknown, config: unknown) =>
+    assertFeedbackConfig(await requireStorage().saveFeedbackConfig(assertProjectId(projectId), assertFeedbackConfig(config)))
+  );
+  ipcMain.handle('feedback:getProjectUser', async (_event, projectId: unknown) =>
+    assertProjectUser(await requireStorage().getProjectUser(assertProjectId(projectId)))
+  );
+  ipcMain.handle('feedback:submit', async (_event, projectId: unknown, recordId: unknown, input: unknown) =>
+    assertFeedbackSubmissionResult(
+      await requireStorage().submitFeedback(assertProjectId(projectId), assertRecordId(recordId), assertFeedbackSubmissionInput(input))
+    )
   );
   ipcMain.handle('agent:getStatus', async () => agent.getStatus());
   ipcMain.handle('chat:start', async (event, projectId: unknown, recordId: unknown, message: unknown) => {

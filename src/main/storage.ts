@@ -2,16 +2,41 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { DefaultAzureCredential } from '@azure/identity';
-import type { AppConfig, OpenProjectResult, ProjectSummary, RecordDetail, RecordSummary } from '../shared/types';
+import type {
+  AppConfig,
+  FeedbackConfig,
+  FeedbackSubmissionInput,
+  FeedbackSubmissionResult,
+  OpenProjectResult,
+  ProjectSummary,
+  ProjectUser,
+  RecordDetail,
+  RecordSummary
+} from '../shared/types';
+import {
+  assertFeedbackSubmissionInput as assertNonEmptyFeedbackSubmission,
+  deriveFeedbackTargets,
+  extractFeedbackHistory,
+  feedbackConfigEntryForPath,
+  getProjectUser,
+  mergeFeedbackEntries,
+  normalizeFeedbackConfig,
+  stripFeedbackProperties
+} from '../shared/feedback';
 import { assertNewProjectId, assertProjectId, assertRecordId } from '../shared/validators';
 import { buildRenderTree, validateRecord } from './schema';
-import { loadProjectEnv } from './env';
+import { loadProjectEnv, readEnvFile } from './env';
 
 export interface StorageAdapter {
   listProjects(): Promise<ProjectSummary[]>;
   createProject(projectId: string): Promise<ProjectSummary>;
   openProject(projectId: string): Promise<OpenProjectResult>;
   getRecord(projectId: string, recordId: string): Promise<RecordDetail>;
+  getFeedbackConfig(projectId: string): Promise<FeedbackConfig>;
+  saveFeedbackConfig(projectId: string, config: FeedbackConfig): Promise<FeedbackConfig>;
+  getProjectUser(projectId: string): Promise<ProjectUser>;
+  submitFeedback(projectId: string, recordId: string, input: FeedbackSubmissionInput): Promise<FeedbackSubmissionResult>;
+  updateRecord(projectId: string, recordId: string, data: unknown): Promise<RecordDetail>;
   getProjectPrompt(projectId: string): Promise<string | undefined>;
 }
 
@@ -20,6 +45,7 @@ const NEW_PROJECT_SCHEMA = {
   properties: {},
   additionalProperties: true
 };
+const BACKEND_KEYS = new Set(['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'LOCAL_PATH']);
 
 export const createStorageAdapter = (config: AppConfig): StorageAdapter => {
   if (config.backendKind === 'local') {
@@ -52,19 +78,23 @@ export class LocalStorageAdapter implements StorageAdapter {
     const project = this.projectPath(id);
     await fs.mkdir(project, { recursive: false });
     await fs.writeFile(path.join(project, '_schema.json'), `${JSON.stringify(NEW_PROJECT_SCHEMA, null, 2)}\n`, { flag: 'wx' });
+    await fs.writeFile(path.join(project, '_feedback.json'), `${JSON.stringify(normalizeFeedbackConfig(NEW_PROJECT_SCHEMA, undefined), null, 2)}\n`, {
+      flag: 'wx'
+    });
     return { id, name: id };
   }
 
   async openProject(projectId: string): Promise<OpenProjectResult> {
     const project = this.projectPath(assertProjectId(projectId));
     const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
-    const projectConfig = loadProjectEnv(path.join(project, '.env'), this.config.values);
+    const projectConfig = this.loadProjectConfig(project);
+    const feedbackConfig = await this.readFeedbackConfig(project, schema);
     const entries = await fs.readdir(project, { withFileTypes: true });
     const records = entries
       .filter((entry) => entry.isFile() && isRecordFile(entry.name))
       .map((entry): RecordSummary => ({ id: path.basename(entry.name, '.json'), displayName: path.basename(entry.name, '.json') }))
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
-    return { project: { id: projectId, name: projectId }, schema, records, projectConfig };
+    return { project: { id: projectId, name: projectId }, schema, records, projectConfig, feedbackConfig };
   }
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
@@ -73,16 +103,61 @@ export class LocalStorageAdapter implements StorageAdapter {
     const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
     const recordPath = containedPath(project, `${id}.json`);
     const data = await readJsonFile(recordPath, `Record not found: ${id}`);
-    const validationIssues = validateRecord(schema, data);
-    return {
-      projectId,
-      recordId: id,
-      displayName: id,
-      data,
-      schema,
-      validationIssues,
-      renderTree: buildRenderTree(schema, data, validationIssues)
-    };
+    return buildRecordDetail(projectId, id, schema, data);
+  }
+
+  async getFeedbackConfig(projectId: string): Promise<FeedbackConfig> {
+    const project = this.projectPath(assertProjectId(projectId));
+    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    return this.readFeedbackConfig(project, schema);
+  }
+
+  async saveFeedbackConfig(projectId: string, config: FeedbackConfig): Promise<FeedbackConfig> {
+    const project = this.projectPath(assertProjectId(projectId));
+    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    const normalized = normalizeFeedbackConfig(schema, config);
+    await writeJsonFile(path.join(project, '_feedback.json'), normalized);
+    return normalized;
+  }
+
+  async getProjectUser(projectId: string): Promise<ProjectUser> {
+    const project = this.projectPath(assertProjectId(projectId));
+    return getProjectUser(this.loadProjectConfig(project, { log: false }));
+  }
+
+  async submitFeedback(projectId: string, recordId: string, input: FeedbackSubmissionInput): Promise<FeedbackSubmissionResult> {
+    const project = this.projectPath(assertProjectId(projectId));
+    const id = assertRecordId(recordId);
+    const validInput = assertNonEmptyFeedbackSubmission(input);
+    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    const config = await this.readFeedbackConfig(project, schema);
+    assertSubmissionAllowed(config, validInput);
+    const user = getProjectUser(this.loadProjectConfig(project));
+    if (!user.valid || !user.username) {
+      throw new Error(user.validationMessage);
+    }
+    const recordPath = containedPath(project, `${id}.json`);
+    const data = await readJsonFile(recordPath, `Record not found: ${id}`);
+    if (!isPlainRecord(data)) {
+      throw new Error('Feedback can only be added to object records.');
+    }
+    mergeFeedbackEntries(data, validInput, user.username);
+    await writeJsonFile(recordPath, data);
+    return { username: user.username, record: buildRecordDetail(projectId, id, schema, data) };
+  }
+
+  async updateRecord(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
+    const project = this.projectPath(assertProjectId(projectId));
+    const id = assertRecordId(recordId);
+    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    const recordPath = containedPath(project, `${id}.json`);
+    const existing = await readJsonFile(recordPath, `Record not found: ${id}`);
+    const feedback = isPlainRecord(existing)
+      ? Object.fromEntries(Object.entries(existing).filter(([key]) => key.endsWith('_feedback') || key.endsWith('_edits') || key.endsWith('_comments')))
+      : {};
+    const next = isPlainRecord(data) ? { ...data, ...feedback } : data;
+    await writeJsonFile(recordPath, next);
+    return buildRecordDetail(projectId, id, schema, next);
   }
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
@@ -92,6 +167,15 @@ export class LocalStorageAdapter implements StorageAdapter {
 
   private projectPath(projectId: string): string {
     return containedPath(this.root, projectId);
+  }
+
+  private loadProjectConfig(project: string, options?: { log?: boolean }): Record<string, string> {
+    return loadProjectEnv(path.join(project, '.env'), { ...this.config.values, ...readRuntimeEnvValues(this.config.appEnvPath) }, options);
+  }
+
+  private async readFeedbackConfig(project: string, schema: unknown): Promise<FeedbackConfig> {
+    const config = await readOptionalJsonFile(path.join(project, '_feedback.json'));
+    return normalizeFeedbackConfig(schema, config);
   }
 }
 
@@ -127,6 +211,8 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     }
     const schema = JSON.stringify(NEW_PROJECT_SCHEMA, null, 2);
     await container.getBlockBlobClient('_schema.json').upload(schema, Buffer.byteLength(schema));
+    const feedbackConfig = JSON.stringify(normalizeFeedbackConfig(NEW_PROJECT_SCHEMA, undefined), null, 2);
+    await container.getBlockBlobClient('_feedback.json').upload(feedbackConfig, Buffer.byteLength(feedbackConfig));
     return { id, name: id };
   }
 
@@ -136,7 +222,8 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const schemaText = await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.');
     const schema = JSON.parse(schemaText) as unknown;
     const projectEnv = await this.readOptionalBlob(container, '.env');
-    const projectConfig = projectEnv ? { ...this.config.values, ...parseAzureProjectEnv(projectEnv) } : this.config.values;
+    const projectConfig = this.mergeAzureProjectConfig(projectEnv);
+    const feedbackConfig = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, '_feedback.json'));
     const records: RecordSummary[] = [];
     for await (const blob of container.listBlobsFlat()) {
       if (isRecordFile(blob.name)) {
@@ -144,7 +231,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
         records.push({ id: recordId, displayName: recordId });
       }
     }
-    return { project: { id, name: id }, schema, records: records.sort((a, b) => a.displayName.localeCompare(b.displayName)), projectConfig };
+    return { project: { id, name: id }, schema, records: records.sort((a, b) => a.displayName.localeCompare(b.displayName)), projectConfig, feedbackConfig };
   }
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
@@ -153,16 +240,68 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const container = this.client.getContainerClient(id);
     const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
     const data = JSON.parse(await this.readBlob(container, `${record}.json`, `Record not found: ${record}`)) as unknown;
-    const validationIssues = validateRecord(schema, data);
-    return {
-      projectId: id,
-      recordId: record,
-      displayName: record,
-      data,
-      schema,
-      validationIssues,
-      renderTree: buildRenderTree(schema, data, validationIssues)
-    };
+    return buildRecordDetail(id, record, schema, data);
+  }
+
+  async getFeedbackConfig(projectId: string): Promise<FeedbackConfig> {
+    const id = assertProjectId(projectId);
+    const container = this.client.getContainerClient(id);
+    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
+    return normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, '_feedback.json'));
+  }
+
+  async saveFeedbackConfig(projectId: string, config: FeedbackConfig): Promise<FeedbackConfig> {
+    const id = assertProjectId(projectId);
+    const container = this.client.getContainerClient(id);
+    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
+    const normalized = normalizeFeedbackConfig(schema, config);
+    const body = `${JSON.stringify(normalized, null, 2)}\n`;
+    await container.getBlockBlobClient('_feedback.json').upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
+    return normalized;
+  }
+
+  async getProjectUser(projectId: string): Promise<ProjectUser> {
+    const id = assertProjectId(projectId);
+    const projectEnv = await this.readOptionalBlob(this.client.getContainerClient(id), '.env');
+    return getProjectUser(this.mergeAzureProjectConfig(projectEnv));
+  }
+
+  async submitFeedback(projectId: string, recordId: string, input: FeedbackSubmissionInput): Promise<FeedbackSubmissionResult> {
+    const id = assertProjectId(projectId);
+    const record = assertRecordId(recordId);
+    const validInput = assertNonEmptyFeedbackSubmission(input);
+    const container = this.client.getContainerClient(id);
+    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
+    const config = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, '_feedback.json'));
+    assertSubmissionAllowed(config, validInput);
+    const user = getProjectUser(this.mergeAzureProjectConfig(await this.readOptionalBlob(container, '.env')));
+    if (!user.valid || !user.username) {
+      throw new Error(user.validationMessage);
+    }
+    const blob = container.getBlockBlobClient(`${record}.json`);
+    const data = JSON.parse(await this.readBlob(container, `${record}.json`, `Record not found: ${record}`)) as unknown;
+    if (!isPlainRecord(data)) {
+      throw new Error('Feedback can only be added to object records.');
+    }
+    mergeFeedbackEntries(data, validInput, user.username);
+    const body = `${JSON.stringify(data, null, 2)}\n`;
+    await blob.upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
+    return { username: user.username, record: buildRecordDetail(id, record, schema, data) };
+  }
+
+  async updateRecord(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
+    const id = assertProjectId(projectId);
+    const record = assertRecordId(recordId);
+    const container = this.client.getContainerClient(id);
+    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
+    const existing = JSON.parse(await this.readBlob(container, `${record}.json`, `Record not found: ${record}`)) as unknown;
+    const feedback = isPlainRecord(existing)
+      ? Object.fromEntries(Object.entries(existing).filter(([key]) => key.endsWith('_feedback') || key.endsWith('_edits') || key.endsWith('_comments')))
+      : {};
+    const next = isPlainRecord(data) ? { ...data, ...feedback } : data;
+    const body = `${JSON.stringify(next, null, 2)}\n`;
+    await container.getBlockBlobClient(`${record}.json`).upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
+    return buildRecordDetail(id, record, schema, next);
   }
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
@@ -187,6 +326,17 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const response = await blob.download();
     return streamToString(response.readableStreamBody);
   }
+
+  private async readOptionalJsonBlob(container: ReturnType<BlobServiceClient['getContainerClient']>, name: string): Promise<unknown> {
+    const content = await this.readOptionalBlob(container, name);
+    return content ? (JSON.parse(content) as unknown) : undefined;
+  }
+
+  private mergeAzureProjectConfig(projectEnv: string | undefined): Record<string, string> {
+    return projectEnv
+      ? { ...this.config.values, ...readRuntimeEnvValues(this.config.appEnvPath), ...parseAzureProjectEnv(projectEnv) }
+      : { ...this.config.values, ...readRuntimeEnvValues(this.config.appEnvPath) };
+  }
 }
 
 const isRecordFile = (name: string): boolean => name.endsWith('.json') && !path.basename(name).startsWith('_') && !name.includes('/');
@@ -210,6 +360,24 @@ const readJsonFile = async (filePath: string, missingMessage: string): Promise<u
     throw error;
   }
 };
+
+const readOptionalJsonFile = async (filePath: string): Promise<unknown> => {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8')) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
+  }
+};
+
+const writeJsonFile = async (filePath: string, value: unknown): Promise<void> => {
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+};
+
+const readRuntimeEnvValues = (envPath: string): Record<string, string> =>
+  Object.fromEntries(Object.entries(readEnvFile(envPath)).filter(([key]) => !BACKEND_KEYS.has(key)));
 
 const readOptionalTextFile = async (filePath: string): Promise<string | undefined> => {
   try {
@@ -247,3 +415,36 @@ const parseAzureProjectEnv = (content: string): Record<string, string> =>
         return [line.slice(0, index), line.slice(index + 1)];
       })
   );
+
+const buildRecordDetail = (projectId: string, recordId: string, schema: unknown, data: unknown): RecordDetail => {
+  const coreData = stripFeedbackProperties(data);
+  const validationIssues = validateRecord(schema, coreData);
+  return {
+    projectId,
+    recordId,
+    displayName: recordId,
+    data: coreData,
+    schema,
+    validationIssues,
+    renderTree: buildRenderTree(schema, coreData, validationIssues),
+    feedbackHistory: extractFeedbackHistory(data, deriveFeedbackTargets(schema))
+  };
+};
+
+const assertSubmissionAllowed = (config: FeedbackConfig, input: FeedbackSubmissionInput): void => {
+  const entry = feedbackConfigEntryForPath(config, input.propertyPath);
+  if (!entry) {
+    throw new Error('Feedback target is not present in the project schema.');
+  }
+  if (input.feedbackValue?.trim() && entry.feedback === 'none') {
+    throw new Error('Feedback is not configured for this property.');
+  }
+  if (input.commentValue?.trim() && !entry.comments) {
+    throw new Error('SME comments are not enabled for this property.');
+  }
+  if (input.editValue?.trim() && !entry.editable) {
+    throw new Error('Edits are not enabled for this property.');
+  }
+};
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);

@@ -23,4 +23,5 @@ describe('environment config', () => {
       LOCAL_PATH: '/tmp/projects'
     });
   });
+
 });

@@ -66,24 +66,37 @@ describe('local project creation', () => {
 
   it('loads project-level env values without allowing backend overrides', async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    const appEnvPath = path.join(tempRoot, 'app.env');
+    await fs.writeFile(appEnvPath, `LOCAL_PATH=${tempRoot}\nUSERNAME=app@example.com\n`);
     const tempAdapter = new LocalStorageAdapter({
       backendKind: 'local',
-      appEnvPath: '.env',
-      values: { LOCAL_PATH: tempRoot, APP_SETTING: 'app-value' }
+      appEnvPath,
+      values: { LOCAL_PATH: tempRoot, APP_SETTING: 'app-value', USERNAME: 'app@example.com' }
     });
     await fs.mkdir(path.join(tempRoot, 'env-project'));
     await fs.writeFile(path.join(tempRoot, 'env-project', '_schema.json'), '{"type":"object"}\n');
-    await fs.writeFile(path.join(tempRoot, 'env-project', '.env'), 'APP_SETTING=project-value\nPROJECT_ONLY=enabled\n');
+    await fs.writeFile(path.join(tempRoot, 'env-project', '.env'), 'APP_SETTING=project-value\nUSERNAME=project@example.com\nPROJECT_ONLY=enabled\n');
 
     await expect(tempAdapter.openProject('env-project')).resolves.toMatchObject({
       projectConfig: {
         LOCAL_PATH: tempRoot,
         APP_SETTING: 'project-value',
+        USERNAME: 'project@example.com',
         PROJECT_ONLY: 'enabled'
       }
     });
+    await expect(tempAdapter.getProjectUser('env-project')).resolves.toEqual({ username: 'project@example.com', valid: true });
 
-    await fs.writeFile(path.join(tempRoot, 'env-project', '.env'), 'LOCAL_PATH=/tmp/other-root\n');
+    await fs.writeFile(path.join(tempRoot, 'env-project', '.env'), '');
+    await expect(tempAdapter.openProject('env-project')).resolves.toMatchObject({
+      projectConfig: {
+        LOCAL_PATH: tempRoot,
+        USERNAME: 'app@example.com'
+      }
+    });
+    await expect(tempAdapter.getProjectUser('env-project')).resolves.toEqual({ username: 'app@example.com', valid: true });
+
+    await fs.writeFile(path.join(tempRoot, 'env-project', '.env'), 'LOCAL_PATH=/tmp/other-root\nUSERNAME=sme@example.com\n');
     await expect(tempAdapter.openProject('env-project')).rejects.toThrow('Project .env cannot override backend selection keys');
   });
 
@@ -108,5 +121,148 @@ describe('local project creation', () => {
     });
 
     await expect(tempAdapter.createProject('Bad Name')).rejects.toThrow('Project name must be 3-63 characters');
+  });
+
+  it('loads, saves, and sanitizes schema-derived feedback configuration', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    await fs.mkdir(path.join(tempRoot, 'feedback-project'));
+    await fs.writeFile(
+      path.join(tempRoot, 'feedback-project', '_schema.json'),
+      JSON.stringify({ type: 'object', properties: { answer: { type: 'string' }, request: { type: 'object', properties: { query: { type: 'string' } } } } })
+    );
+    await fs.writeFile(
+      path.join(tempRoot, 'feedback-project', '_feedback.json'),
+      JSON.stringify({
+        properties: {
+          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'good_fair_bad', comments: true, editable: false },
+          '/stale': { path: '/stale', target: 'Stale', tab: 'Main', feedback: 'stars_5', comments: true, editable: true }
+        }
+      })
+    );
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: '.env',
+      values: { LOCAL_PATH: tempRoot }
+    });
+
+    const config = await tempAdapter.getFeedbackConfig('feedback-project');
+    expect(Object.keys(config.properties)).toEqual(['/answer', '/request', '/request/query']);
+    expect(config.properties['/answer']).toMatchObject({ feedback: 'good_fair_bad', comments: true });
+    expect(config.properties['/stale']).toBeUndefined();
+
+    const saved = await tempAdapter.saveFeedbackConfig('feedback-project', {
+      properties: {
+        ...config.properties,
+        '/request/query': { ...config.properties['/request/query'], feedback: 'stars_5', editable: true }
+      }
+    });
+    expect(saved.properties['/request/query']).toMatchObject({ feedback: 'stars_5', editable: true });
+  });
+
+  it('submits feedback with reloaded USERNAME and preserves feedback during core updates', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    const appEnvPath = path.join(tempRoot, 'app.env');
+    await fs.writeFile(appEnvPath, `LOCAL_PATH=${tempRoot}\nUSERNAME=initial@example.com\n`);
+    await fs.mkdir(path.join(tempRoot, 'feedback-project'));
+    await fs.writeFile(
+      path.join(tempRoot, 'feedback-project', '_schema.json'),
+      JSON.stringify({ type: 'object', additionalProperties: false, properties: { answer: { type: 'string' } }, required: ['answer'] })
+    );
+    await fs.writeFile(path.join(tempRoot, 'feedback-project', 'record-1.json'), JSON.stringify({ answer: 'Original' }));
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath,
+      values: { LOCAL_PATH: tempRoot, USERNAME: 'initial@example.com' }
+    });
+    const config = await tempAdapter.getFeedbackConfig('feedback-project');
+    await tempAdapter.saveFeedbackConfig('feedback-project', {
+      properties: {
+        ...config.properties,
+        '/answer': { ...config.properties['/answer'], feedback: 'good_fair_bad', comments: true, editable: true }
+      }
+    });
+
+    await fs.writeFile(appEnvPath, `LOCAL_PATH=${tempRoot}\nUSERNAME=updated@example.com\n`);
+    await expect(tempAdapter.getProjectUser('feedback-project')).resolves.toEqual({ username: 'updated@example.com', valid: true });
+    const submitted = await tempAdapter.submitFeedback('feedback-project', 'record-1', {
+      propertyPath: '/answer',
+      feedbackValue: 'good',
+      commentValue: 'Clear',
+      editValue: 'Updated answer'
+    });
+
+    expect(submitted.username).toBe('updated@example.com');
+    expect(submitted.record.data).toEqual({ answer: 'Original' });
+    expect(submitted.record.validationIssues).toEqual([]);
+    expect(submitted.record.feedbackHistory?.['/answer'].feedback[0]).toMatchObject({ value: 'good', username: 'updated@example.com' });
+
+    const updated = await tempAdapter.updateRecord('feedback-project', 'record-1', { answer: 'Core update' });
+    expect(updated.data).toEqual({ answer: 'Core update' });
+    expect(updated.feedbackHistory?.['/answer'].comments[0]).toMatchObject({ value: 'Clear', username: 'updated@example.com' });
+  });
+
+  it('submits feedback to schema-derived array item properties', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    await fs.mkdir(path.join(tempRoot, 'feedback-project'));
+    await fs.writeFile(
+      path.join(tempRoot, 'feedback-project', '_schema.json'),
+      JSON.stringify({
+        type: 'object',
+        properties: {
+          evidence: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                source: { type: 'string' }
+              }
+            }
+          }
+        }
+      })
+    );
+    await fs.writeFile(path.join(tempRoot, 'feedback-project', 'record-1.json'), JSON.stringify({ evidence: [{ id: 'doc-1', source: 'docs' }] }));
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: path.join(tempRoot, 'app.env'),
+      values: { LOCAL_PATH: tempRoot, USERNAME: 'sme@example.com' }
+    });
+    const config = await tempAdapter.getFeedbackConfig('feedback-project');
+    await tempAdapter.saveFeedbackConfig('feedback-project', {
+      properties: {
+        ...config.properties,
+        '/evidence/~2/id': { ...config.properties['/evidence/~2/id'], feedback: 'thumbs', comments: true }
+      }
+    });
+
+    const submitted = await tempAdapter.submitFeedback('feedback-project', 'record-1', {
+      propertyPath: '/evidence/0/id',
+      feedbackValue: 'up',
+      commentValue: 'Relevant source'
+    });
+
+    expect(submitted.record.feedbackHistory?.['/evidence/0/id'].feedback[0]).toMatchObject({ value: 'up', username: 'sme@example.com' });
+    expect(submitted.record.feedbackHistory?.['/evidence/0/id'].comments[0]).toMatchObject({ value: 'Relevant source', username: 'sme@example.com' });
+  });
+
+  it('blocks feedback submission when USERNAME is missing', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    await fs.mkdir(path.join(tempRoot, 'feedback-project'));
+    await fs.writeFile(path.join(tempRoot, 'feedback-project', '_schema.json'), JSON.stringify({ type: 'object', properties: { answer: { type: 'string' } } }));
+    await fs.writeFile(path.join(tempRoot, 'feedback-project', 'record-1.json'), JSON.stringify({ answer: 'Original' }));
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: path.join(tempRoot, 'missing.env'),
+      values: { LOCAL_PATH: tempRoot }
+    });
+    const config = await tempAdapter.getFeedbackConfig('feedback-project');
+    await tempAdapter.saveFeedbackConfig('feedback-project', {
+      properties: { ...config.properties, '/answer': { ...config.properties['/answer'], feedback: 'good_fair_bad' } }
+    });
+
+    await expect(
+      tempAdapter.submitFeedback('feedback-project', 'record-1', { propertyPath: '/answer', feedbackValue: 'good' })
+    ).rejects.toThrow('USERNAME environment variable not configured');
   });
 });

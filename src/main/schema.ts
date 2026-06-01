@@ -19,7 +19,7 @@ export const validateRecord = (schema: unknown, data: unknown): ValidationIssue[
 
 export const buildRenderTree = (schema: unknown, data: unknown, issues: ValidationIssue[], label = 'record'): RenderNode => {
   if (!isSchema(schema)) {
-    return rawNode(label, undefined, data, 'Schema is not an object.', issues);
+    return rawNode(label, undefined, data, 'Schema is not an object.', issues, '');
   }
   const resolved = resolveRenderableSchema(schema);
   return renderSchema(label, resolved, data, issues, '');
@@ -37,7 +37,7 @@ const renderSchema = (label: string, schema: JsonSchema, data: unknown, issues: 
   const description = typeof schema.description === 'string' ? schema.description : undefined;
   const renderable = resolveRenderableSchema(schema);
   if (hasComplexConstruct(renderable)) {
-    return rawNode(label, description, data, 'Complex JSON Schema construct is validated and displayed as read-only JSON.', localIssues);
+    return rawNode(label, description, data, 'Complex JSON Schema construct is validated and displayed as read-only JSON.', localIssues, path);
   }
   const type = inferType(renderable, data);
   if (type === 'object') {
@@ -49,19 +49,29 @@ const renderSchema = (label: string, schema: JsonSchema, data: unknown, issues: 
     const extraChildren = Object.keys(value)
       .filter((key) => !(key in properties))
       .sort()
-      .map((key) => rawNode(key, undefined, value[key], 'Field is present in data but not declared by schema.', issuesAt(issues, `${path}/${escapePointer(key)}`)));
-    return { kind: 'object', label, description, children: [...children, ...extraChildren], validationIssues: localIssues };
+      .map((key) =>
+        rawNode(
+          key,
+          undefined,
+          value[key],
+          'Field is present in data but not declared by schema.',
+          issuesAt(issues, `${path}/${escapePointer(key)}`),
+          `${path}/${escapePointer(key)}`
+        )
+      );
+    return { kind: 'object', label, path, description, children: [...children, ...extraChildren], validationIssues: localIssues };
   }
   if (type === 'array') {
     const itemsSchema = isSchema(renderable.items) ? renderable.items : {};
     const items = Array.isArray(data)
       ? data.map((item, index) => renderSchema(String(index), itemsSchema, item, issues, `${path}/${index}`))
       : [];
-    return { kind: 'array', label, description, items, validationIssues: localIssues };
+    return { kind: 'array', label, path, description, items, validationIssues: localIssues };
   }
   return {
     kind: 'value',
     label,
+    path,
     description,
     value: data,
     type: typeof renderable.type === 'string' ? renderable.type : typeof data,
@@ -104,9 +114,17 @@ const inferType = (schema: JsonSchema, data: unknown): string => {
   return typeof data;
 };
 
-const rawNode = (label: string, description: string | undefined, value: unknown, reason: string, validationIssues: ValidationIssue[]): RenderNode => ({
+const rawNode = (
+  label: string,
+  description: string | undefined,
+  value: unknown,
+  reason: string,
+  validationIssues: ValidationIssue[],
+  path?: string
+): RenderNode => ({
   kind: 'raw',
   label,
+  path,
   description,
   value,
   reason,

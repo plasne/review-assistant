@@ -8,11 +8,16 @@ import type {
   ChatStreamComplete,
   ChatStreamError,
   ChatStreamStartResult,
+  FeedbackConfig,
+  FeedbackSubmissionInput,
+  FeedbackSubmissionResult,
   OpenProjectResult,
+  ProjectUser,
   ProjectSummary,
   RecordDetail,
   RecordSummary
 } from './types';
+import { FEEDBACK_MODES } from './feedback';
 
 export class ValidationError extends Error {
   constructor(message: string) {
@@ -87,7 +92,8 @@ export const assertOpenProjectResult = (value: unknown): OpenProjectResult => {
     project: assertProjectSummary(value.project),
     schema: value.schema,
     records: value.records.map(assertRecordSummary),
-    projectConfig: Object.fromEntries(Object.entries(value.projectConfig).filter((entry): entry is [string, string] => isString(entry[1])))
+    projectConfig: Object.fromEntries(Object.entries(value.projectConfig).filter((entry): entry is [string, string] => isString(entry[1]))),
+    ...(value.feedbackConfig === undefined ? {} : { feedbackConfig: assertFeedbackConfig(value.feedbackConfig) })
   };
 };
 
@@ -99,6 +105,75 @@ export const assertRecordDetail = (value: unknown): RecordDetail => {
     throw new ValidationError('Invalid record validation response.');
   }
   return value as RecordDetail;
+};
+
+export const assertFeedbackConfig = (value: unknown): FeedbackConfig => {
+  if (!isRecord(value) || !isRecord(value.properties)) {
+    throw new ValidationError('Invalid feedback configuration response.');
+  }
+  const properties = Object.fromEntries(
+    Object.entries(value.properties).map(([path, entry]) => {
+      if (!isRecord(entry) || !isString(entry.path) || !isString(entry.target) || !isString(entry.tab)) {
+        throw new ValidationError('Invalid feedback configuration entry.');
+      }
+      if (entry.path !== path || !FEEDBACK_MODES.includes(entry.feedback as FeedbackConfig['properties'][string]['feedback'])) {
+        throw new ValidationError('Invalid feedback mode.');
+      }
+      if (typeof entry.comments !== 'boolean' || typeof entry.editable !== 'boolean') {
+        throw new ValidationError('Invalid feedback configuration flags.');
+      }
+      return [
+        path,
+        {
+          path,
+          target: entry.target,
+          tab: entry.tab,
+          supportsEdit: entry.supportsEdit !== false,
+          feedback: entry.feedback,
+          comments: entry.comments,
+          editable: entry.editable
+        }
+      ];
+    })
+  );
+  return { properties } as FeedbackConfig;
+};
+
+export const assertProjectUser = (value: unknown): ProjectUser => {
+  if (!isRecord(value) || typeof value.valid !== 'boolean') {
+    throw new ValidationError('Invalid project user response.');
+  }
+  if (value.username !== undefined && !isString(value.username)) {
+    throw new ValidationError('Invalid project username response.');
+  }
+  if (value.validationMessage !== undefined && !isString(value.validationMessage)) {
+    throw new ValidationError('Invalid project user validation response.');
+  }
+  return value as ProjectUser;
+};
+
+export const assertFeedbackSubmissionInput = (value: unknown): FeedbackSubmissionInput => {
+  if (!isRecord(value) || !isString(value.propertyPath) || !value.propertyPath.startsWith('/')) {
+    throw new ValidationError('Invalid feedback submission target.');
+  }
+  for (const key of ['feedbackValue', 'commentValue', 'editValue']) {
+    if (value[key] !== undefined && !isString(value[key])) {
+      throw new ValidationError('Feedback submission values must be strings.');
+    }
+  }
+  return {
+    propertyPath: value.propertyPath,
+    feedbackValue: value.feedbackValue as string | undefined,
+    commentValue: value.commentValue as string | undefined,
+    editValue: value.editValue as string | undefined
+  };
+};
+
+export const assertFeedbackSubmissionResult = (value: unknown): FeedbackSubmissionResult => {
+  if (!isRecord(value) || !isString(value.username)) {
+    throw new ValidationError('Invalid feedback submission response.');
+  }
+  return { username: value.username, record: assertRecordDetail(value.record) };
 };
 
 export const assertBootstrap = (value: unknown): AppBootstrap => {

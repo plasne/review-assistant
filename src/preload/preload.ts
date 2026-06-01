@@ -16,7 +16,11 @@ import {
   assertChatStreamChunk,
   assertChatStreamComplete,
   assertChatStreamError,
-  assertChatStreamStart
+  assertChatStreamStart,
+  assertFeedbackConfig,
+  assertFeedbackSubmissionInput,
+  assertFeedbackSubmissionResult,
+  assertProjectUser
 } from '../shared/validators';
 
 const invoke = async <T>(channel: string, validator: (value: unknown) => T, ...args: unknown[]): Promise<T> =>
@@ -36,6 +40,17 @@ const api: Api = {
   createProject: (projectId) => invoke('projects:create', assertProjectSummary, assertNewProjectId(projectId)),
   openProject: (projectId) => invoke('projects:open', assertOpenProjectResult, assertProjectId(projectId)),
   getRecord: (projectId, recordId) => invoke('records:get', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId)),
+  getFeedbackConfig: (projectId) => invoke('feedback:getConfig', assertFeedbackConfig, assertProjectId(projectId)),
+  saveFeedbackConfig: (projectId, config) => invoke('feedback:saveConfig', assertFeedbackConfig, assertProjectId(projectId), assertFeedbackConfig(config)),
+  getProjectUser: (projectId) => invoke('feedback:getProjectUser', assertProjectUser, assertProjectId(projectId)),
+  submitFeedback: (projectId, recordId, input) =>
+    invoke(
+      'feedback:submit',
+      assertFeedbackSubmissionResult,
+      assertProjectId(projectId),
+      assertRecordId(recordId),
+      assertFeedbackSubmissionInput(input)
+    ),
   getAgentStatus: () => invoke('agent:getStatus', assertAgentStatus),
   startChat: (projectId, recordId, message) =>
     invoke(

@@ -26,6 +26,7 @@ export type RenderNode =
   | {
       kind: 'object';
       label: string;
+      path?: string;
       description?: string;
       children: RenderNode[];
       validationIssues: ValidationIssue[];
@@ -33,6 +34,7 @@ export type RenderNode =
   | {
       kind: 'array';
       label: string;
+      path?: string;
       description?: string;
       items: RenderNode[];
       validationIssues: ValidationIssue[];
@@ -40,6 +42,7 @@ export type RenderNode =
   | {
       kind: 'value';
       label: string;
+      path?: string;
       description?: string;
       value: unknown;
       type?: string;
@@ -49,6 +52,7 @@ export type RenderNode =
   | {
       kind: 'raw';
       label: string;
+      path?: string;
       description?: string;
       value: unknown;
       reason: string;
@@ -60,6 +64,7 @@ export type OpenProjectResult = {
   schema: unknown;
   records: RecordSummary[];
   projectConfig: Record<string, string>;
+  feedbackConfig?: FeedbackConfig;
 };
 
 export type RecordDetail = {
@@ -70,6 +75,56 @@ export type RecordDetail = {
   schema: unknown;
   validationIssues: ValidationIssue[];
   renderTree: RenderNode;
+  feedbackHistory?: Record<string, FeedbackHistory>;
+};
+
+export type FeedbackMode = 'none' | 'good_fair_bad' | 'thumbs' | 'stars_5';
+
+export type FeedbackTarget = {
+  path: string;
+  target: string;
+  tab: string;
+  supportsEdit: boolean;
+};
+
+export type FeedbackConfigEntry = FeedbackTarget & {
+  feedback: FeedbackMode;
+  comments: boolean;
+  editable: boolean;
+};
+
+export type FeedbackConfig = {
+  properties: Record<string, FeedbackConfigEntry>;
+};
+
+export type ProjectUser = {
+  username?: string;
+  valid: boolean;
+  validationMessage?: string;
+};
+
+export type FeedbackEntry = {
+  value: string;
+  username: string;
+  timestamp: string;
+};
+
+export type FeedbackHistory = {
+  feedback: FeedbackEntry[];
+  edits: FeedbackEntry[];
+  comments: FeedbackEntry[];
+};
+
+export type FeedbackSubmissionInput = {
+  propertyPath: string;
+  feedbackValue?: string;
+  commentValue?: string;
+  editValue?: string;
+};
+
+export type FeedbackSubmissionResult = {
+  username: string;
+  record: RecordDetail;
 };
 
 export type ChatMessage = {
@@ -191,6 +246,10 @@ export type Api = {
   createProject: (projectId: string) => Promise<ProjectSummary>;
   openProject: (projectId: string) => Promise<OpenProjectResult>;
   getRecord: (projectId: string, recordId: string) => Promise<RecordDetail>;
+  getFeedbackConfig: (projectId: string) => Promise<FeedbackConfig>;
+  saveFeedbackConfig: (projectId: string, config: FeedbackConfig) => Promise<FeedbackConfig>;
+  getProjectUser: (projectId: string) => Promise<ProjectUser>;
+  submitFeedback: (projectId: string, recordId: string, input: FeedbackSubmissionInput) => Promise<FeedbackSubmissionResult>;
   getAgentStatus: () => Promise<AgentStatusSnapshot>;
   startChat: (projectId: string | undefined, recordId: string | undefined, message: string) => Promise<ChatStreamStartResult>;
   cancelChat: (requestId: string) => Promise<ChatCancelResult>;

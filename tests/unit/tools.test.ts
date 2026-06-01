@@ -7,11 +7,22 @@ const storage: StorageAdapter = {
   createProject: async (projectId) => ({ id: projectId, name: projectId }),
   openProject: async (projectId) => ({ project: { id: projectId, name: projectId }, schema: {}, records: [], projectConfig: {} }),
   getProjectPrompt: async () => undefined,
+  getFeedbackConfig: async () => ({ properties: {} }),
+  saveFeedbackConfig: async (_projectId, config) => config,
+  getProjectUser: async () => ({ username: 'sme@example.com', valid: true }),
+  submitFeedback: async (projectId, recordId) => ({
+    username: 'sme@example.com',
+    record: await storage.getRecord(projectId, recordId)
+  }),
+  updateRecord: async (projectId, recordId) => storage.getRecord(projectId, recordId),
   getRecord: async (projectId, recordId) => ({
     projectId,
     recordId,
     displayName: recordId,
-    data: { question: 'How do I run the harness?' },
+    data: {
+      question: 'How do I run the harness?',
+      question_feedback: [{ value: 'good', username: 'sme@example.com', timestamp: '2026-06-01T14:32:15.000Z' }]
+    },
     schema: { type: 'object' },
     validationIssues: [],
     renderTree: { kind: 'object', label: 'record', children: [], validationIssues: [] }
