@@ -1362,8 +1362,8 @@ const EvidenceList = ({
   disableNodeActions?: boolean;
 }) => {
   return (
-    <section className="node array-node evidence-list">
-      <div className="node-heading-row">
+    <details className="node array-node evidence-list" open>
+      <summary className="node-heading-row">
         <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
         {disableNodeActions ? null : (
           <div className="node-heading-actions">
@@ -1372,7 +1372,7 @@ const EvidenceList = ({
             ) : null}
           </div>
         )}
-      </div>
+      </summary>
       {issues}
       <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
       <div className="evidence-items">
@@ -1403,7 +1403,7 @@ const EvidenceList = ({
           )
         )}
       </div>
-    </section>
+    </details>
   );
 };
 
@@ -1542,7 +1542,17 @@ const RecordsQueueIcon = () => (
 );
 
 const OpenInTabButton = ({ onClick }: { onClick: () => void }) => (
-  <button type="button" className="secondary-button compact-button icon-button" aria-label="Open in tab" title="Open in tab" onClick={onClick}>
+  <button
+    type="button"
+    className="secondary-button compact-button icon-button"
+    aria-label="Open in tab"
+    title="Open in tab"
+    onClick={(event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
+    }}
+  >
     <svg className="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
       <path d="M2 5L2 3Q2 2 3 2L6 2Q7 2 7 3L7 5L13 5Q14 5 14 6L14 13Q14 14 13 14L3 14Q2 14 2 13Z" />
       <path d="M8 7.5V11.5M6 9.5H10" />

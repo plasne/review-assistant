@@ -476,6 +476,7 @@ ul {
 .collapsible-node > summary,
 .presentation-field > summary,
 .feedback-history > summary,
+.evidence-list > summary,
 .evidence-card > summary {
   align-items: center;
   cursor: pointer;
@@ -487,6 +488,7 @@ ul {
 .collapsible-node > summary::-webkit-details-marker,
 .presentation-field > summary::-webkit-details-marker,
 .feedback-history > summary::-webkit-details-marker,
+.evidence-list > summary::-webkit-details-marker,
 .evidence-card > summary::-webkit-details-marker {
   display: none;
 }
@@ -494,6 +496,7 @@ ul {
 .collapsible-node > summary::before,
 .presentation-field > summary::before,
 .feedback-history > summary::before,
+.evidence-list > summary::before,
 .evidence-card > summary::before {
   border-bottom: 4px solid transparent;
   border-left: 5px solid currentColor;
@@ -509,6 +512,7 @@ ul {
 .collapsible-node[open] > summary::before,
 .presentation-field[open] > summary::before,
 .feedback-history[open] > summary::before,
+.evidence-list[open] > summary::before,
 .evidence-card[open] > summary::before {
   transform: rotate(90deg);
 }

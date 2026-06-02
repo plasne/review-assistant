@@ -320,9 +320,12 @@ describe('review UI', () => {
     const answerSection = screen.getByRole('heading', { name: 'answer' }).closest('section');
     expect(answerSection).not.toBeNull();
     expect(within(answerSection as HTMLElement).queryByRole('button', { name: 'Open in tab' })).not.toBeInTheDocument();
-    const evidenceSection = screen.getByRole('heading', { name: 'evidence 1 item' }).closest('section');
-    expect(evidenceSection).not.toBeNull();
-    expect(within(evidenceSection as HTMLElement).getByRole('button', { name: 'Open in tab' })).toBeInTheDocument();
+    const evidenceGroup = screen.getByRole('heading', { name: 'evidence 1 item' }).closest('details');
+    expect(evidenceGroup).not.toBeNull();
+    expect(evidenceGroup).toHaveClass('evidence-list');
+    expect(evidenceGroup).toHaveAttribute('open');
+    expect((evidenceGroup as HTMLElement).firstElementChild?.tagName).toBe('SUMMARY');
+    expect(within(evidenceGroup as HTMLElement).getByRole('button', { name: 'Open in tab' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'evidence 1 item' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'README' }).closest('details')).not.toHaveAttribute('open');
   });
