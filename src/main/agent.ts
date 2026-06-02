@@ -80,6 +80,7 @@ type AgentRuntimeOptions = {
   command?: string;
   commandArgs?: string[];
   commandEnv?: NodeJS.ProcessEnv;
+  providerModule?: string;
 };
 
 const provider: AgentProviderMetadata = {
@@ -173,14 +174,18 @@ export class AgentRuntime {
   }
 
   private forkWorker(): ChildProcess {
+    const runtimeCommand = this.options.command ?? process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND;
+    const runtimeArgs =
+      this.options.commandArgs?.join('\n') ?? process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS;
+    const providerModule = this.options.providerModule ?? process.env.REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE;
     return fork(this.options.workerPath, [], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       env: {
         ...process.env,
         ...this.options.commandEnv,
-        REVIEW_ASSISTANT_COPILOT_COMMAND: this.options.command ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND ?? 'copilot',
-        REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS:
-          this.options.commandArgs?.join('\n') ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS ?? ''
+        ...(runtimeCommand ? { REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND: runtimeCommand } : {}),
+        ...(runtimeArgs ? { REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS: runtimeArgs } : {}),
+        ...(providerModule ? { REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE: providerModule } : {})
       }
     });
   }
@@ -297,9 +302,9 @@ export const normalizeProviderError = (error: unknown): AgentErrorEnvelope => {
   if (normalized.includes('enoent') || normalized.includes('not found')) {
     return {
       code: 'BINARY_NOT_FOUND',
-      message: 'GitHub Copilot CLI was not found.',
+      message: 'GitHub Copilot runtime was not found.',
       retryable: true,
-      remediation: 'Install GitHub Copilot CLI or run `gh copilot` once to provision it, then check agent status again.'
+      remediation: 'Install the Review Assistant dependencies or configure a valid GitHub Copilot SDK runtime, then check agent status again.'
     };
   }
   if (normalized.includes('auth') || normalized.includes('login') || normalized.includes('sign in') || normalized.includes('unauthorized')) {

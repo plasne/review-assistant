@@ -35,7 +35,11 @@ Long-running chat and tool workflows should also include:
 | `review-assistant.agent-request-canceled` | Agent runtime canceled a chat request. |
 | `review-assistant.agent-request-failed` | Agent runtime failed a chat request with a structured error. |
 | `review-assistant.agent-worker-starting` | Agent worker prepared prompt/tool context and is starting provider transport. |
-| `review-assistant.agent-provider-spawned` | Provider process was spawned. |
+| `review-assistant.agent-provider-spawned` | GitHub Copilot SDK session/runtime was initialized for a chat request. |
+| `review-assistant.agent-provider-canceled` | Agent worker canceled an active provider run. |
+| `review-assistant.agent-provider-cancel-failed` | Provider cancellation failed. |
+| `review-assistant.agent-provider-disconnect-failed` | SDK session disconnect failed during cleanup. |
+| `review-assistant.agent-provider-stop-failed` | SDK runtime stop returned cleanup errors. |
 | `review-assistant.agent-first-output` | Provider emitted the first streamed output. |
 | `review-assistant.agent-worker-completed` | Agent worker completed provider execution. |
 | `review-assistant.tool-bridge-ready` | MCP bridge server is ready for local tool calls. |
@@ -47,6 +51,9 @@ Long-running chat and tool workflows should also include:
 | `review-assistant.external-mcp-tools-list-completed` | External MCP server returned tool metadata. |
 | `review-assistant.external-mcp-tool-call-started` | Provider called an external MCP tool. |
 | `review-assistant.external-mcp-tool-call-completed` | External MCP tool returned, with payload size metadata only. |
+| `review-assistant.auth-login-started` | Main process started the GitHub Copilot SDK-bundled login flow. |
+| `review-assistant.auth-device-code-ready` | Main process parsed a GitHub Copilot login device code and copied it for the renderer modal. |
+| `review-assistant.auth-login-completed` | Main process observed the GitHub Copilot login process complete after device authorization. |
 | `review-assistant.tool-request-started` | Worker forwarded a tool request to main. |
 | `review-assistant.tool-execute-started` | Main started executing a local tool. |
 | `review-assistant.tool-execute-completed` | Main completed local tool execution. |
@@ -64,6 +71,6 @@ Long-running chat and tool workflows should also include:
 
 - Agent availability failure rate by `code`.
 - Chat request duration from `review-assistant.agent-request-started` to completion/failure/cancel.
-- Time to first output from `review-assistant.agent-provider-spawned` to `review-assistant.agent-first-output`.
+- Time to first output from SDK initialization (`review-assistant.agent-provider-spawned`) to `review-assistant.agent-first-output`.
 - Local tool call count, duration, and failure rate by tool name.
 - Harness failure rate by deterministic command in CI.

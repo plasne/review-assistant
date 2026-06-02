@@ -31,12 +31,24 @@ export type ValidationIssue = {
   keyword: string;
 };
 
+export type FieldPresentation = 'chat-request' | 'chat-response' | 'evidence-list';
+
+export type DisplayConfigEntry = {
+  path: string;
+  presentation: FieldPresentation;
+};
+
+export type DisplayConfig = {
+  properties: Record<string, DisplayConfigEntry>;
+};
+
 export type RenderNode =
   | {
       kind: 'object';
       label: string;
       path?: string;
       description?: string;
+      presentation?: FieldPresentation;
       children: RenderNode[];
       validationIssues: ValidationIssue[];
     }
@@ -45,6 +57,7 @@ export type RenderNode =
       label: string;
       path?: string;
       description?: string;
+      presentation?: FieldPresentation;
       items: RenderNode[];
       validationIssues: ValidationIssue[];
     }
@@ -53,6 +66,7 @@ export type RenderNode =
       label: string;
       path?: string;
       description?: string;
+      presentation?: FieldPresentation;
       value: unknown;
       type?: string;
       enumValues?: unknown[];
@@ -63,6 +77,7 @@ export type RenderNode =
       label: string;
       path?: string;
       description?: string;
+      presentation?: FieldPresentation;
       value: unknown;
       reason: string;
       validationIssues: ValidationIssue[];
@@ -203,6 +218,20 @@ export type ChatCancelResult = {
   canceled: boolean;
 };
 
+export type ContinueWithGitHubResult = {
+  copiedToClipboard?: boolean;
+  deviceCode?: string;
+  loginId: string;
+  opened: boolean;
+  verificationUri?: string;
+};
+
+export type GitHubLoginCompletion = {
+  errorMessage?: string;
+  loginId: string;
+  success: boolean;
+};
+
 export type ChatCanceled = {
   requestId: string;
   messageId?: string;
@@ -243,6 +272,10 @@ export type ChatStreamEventHandlers = {
   onChatCanceled: (listener: (canceled: ChatCanceled) => void) => Unsubscribe;
 };
 
+export type AuthEventHandlers = {
+  onGitHubLoginComplete: (listener: (completion: GitHubLoginCompletion) => void) => Unsubscribe;
+};
+
 export type AppBootstrap = {
   configError?: string;
   backendKind?: BackendKind;
@@ -267,5 +300,7 @@ export type Api = {
     message: string,
     history?: ChatMessage[]
   ) => Promise<ChatStreamStartResult>;
+  continueWithGitHub: () => Promise<ContinueWithGitHubResult>;
   cancelChat: (requestId: string) => Promise<ChatCancelResult>;
-} & ChatStreamEventHandlers;
+} & AuthEventHandlers &
+  ChatStreamEventHandlers;

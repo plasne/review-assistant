@@ -3,6 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const fakeProviderEnv = {
+  REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE: path.resolve('test-fixtures/fake-copilot-sdk-provider.mjs')
+};
+
 test('real Electron app opens a local project and reviews a record', async () => {
   const createdProjectPath = path.resolve('test-fixtures/local-projects/e2e-created-project');
   fs.rmSync(createdProjectPath, { recursive: true, force: true });
@@ -12,8 +16,7 @@ test('real Electron app opens a local project and reviews a record', async () =>
     env: {
       ...process.env,
       REVIEW_ASSISTANT_APP_ENV: appEnv,
-      REVIEW_ASSISTANT_COPILOT_COMMAND: process.execPath,
-      REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS: path.resolve('test-fixtures/fake-copilot.mjs')
+      ...fakeProviderEnv
     }
   });
   const page = await electronApp.firstWindow();
@@ -59,74 +62,87 @@ test('real Electron app opens a local project and reviews a record', async () =>
 });
 
 test('records list scroll area reaches the records column edge and keeps content clear of the scrollbar', async () => {
-  const appEnv = path.resolve('.env');
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-scroll-'));
+  const projectPath = path.join(tempRoot, 'scroll-project');
+  const appEnv = path.join(tempRoot, 'app.env');
+  fs.mkdirSync(projectPath);
+  fs.writeFileSync(
+    path.join(projectPath, '_schema.json'),
+    JSON.stringify({ type: 'object', properties: { question: { type: 'string' } }, required: ['question'] }, null, 2)
+  );
+  for (let index = 1; index <= 24; index += 1) {
+    const id = `q${String(index).padStart(2, '0')}`;
+    fs.writeFileSync(path.join(projectPath, `${id}.json`), JSON.stringify({ question: `Question ${index}` }, null, 2));
+  }
+  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\n`);
   const electronApp = await electron.launch({
     args: ['.'],
     env: {
       ...process.env,
       REVIEW_ASSISTANT_APP_ENV: appEnv,
-      REVIEW_ASSISTANT_COPILOT_COMMAND: process.execPath,
-      REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS: path.resolve('test-fixtures/fake-copilot.mjs')
+      ...fakeProviderEnv
     }
   });
   const page = await electronApp.firstWindow();
-  await page.setViewportSize({ width: 900, height: 560 });
+  try {
+    await page.setViewportSize({ width: 900, height: 560 });
 
-  await page.getByLabel('Current project').selectOption('agent01');
-  await expect(page.getByRole('button', { name: 'q16', exact: true })).toBeVisible();
+    await page.getByLabel('Current project').selectOption('scroll-project');
+    await expect(page.getByRole('button', { name: 'q01', exact: true })).toBeVisible();
 
-  const metrics = await page.evaluate(() => {
-    const recordsColumn = document.querySelector('.records');
-    const recordsList = document.querySelector('.records-list-container');
-    const firstRecordButton = document.querySelector('.record-button');
-    if (!(recordsColumn instanceof HTMLElement) || !(recordsList instanceof HTMLElement) || !(firstRecordButton instanceof HTMLElement)) {
-      throw new Error('Records layout elements were not rendered.');
-    }
-    const columnRect = recordsColumn.getBoundingClientRect();
-    const listRect = recordsList.getBoundingClientRect();
-    const buttonRect = firstRecordButton.getBoundingClientRect();
-    return {
-      bodyClientHeight: document.body.clientHeight,
-      bodyScrollHeight: document.body.scrollHeight,
-      buttonRight: buttonRect.right,
-      columnRight: columnRect.right,
-      listClientHeight: recordsList.clientHeight,
-      listRight: listRect.right,
-      listScrollHeight: recordsList.scrollHeight
-    };
-  });
+    const metrics = await page.evaluate(() => {
+      const recordsColumn = document.querySelector('.records');
+      const recordsList = document.querySelector('.records-list-container');
+      const firstRecordButton = document.querySelector('.record-button');
+      if (!(recordsColumn instanceof HTMLElement) || !(recordsList instanceof HTMLElement) || !(firstRecordButton instanceof HTMLElement)) {
+        throw new Error('Records layout elements were not rendered.');
+      }
+      const columnRect = recordsColumn.getBoundingClientRect();
+      const listRect = recordsList.getBoundingClientRect();
+      const buttonRect = firstRecordButton.getBoundingClientRect();
+      return {
+        bodyClientHeight: document.body.clientHeight,
+        bodyScrollHeight: document.body.scrollHeight,
+        buttonRight: buttonRect.right,
+        columnRight: columnRect.right,
+        listClientHeight: recordsList.clientHeight,
+        listRight: listRect.right,
+        listScrollHeight: recordsList.scrollHeight
+      };
+    });
 
-  expect(metrics.listScrollHeight).toBeGreaterThan(metrics.listClientHeight);
-  expect(metrics.bodyScrollHeight).toBe(metrics.bodyClientHeight);
-  expect(Math.abs(metrics.listRight - metrics.columnRight)).toBeLessThanOrEqual(1);
-  expect(metrics.columnRight - metrics.buttonRight).toBeGreaterThanOrEqual(20);
-
-  await electronApp.close();
+    expect(metrics.listScrollHeight).toBeGreaterThan(metrics.listClientHeight);
+    expect(metrics.bodyScrollHeight).toBe(metrics.bodyClientHeight);
+    expect(Math.abs(metrics.listRight - metrics.columnRight)).toBeLessThanOrEqual(1);
+    expect(metrics.columnRight - metrics.buttonRight).toBeGreaterThanOrEqual(20);
+  } finally {
+    await electronApp.close();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test('real Electron app lets Copilot read the displayed record through the local tool', async () => {
-  const appEnv = path.resolve('.env');
+  const appEnv = path.resolve('test-fixtures/e2e.env');
   const electronApp = await electron.launch({
     args: ['.'],
     env: {
       ...process.env,
       REVIEW_ASSISTANT_APP_ENV: appEnv,
-      REVIEW_ASSISTANT_COPILOT_COMMAND: process.execPath,
-      REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS: path.resolve('test-fixtures/fake-copilot.mjs'),
+      ...fakeProviderEnv,
       FAKE_COPILOT_REQUIRE_REVIEW_ASSISTANT_TOOLS: '1'
     }
   });
   const page = await electronApp.firstWindow();
 
-  await page.getByLabel('Current project').selectOption('agent01');
-  await page.getByRole('button', { name: 'q07', exact: true }).click();
-  await expect(page.getByText('What is the E2E flow of a purchase - technically?', { exact: true }).first()).toBeVisible();
+  await page.getByLabel('Current project').selectOption('sample-project');
+  await page.getByRole('button', { name: 'valid-record', exact: true }).click();
+  await expect(page.getByText('How do I run the harness?', { exact: true }).first()).toBeVisible();
 
   await page.getByLabel('Message GitHub Copilot').fill('what is the persona and question?');
   await page.getByRole('button', { name: 'Send' }).click();
 
   await expect(page.getByText('Record persona: developer')).toBeVisible();
-  await expect(page.getByText('Record question: What is the E2E flow of a purchase - technically?')).toBeVisible();
+  await expect(page.getByText('Record question: How do I run the harness?')).toBeVisible();
 
   await electronApp.close();
 });
@@ -150,8 +166,7 @@ test('real Electron app configures feedback and shows subsequent users collapsed
       env: {
         ...process.env,
         REVIEW_ASSISTANT_APP_ENV: appEnv,
-        REVIEW_ASSISTANT_COPILOT_COMMAND: process.execPath,
-        REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS: path.resolve('test-fixtures/fake-copilot.mjs')
+        ...fakeProviderEnv
       }
     });
 

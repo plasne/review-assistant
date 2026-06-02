@@ -5,6 +5,8 @@ import {
   assertChatStreamChunk,
   assertChatStreamStart,
   assertChatHistory,
+  assertContinueWithGitHubResult,
+  assertGitHubLoginCompletion,
   assertChatMessage,
   assertNewProjectId,
   assertOpenProjectResult,
@@ -112,5 +114,26 @@ describe('IPC boundary validators', () => {
     );
     expect(() => assertChatStreamStart({ requestId: 'request-1' })).toThrow(ValidationError);
     expect(() => assertChatStreamChunk({ requestId: 'request-1', messageId: 'message-1' })).toThrow(ValidationError);
+  });
+
+  it('validates GitHub continuation responses', () => {
+    expect(
+      assertContinueWithGitHubResult({
+        opened: true,
+        loginId: 'login-1',
+        deviceCode: '1234-ABCD',
+        verificationUri: 'https://github.com/login/device',
+        copiedToClipboard: true
+      })
+    ).toEqual({
+      opened: true,
+      loginId: 'login-1',
+      deviceCode: '1234-ABCD',
+      verificationUri: 'https://github.com/login/device',
+      copiedToClipboard: true
+    });
+    expect(() => assertContinueWithGitHubResult({ opened: 'true' })).toThrow(ValidationError);
+    expect(assertGitHubLoginCompletion({ loginId: 'login-1', success: true })).toEqual({ loginId: 'login-1', success: true });
+    expect(() => assertGitHubLoginCompletion({ loginId: 'login-1', success: 'true' })).toThrow(ValidationError);
   });
 });

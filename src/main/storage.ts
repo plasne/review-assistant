@@ -4,6 +4,7 @@ import { BlobServiceClient } from '@azure/storage-blob';
 import { DefaultAzureCredential } from '@azure/identity';
 import type {
   AppConfig,
+  DisplayConfig,
   FeedbackConfig,
   FeedbackSubmissionInput,
   FeedbackSubmissionResult,
@@ -13,6 +14,7 @@ import type {
   RecordDetail,
   RecordSummary
 } from '../shared/types';
+import { normalizeDisplayConfig } from '../shared/display';
 import {
   assertFeedbackSubmissionInput as assertNonEmptyFeedbackSubmission,
   deriveFeedbackTargets,
@@ -105,7 +107,7 @@ export class LocalStorageAdapter implements StorageAdapter {
     const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
     const recordPath = containedPath(project, `${id}.json`);
     const data = await readJsonFile(recordPath, `Record not found: ${id}`);
-    return buildRecordDetail(projectId, id, schema, data);
+    return buildRecordDetail(projectId, id, schema, data, await this.readDisplayConfig(project));
   }
 
   async getFeedbackConfig(projectId: string): Promise<FeedbackConfig> {
@@ -145,7 +147,7 @@ export class LocalStorageAdapter implements StorageAdapter {
     }
     mergeFeedbackEntries(data, validInput, user.username);
     await writeJsonFile(recordPath, data);
-    return { username: user.username, record: buildRecordDetail(projectId, id, schema, data) };
+    return { username: user.username, record: buildRecordDetail(projectId, id, schema, data, await this.readDisplayConfig(project)) };
   }
 
   async updateRecord(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
@@ -159,7 +161,7 @@ export class LocalStorageAdapter implements StorageAdapter {
       : {};
     const next = isPlainRecord(data) ? { ...data, ...feedback } : data;
     await writeJsonFile(recordPath, next);
-    return buildRecordDetail(projectId, id, schema, next);
+    return buildRecordDetail(projectId, id, schema, next, await this.readDisplayConfig(project));
   }
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
@@ -186,6 +188,10 @@ export class LocalStorageAdapter implements StorageAdapter {
   private async readFeedbackConfig(project: string, schema: unknown): Promise<FeedbackConfig> {
     const config = await readOptionalJsonFile(path.join(project, '_feedback.json'));
     return normalizeFeedbackConfig(schema, config);
+  }
+
+  private async readDisplayConfig(project: string): Promise<DisplayConfig> {
+    return normalizeDisplayConfig(await readOptionalJsonFile(path.join(project, '_display.json')));
   }
 }
 
@@ -250,7 +256,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const container = this.client.getContainerClient(id);
     const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
     const data = JSON.parse(await this.readBlob(container, `${record}.json`, `Record not found: ${record}`)) as unknown;
-    return buildRecordDetail(id, record, schema, data);
+    return buildRecordDetail(id, record, schema, data, normalizeDisplayConfig(await this.readOptionalJsonBlob(container, '_display.json')));
   }
 
   async getFeedbackConfig(projectId: string): Promise<FeedbackConfig> {
@@ -296,7 +302,10 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     mergeFeedbackEntries(data, validInput, user.username);
     const body = `${JSON.stringify(data, null, 2)}\n`;
     await blob.upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
-    return { username: user.username, record: buildRecordDetail(id, record, schema, data) };
+    return {
+      username: user.username,
+      record: buildRecordDetail(id, record, schema, data, normalizeDisplayConfig(await this.readOptionalJsonBlob(container, '_display.json')))
+    };
   }
 
   async updateRecord(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
@@ -311,7 +320,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const next = isPlainRecord(data) ? { ...data, ...feedback } : data;
     const body = `${JSON.stringify(next, null, 2)}\n`;
     await container.getBlockBlobClient(`${record}.json`).upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
-    return buildRecordDetail(id, record, schema, next);
+    return buildRecordDetail(id, record, schema, next, normalizeDisplayConfig(await this.readOptionalJsonBlob(container, '_display.json')));
   }
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
@@ -437,7 +446,7 @@ const parseAzureProjectEnv = (content: string): Record<string, string> =>
       })
   );
 
-const buildRecordDetail = (projectId: string, recordId: string, schema: unknown, data: unknown): RecordDetail => {
+const buildRecordDetail = (projectId: string, recordId: string, schema: unknown, data: unknown, displayConfig?: DisplayConfig): RecordDetail => {
   const coreData = stripFeedbackProperties(data);
   const validationIssues = validateRecord(schema, coreData);
   return {
@@ -447,7 +456,7 @@ const buildRecordDetail = (projectId: string, recordId: string, schema: unknown,
     data: coreData,
     schema,
     validationIssues,
-    renderTree: buildRenderTree(schema, coreData, validationIssues),
+    renderTree: buildRenderTree(schema, coreData, validationIssues, 'record', displayConfig),
     feedbackHistory: extractFeedbackHistory(data, deriveFeedbackTargets(schema))
   };
 };

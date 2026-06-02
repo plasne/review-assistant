@@ -11,6 +11,7 @@ import type { LocalToolRuntime } from '../../src/main/tools';
 
 let tempRoot: string;
 let workerPath: string;
+const fakeProviderModule = path.resolve('test-fixtures/fake-copilot-sdk-provider.mjs');
 
 beforeAll(async () => {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-agent-test-'));
@@ -21,7 +22,8 @@ beforeAll(async () => {
     bundle: true,
     platform: 'node',
     target: 'node20',
-    format: 'cjs'
+    format: 'cjs',
+    external: ['@github/copilot-sdk', '@github/copilot']
   });
 });
 
@@ -36,8 +38,7 @@ describe('agent runtime streaming pipeline', () => {
     const tools = createFakeToolRuntime(toolRequests);
     const runtime = new AgentRuntime({
       workerPath,
-      command: process.execPath,
-      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')],
+      providerModule: fakeProviderModule,
       commandEnv: { FAKE_COPILOT_REQUIRE_REVIEW_ASSISTANT_TOOLS: '1' }
     });
 
@@ -70,8 +71,7 @@ describe('agent runtime streaming pipeline', () => {
   it('propagates cancellation and releases the pending request', async () => {
     const runtime = new AgentRuntime({
       workerPath,
-      command: process.execPath,
-      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')],
+      providerModule: fakeProviderModule,
       commandEnv: { FAKE_COPILOT_REQUIRE_AVAILABLE_TOOLS_NONE: '1' }
     });
     const canceled = new Promise<boolean>((resolve, reject) => {
@@ -99,8 +99,7 @@ describe('agent runtime streaming pipeline', () => {
     const chunks: ChatStreamChunk[] = [];
     const runtime = new AgentRuntime({
       workerPath,
-      command: process.execPath,
-      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')],
+      providerModule: fakeProviderModule,
       commandEnv: { FAKE_COPILOT_REQUIRE_AVAILABLE_TOOLS_NONE: '1' }
     });
     const complete = new Promise<string>((resolve, reject) => {
@@ -125,8 +124,7 @@ describe('agent runtime streaming pipeline', () => {
     const chunks: ChatStreamChunk[] = [];
     const runtime = new AgentRuntime({
       workerPath,
-      command: process.execPath,
-      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')],
+      providerModule: fakeProviderModule,
       commandEnv: { FAKE_COPILOT_REQUIRE_EXTERNAL_MCP: '1' }
     });
     const complete = new Promise<string>((resolve, reject) => {
@@ -164,8 +162,7 @@ describe('agent runtime streaming pipeline', () => {
     const chunks: ChatStreamChunk[] = [];
     const runtime = new AgentRuntime({
       workerPath,
-      command: process.execPath,
-      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')],
+      providerModule: fakeProviderModule,
       commandEnv: { FAKE_COPILOT_REQUIRE_EXTERNAL_MCP: '1' }
     });
     const complete = new Promise<string>((resolve, reject) => {
@@ -202,8 +199,8 @@ describe('agent runtime streaming pipeline', () => {
     const chunks: ChatStreamChunk[] = [];
     const runtime = new AgentRuntime({
       workerPath,
-      command: process.execPath,
-      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')]
+      providerModule: fakeProviderModule,
+      commandEnv: { FAKE_COPILOT_REQUIRE_EXTERNAL_MCP: '1' }
     });
     const complete = new Promise<string>((resolve, reject) => {
       runtime
@@ -214,8 +211,9 @@ describe('agent runtime streaming pipeline', () => {
             mcpServers: [
               {
                 id: 'source',
-                command: process.execPath,
-                args: [path.resolve('test-fixtures/fake-external-mcp.mjs')],
+                command: 'source-mcp',
+                args: ['stdio'],
+                env: { SOURCE_TOKEN: 'secret-token' },
                 allowedTools: ['search']
               }
             ]
@@ -238,8 +236,7 @@ describe('agent runtime streaming pipeline', () => {
     const chunks: ChatStreamChunk[] = [];
     const runtime = new AgentRuntime({
       workerPath,
-      command: process.execPath,
-      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')],
+      providerModule: fakeProviderModule,
       commandEnv: { FAKE_COPILOT_REQUIRE_CHAT_HISTORY: '1' }
     });
     const complete = new Promise<string>((resolve, reject) => {
@@ -302,7 +299,20 @@ describe('agent runtime streaming pipeline', () => {
         },
         createFakeToolRuntime()
       )
-    ).rejects.toThrow('GitHub Copilot CLI was not found.');
+    ).rejects.toThrow('GitHub Copilot runtime was not found.');
+  });
+
+  it('maps SDK authentication failures to the existing auth-required status contract', async () => {
+    const runtime = new AgentRuntime({
+      workerPath,
+      providerModule: fakeProviderModule,
+      commandEnv: { FAKE_COPILOT_FAIL: 'auth' }
+    });
+
+    await expect(runtime.getStatus()).resolves.toMatchObject({
+      availability: 'unavailable',
+      error: { code: 'AUTH_REQUIRED' }
+    });
   });
 });
 

@@ -1,9 +1,11 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { PatchDiff } from '@pierre/diffs/react';
 import type {
   AgentStatusSnapshot,
   AppBootstrap,
   ChatMessage,
+  ContinueWithGitHubResult,
   FeedbackConfig,
   FeedbackConfigEntry,
   FeedbackEntry,
@@ -35,6 +37,8 @@ const App = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [agentStatus, setAgentStatus] = useState<AgentStatusSnapshot | undefined>();
+  const [loginDialog, setLoginDialog] = useState<ContinueWithGitHubResult | undefined>();
+  const [loginInProgress, setLoginInProgress] = useState(false);
   const [chatState, setChatState] = useState<ChatState>('ready');
   const [activeRequestId, setActiveRequestId] = useState<string | undefined>();
   const [newProjectId, setNewProjectId] = useState('');
@@ -48,6 +52,8 @@ const App = () => {
   const activeRequestIdRef = useRef<string | undefined>(undefined);
   const selectedProjectIdRef = useRef('');
   const selectedRecordIdRef = useRef<string | undefined>(undefined);
+  const activeLoginIdRef = useRef<string | undefined>(undefined);
+  const loginDialogTitleId = useId();
 
   useEffect(() => {
     activeRequestIdRef.current = activeRequestId;
@@ -125,6 +131,20 @@ const App = () => {
             current.map((message) => (message.id === event.messageId && !message.content ? { ...message, content: 'Response canceled.' } : message))
           );
         }
+      }),
+      window.reviewAssistant.onGitHubLoginComplete((completion) => {
+        if (completion.success) {
+          void refreshAgentStatus();
+        }
+        if (activeLoginIdRef.current !== completion.loginId) {
+          return;
+        }
+        activeLoginIdRef.current = undefined;
+        setLoginDialog(undefined);
+        if (!completion.success) {
+          setStatus('error');
+          setError(completion.errorMessage ?? 'GitHub Copilot login did not complete.');
+        }
       })
     ];
     return () => {
@@ -150,6 +170,24 @@ const App = () => {
           remediation: 'Check GitHub Copilot availability and try again.'
         }
       });
+    }
+  };
+
+  const continueWithGitHub = async () => {
+    setLoginInProgress(true);
+    try {
+      const result = await window.reviewAssistant.continueWithGitHub();
+      if (result.deviceCode && result.verificationUri) {
+        activeLoginIdRef.current = result.loginId;
+        setLoginDialog(result);
+      } else {
+        void refreshAgentStatus();
+      }
+    } catch (caught) {
+      setStatus('error');
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoginInProgress(false);
     }
   };
 
@@ -379,6 +417,7 @@ const App = () => {
   const records = project?.records ?? [];
   const title = useMemo(() => (project ? `${project.project.name} records` : 'Select a project'), [project]);
   const agentUnavailable = agentStatus?.availability === 'unavailable';
+  const agentAuthRequired = agentUnavailable && agentStatus?.error?.code === 'AUTH_REQUIRED';
   const canSendChat = Boolean(chatInput.trim() && chatState !== 'streaming' && !agentUnavailable && status !== 'loading');
   const agentErrorText = agentStatus?.error?.remediation ? `${agentStatus.error.message} ${agentStatus.error.remediation}` : agentStatus?.error?.message;
   const pendingAssistantMessageId =
@@ -585,6 +624,17 @@ const App = () => {
           {agentUnavailable ? (
             <div className="agent-status error" role="status" aria-live="polite">
               <span>{agentErrorText ?? 'GitHub Copilot is unavailable.'}</span>
+              {agentAuthRequired ? (
+                <button
+                  type="button"
+                  className="github-login-button"
+                  onClick={() => void continueWithGitHub()}
+                  disabled={chatState === 'streaming' || loginInProgress}
+                >
+                  <GitHubLogo />
+                  Continue with GitHub
+                </button>
+              ) : null}
               <button type="button" className="secondary-button" onClick={() => void refreshAgentStatus()} disabled={chatState === 'streaming'}>
                 Check again
               </button>
@@ -623,6 +673,15 @@ const App = () => {
               rows={4}
             />
             <div className="chat-actions">
+              <button
+                type="button"
+                className="github-login-button"
+                onClick={() => void continueWithGitHub()}
+                disabled={chatState === 'streaming' || loginInProgress}
+              >
+                <GitHubLogo />
+                {loginInProgress ? 'Waiting...' : 'Login'}
+              </button>
               <button type="submit" disabled={!canSendChat}>
                 Send
               </button>
@@ -636,6 +695,31 @@ const App = () => {
           </form>
         </section>
       </main>
+
+      {loginDialog?.deviceCode && loginDialog.verificationUri ? (
+        <div className="modal-backdrop">
+          <section className="login-modal" role="dialog" aria-modal="true" aria-labelledby={loginDialogTitleId}>
+            <h2 id={loginDialogTitleId}>Login to GitHub Copilot</h2>
+            <p>Enter this device code at {loginDialog.verificationUri}:</p>
+            <div className="device-code" aria-label="GitHub Copilot device code">
+              {loginDialog.deviceCode}
+            </div>
+            {loginDialog.copiedToClipboard ? <p className="clipboard-status">Copied to clipboard</p> : null}
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  activeLoginIdRef.current = undefined;
+                  setLoginDialog(undefined);
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <footer className="app-footer">Version {bootstrap?.version ?? 'loading'}</footer>
     </div>
@@ -672,6 +756,15 @@ const ColumnResizer = ({
       }
     }}
   />
+);
+
+const GitHubLogo = () => (
+  <svg className="github-logo" aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+    <path
+      fill="currentColor"
+      d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.65 7.65 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+    />
+  </svg>
 );
 
 const ChatMessageContent = ({ content }: { content: string }) => <div className="message-content">{renderMarkdown(content)}</div>;
@@ -1023,6 +1116,18 @@ const RenderTree = ({
     );
   }
   if (node.kind === 'array') {
+    if (node.presentation === 'evidence-list') {
+      return (
+        <EvidenceList
+          node={node}
+          issues={issues}
+          feedbackConfig={feedbackConfig}
+          history={history}
+          projectUser={projectUser}
+          onSubmitFeedback={onSubmitFeedback}
+        />
+      );
+    }
     return (
       <section className="node array-node">
         <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
@@ -1043,24 +1148,206 @@ const RenderTree = ({
     );
   }
   if (node.kind === 'raw') {
+    if (isCollapsiblePresentation(node.presentation)) {
+      return (
+        <CollapsiblePresentationField node={node}>
+          <p className="raw-reason">{node.reason}</p>
+          <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
+          <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+        </CollapsiblePresentationField>
+      );
+    }
     return (
-      <section className="field">
+      <section className={fieldClassName(node.presentation)}>
         <FieldHeading label={node.label} description={node.description} />
         {issues}
         <p className="raw-reason">{node.reason}</p>
-        <pre>{JSON.stringify(node.value, null, 2)}</pre>
+        <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
         <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
       </section>
     );
   }
+  if (isCollapsiblePresentation(node.presentation)) {
+    return (
+      <CollapsiblePresentationField node={node}>
+        {issues}
+        {node.enumValues ? <EnumValue node={node} /> : <output className={presentationOutputClassName(node.presentation)}>{formatValue(node.value)}</output>}
+        <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+      </CollapsiblePresentationField>
+    );
+  }
   return (
-    <section className="field">
+    <section className={fieldClassName(node.presentation)}>
       <FieldHeading label={node.label} description={node.description} />
       {issues}
-      {node.enumValues ? <EnumValue node={node} /> : <ValueOutput value={node.value} />}
+      {node.enumValues ? <EnumValue node={node} /> : <ValueOutput value={node.value} className={presentationOutputClassName(node.presentation)} />}
       <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
     </section>
   );
+};
+
+const fieldClassName = (presentation: RenderNode['presentation']): string =>
+  presentation ? `field presentation-field presentation-${presentation}` : 'field';
+
+const presentationOutputClassName = (presentation: RenderNode['presentation']): string | undefined => (presentation ? 'presentation-output' : undefined);
+
+const isCollapsiblePresentation = (presentation: RenderNode['presentation']): boolean => presentation === 'chat-request' || presentation === 'chat-response';
+
+const CollapsiblePresentationField = ({ node, children }: { node: RenderNode; children: React.ReactNode }) => (
+  <details className={fieldClassName(node.presentation)} open>
+    <summary>
+      <FieldHeading label={node.label} description={node.description} />
+    </summary>
+    {children}
+  </details>
+);
+
+const EvidenceList = ({
+  node,
+  issues,
+  feedbackConfig,
+  history,
+  projectUser,
+  onSubmitFeedback
+}: {
+  node: Extract<RenderNode, { kind: 'array' }>;
+  issues: React.ReactNode;
+  feedbackConfig?: FeedbackConfig;
+  history?: Record<string, FeedbackHistory>;
+  projectUser?: ProjectUser;
+  onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+}) => (
+  <section className="node array-node evidence-list">
+    <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
+    {issues}
+    <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+    <div className="evidence-items">
+      {node.items.map((item, index) =>
+        item.kind === 'object' ? (
+          <EvidenceCard
+            key={item.path ?? item.label}
+            node={item}
+            index={index}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+          />
+        ) : (
+          <RenderTree
+            key={item.path ?? item.label}
+            node={item}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+          />
+        )
+      )}
+    </div>
+  </section>
+);
+
+const EvidenceCard = ({
+  node,
+  index,
+  feedbackConfig,
+  history,
+  projectUser,
+  onSubmitFeedback
+}: {
+  node: Extract<RenderNode, { kind: 'object' }>;
+  index: number;
+  feedbackConfig?: FeedbackConfig;
+  history?: Record<string, FeedbackHistory>;
+  projectUser?: ProjectUser;
+  onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+}) => {
+  const source = evidenceChildText(node, 'source');
+  const id = evidenceChildText(node, 'id');
+  const fields = node.children.map((child) => ({ node: child, editable: evidenceFieldIsEditable(child, feedbackConfig) }));
+  const readonlyFields = fields.filter((field) => !field.editable);
+  const editableFields = fields.filter((field) => field.editable);
+  return (
+    <details className="evidence-card" open>
+      <summary className="evidence-card-header">
+        <h4>{source ?? `Evidence ${index + 1}`}</h4>
+        {id ? <span className="evidence-id">{id}</span> : null}
+      </summary>
+      {readonlyFields.length > 0 ? (
+        <dl className="evidence-readonly-grid" aria-label="Read-only evidence fields">
+          {readonlyFields.map(({ node: child }) => (
+           <EvidenceField
+             key={child.path ?? child.label}
+             node={child}
+             feedbackConfig={feedbackConfig}
+             history={history}
+             projectUser={projectUser}
+             onSubmitFeedback={onSubmitFeedback}
+           />
+          ))}
+        </dl>
+      ) : null}
+      {editableFields.length > 0 ? (
+        <dl className="evidence-editable-fields" aria-label="Editable evidence fields">
+          {editableFields.map(({ node: child }) => (
+          <EvidenceField
+            key={child.path ?? child.label}
+            node={child}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+          />
+          ))}
+        </dl>
+      ) : null}
+    </details>
+  );
+};
+
+const EvidenceField = ({
+  node,
+  feedbackConfig,
+  history,
+  projectUser,
+  onSubmitFeedback
+}: {
+  node: RenderNode;
+  feedbackConfig?: FeedbackConfig;
+  history?: Record<string, FeedbackHistory>;
+  projectUser?: ProjectUser;
+  onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+}) => {
+  const editable = evidenceFieldIsEditable(node, feedbackConfig);
+  return (
+    <div className={`evidence-field ${editable ? 'editable' : 'readonly'}`}>
+      <dt>
+        <span>{node.label}</span>
+        <span className={`editability-badge ${editable ? 'editable' : 'readonly'}`}>{editable ? 'Editable' : 'Read-only'}</span>
+      </dt>
+      {editable ? null : (
+        <dd>
+          {node.kind === 'value' || node.kind === 'raw' ? (
+            formatValue(node.value)
+          ) : (
+            <RenderTree node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+          )}
+        </dd>
+      )}
+      <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} showEditDiff={editable} />
+    </div>
+  );
+};
+
+const evidenceFieldIsEditable = (node: RenderNode, feedbackConfig?: FeedbackConfig): boolean => {
+  const config = node.path && feedbackConfig ? feedbackConfigEntryForPath(feedbackConfig, node.path) : undefined;
+  return config?.editable === true;
+};
+
+const evidenceChildText = (node: Extract<RenderNode, { kind: 'object' }>, label: string): string | undefined => {
+  const child = node.children.find((item) => item.label === label);
+  return child && (child.kind === 'value' || child.kind === 'raw') ? formatValue(child.value) : undefined;
 };
 
 const FieldHeading = ({ label, description, meta }: { label: string; description?: string; meta?: string }) => (
@@ -1071,18 +1358,18 @@ const FieldHeading = ({ label, description, meta }: { label: string; description
   </h3>
 );
 
-const ValueOutput = ({ value }: { value: unknown }) => {
+const ValueOutput = ({ value, className }: { value: unknown; className?: string }) => {
   const formatted = formatValue(value);
   if (typeof value === 'string' && isHttpUrl(value)) {
     return (
-      <output>
+      <output className={className}>
         <a href={value} target="_blank" rel="noreferrer">
           {formatted}
         </a>
       </output>
     );
   }
-  return <output>{formatted}</output>;
+  return <output className={className}>{formatted}</output>;
 };
 
 const isHttpUrl = (value: string): boolean => {
@@ -1099,13 +1386,15 @@ const FeedbackPanel = ({
   feedbackConfig,
   history,
   projectUser,
-  onSubmitFeedback
+  onSubmitFeedback,
+  showEditDiff = false
 }: {
   node: RenderNode;
   feedbackConfig?: FeedbackConfig;
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+  showEditDiff?: boolean;
 }) => {
   const path = node.path;
   const config = path && feedbackConfig ? feedbackConfigEntryForPath(feedbackConfig, path) : undefined;
@@ -1135,16 +1424,17 @@ const FeedbackPanel = ({
       {showFeedbackControls && config.feedback !== 'none' ? (
         <FeedbackValueInput mode={config.feedback} label={node.label} value={feedbackValue} onChange={setFeedbackValue} />
       ) : null}
-      {showFeedbackControls && config.comments ? (
-        <label className="feedback-input">
-          Comment
-          <textarea value={commentValue} onChange={(event) => setCommentValue(event.target.value)} rows={2} />
-        </label>
-      ) : null}
       {showFeedbackControls && config.editable ? (
         <label className="feedback-input">
           Edit
           <EditInput node={node} value={editValue} onChange={setEditValue} />
+          {showEditDiff ? <EditDiff original={initialEditValue} edited={editValue} /> : null}
+        </label>
+      ) : null}
+      {showFeedbackControls && config.comments ? (
+        <label className="feedback-input">
+          Comment
+          <textarea value={commentValue} onChange={(event) => setCommentValue(event.target.value)} rows={2} />
         </label>
       ) : null}
       {showFeedbackControls ? (
@@ -1208,6 +1498,48 @@ const FeedbackPanel = ({
       ) : null}
     </section>
   );
+};
+
+const EditDiff = ({ original, edited }: { original: string; edited: string }) => {
+  if (original === edited) {
+    return <p className="edit-diff-empty">No edits yet.</p>;
+  }
+  return (
+    <div className="edit-diff" aria-label="Edit diff">
+      <p className="edit-diff-title">Diff preview</p>
+      <PatchDiff
+        patch={createFieldPatch(original, edited)}
+        disableWorkerPool
+        options={{
+          diffStyle: 'unified',
+          disableFileHeader: true,
+          disableLineNumbers: true,
+          diffIndicators: 'classic',
+          overflow: 'wrap',
+          theme: 'pierre-dark-soft',
+          themeType: 'dark'
+        }}
+      />
+    </div>
+  );
+};
+
+const createFieldPatch = (original: string, edited: string): string => {
+  const originalLines = splitPatchLines(original);
+  const editedLines = splitPatchLines(edited);
+  return [
+    'diff --git a/evidence-content.txt b/evidence-content.txt',
+    '--- a/evidence-content.txt',
+    '+++ b/evidence-content.txt',
+    `@@ -1,${originalLines.length} +1,${editedLines.length} @@`,
+    ...originalLines.map((line) => `-${line}`),
+    ...editedLines.map((line) => `+${line}`)
+  ].join('\n');
+};
+
+const splitPatchLines = (value: string): string[] => {
+  const lines = value.split(/\r?\n/);
+  return lines.length > 0 ? lines : [''];
 };
 
 const FeedbackValueInput = ({

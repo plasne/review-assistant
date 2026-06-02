@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -13,6 +13,8 @@ import {
   assertFeedbackConfig,
   assertFeedbackSubmissionInput,
   assertFeedbackSubmissionResult,
+  assertContinueWithGitHubResult,
+  assertGitHubLoginCompletion,
   assertNewProjectId,
   assertOpenProjectResult,
   assertProjectId,
@@ -27,6 +29,7 @@ import { createStorageAdapter, type StorageAdapter } from './storage';
 import { AgentRuntime, AgentRuntimeError } from './agent';
 import { createLocalToolRuntime } from './tools';
 import { mergeExternalMcpServers, parseExternalMcpServers } from './mcp';
+import { startCopilotLogin } from './copilot-auth';
 
 let mainWindow: BrowserWindow | undefined;
 let storage: StorageAdapter | undefined;
@@ -65,8 +68,9 @@ const createWindow = async (): Promise<void> => {
     }
   });
 
-  if (process.env.VITE_DEV_SERVER_URL) {
-    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+  const devServerUrl = process.env.ELECTRON_RENDERER_URL ?? process.env.VITE_DEV_SERVER_URL;
+  if (devServerUrl) {
+    await mainWindow.loadURL(devServerUrl);
     return;
   }
   await mainWindow.loadURL(pathToFileURL(path.join(__dirname, '../renderer/index.html')).toString());
@@ -123,6 +127,32 @@ const registerIpc = (): void => {
     )
   );
   ipcMain.handle('agent:getStatus', async () => agent.getStatus());
+  ipcMain.handle('auth:continueWithGitHub', async (event) => {
+    logInfo('review-assistant.auth-login-started', { provider: 'github-copilot' });
+    const sender = event.sender;
+    const result = await startCopilotLogin({
+      onComplete: (completion) => {
+        const validCompletion = assertGitHubLoginCompletion(completion);
+        logInfo('review-assistant.auth-login-completed', {
+          loginId: validCompletion.loginId,
+          provider: 'github-copilot',
+          success: validCompletion.success
+        });
+        if (!sender.isDestroyed()) {
+          sender.send('auth:login-completed', validCompletion);
+        }
+      }
+    });
+    if (result.deviceCode) {
+      clipboard.writeText(result.deviceCode);
+      result.copiedToClipboard = true;
+      logInfo('review-assistant.auth-device-code-ready', {
+        copiedToClipboard: result.copiedToClipboard,
+        provider: 'github-copilot'
+      });
+    }
+    return assertContinueWithGitHubResult(result);
+  });
   ipcMain.handle('chat:start', async (event, projectId: unknown, recordId: unknown, message: unknown, history: unknown) => {
     const startedAt = Date.now();
     const validProjectId = projectId === undefined ? undefined : assertProjectId(projectId);
