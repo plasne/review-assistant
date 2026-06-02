@@ -102,6 +102,10 @@ export type RecordDetail = {
   feedbackHistory?: Record<string, FeedbackHistory>;
 };
 
+export type RecordDraftStatus = {
+  hasUnsavedChanges: boolean;
+};
+
 export type FeedbackMode = 'none' | 'good_fair_bad' | 'thumbs' | 'stars_5';
 
 export type FeedbackTarget = {
@@ -276,6 +280,10 @@ export type AuthEventHandlers = {
   onGitHubLoginComplete: (listener: (completion: GitHubLoginCompletion) => void) => Unsubscribe;
 };
 
+export type AppEventHandlers = {
+  onCloseRequested: (listener: () => void) => Unsubscribe;
+};
+
 export type AppBootstrap = {
   configError?: string;
   backendKind?: BackendKind;
@@ -289,6 +297,9 @@ export type Api = {
   createProject: (projectId: string) => Promise<ProjectSummary>;
   openProject: (projectId: string) => Promise<OpenProjectResult>;
   getRecord: (projectId: string, recordId: string) => Promise<RecordDetail>;
+  getRecordDraftStatus: (projectId: string, recordId: string) => Promise<RecordDraftStatus>;
+  saveRecordChanges: (projectId: string, recordId: string) => Promise<RecordDetail>;
+  discardRecordChanges: (projectId: string, recordId: string) => Promise<RecordDraftStatus>;
   getFeedbackConfig: (projectId: string) => Promise<FeedbackConfig>;
   saveFeedbackConfig: (projectId: string, config: FeedbackConfig) => Promise<FeedbackConfig>;
   getProjectUser: (projectId: string) => Promise<ProjectUser>;
@@ -301,6 +312,8 @@ export type Api = {
     history?: ChatMessage[]
   ) => Promise<ChatStreamStartResult>;
   continueWithGitHub: () => Promise<ContinueWithGitHubResult>;
+  closeWindow: () => Promise<void>;
   cancelChat: (requestId: string) => Promise<ChatCancelResult>;
 } & AuthEventHandlers &
+  AppEventHandlers &
   ChatStreamEventHandlers;

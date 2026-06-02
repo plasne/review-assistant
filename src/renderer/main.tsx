@@ -23,6 +23,12 @@ import './styles.css';
 type Status = 'idle' | 'loading' | 'error';
 type ChatState = 'ready' | 'streaming' | 'canceled' | 'error';
 type ColumnKey = 'records' | 'details' | 'chat';
+type PendingNavigation =
+  | { kind: 'project'; projectId: string }
+  | { kind: 'createProject'; projectId: string }
+  | { kind: 'record'; recordId: string }
+  | { kind: 'refreshRecords' }
+  | { kind: 'close' };
 
 const MIN_COLUMN_PERCENT = 16;
 
@@ -44,6 +50,8 @@ const App = () => {
   const [newProjectId, setNewProjectId] = useState('');
   const [isCreateProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [isFeedbackConfigOpen, setFeedbackConfigOpen] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | undefined>();
   const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState<string | undefined>();
   const [columns, setColumns] = useState({ records: 22, details: 48, chat: 30 });
@@ -52,12 +60,18 @@ const App = () => {
   const activeRequestIdRef = useRef<string | undefined>(undefined);
   const selectedProjectIdRef = useRef('');
   const selectedRecordIdRef = useRef<string | undefined>(undefined);
+  const hasUnsavedChangesRef = useRef(false);
+  const chatStateRef = useRef<ChatState>('ready');
   const activeLoginIdRef = useRef<string | undefined>(undefined);
   const loginDialogTitleId = useId();
 
   useEffect(() => {
     activeRequestIdRef.current = activeRequestId;
   }, [activeRequestId]);
+
+  useEffect(() => {
+    chatStateRef.current = chatState;
+  }, [chatState]);
 
   useEffect(() => {
     selectedProjectIdRef.current = selectedProjectId;
@@ -119,6 +133,7 @@ const App = () => {
           }
           return [...current, { id: `error-${Date.now()}`, role: 'system', content, createdAt: new Date().toISOString() }];
         });
+        void refreshSelectedRecord();
       }),
       window.reviewAssistant.onChatCanceled((event) => {
         if (activeRequestIdRef.current !== event.requestId) {
@@ -131,6 +146,7 @@ const App = () => {
             current.map((message) => (message.id === event.messageId && !message.content ? { ...message, content: 'Response canceled.' } : message))
           );
         }
+        void refreshSelectedRecord();
       }),
       window.reviewAssistant.onGitHubLoginComplete((completion) => {
         if (completion.success) {
@@ -145,12 +161,33 @@ const App = () => {
           setStatus('error');
           setError(completion.errorMessage ?? 'GitHub Copilot login did not complete.');
         }
+      }),
+      window.reviewAssistant.onCloseRequested(() => {
+        void (async () => {
+          if (chatStateRef.current === 'streaming' || (await refreshUnsavedStatus())) {
+            setPendingNavigation({ kind: 'close' });
+            return;
+          }
+          await window.reviewAssistant.closeWindow();
+        })();
       })
     ];
     return () => {
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
   }, [agentStatus?.provider]);
+
+  useEffect(() => {
+    const preventUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedChangesRef.current) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', preventUnload);
+    return () => window.removeEventListener('beforeunload', preventUnload);
+  }, []);
 
   const refreshAgentStatus = async () => {
     try {
@@ -199,6 +236,7 @@ const App = () => {
     setSelectedProjectId(projectId);
     setProject(undefined);
     setRecord(undefined);
+    updateUnsavedChanges(false);
     setFeedbackConfig(undefined);
     setDraftFeedbackConfig(undefined);
     if (!projectId) {
@@ -227,6 +265,7 @@ const App = () => {
     setError(undefined);
     try {
       setRecord(await window.reviewAssistant.getRecord(selectedProjectId, recordId));
+      await refreshUnsavedStatus(selectedProjectId, recordId);
       setStatus('idle');
     } catch (caught) {
       setStatus('error');
@@ -242,10 +281,26 @@ const App = () => {
     }
     try {
       setRecord(await window.reviewAssistant.getRecord(projectId, recordId));
+      await refreshUnsavedStatus(projectId, recordId);
     } catch (caught) {
       setStatus('error');
       setError(caught instanceof Error ? caught.message : String(caught));
     }
+  };
+
+  const refreshUnsavedStatus = async (projectId = selectedProjectIdRef.current, recordId = selectedRecordIdRef.current) => {
+    if (!projectId || !recordId) {
+      updateUnsavedChanges(false);
+      return false;
+    }
+    const draftStatus = await window.reviewAssistant.getRecordDraftStatus(projectId, recordId);
+    updateUnsavedChanges(draftStatus.hasUnsavedChanges);
+    return draftStatus.hasUnsavedChanges;
+  };
+
+  const updateUnsavedChanges = (value: boolean) => {
+    hasUnsavedChangesRef.current = value;
+    setHasUnsavedChanges(value);
   };
 
   const refreshProjectUser = async (projectId: string) => {
@@ -288,6 +343,7 @@ const App = () => {
       setFeedbackConfig(saved);
       setDraftFeedbackConfig(saved);
       setFeedbackConfigOpen(false);
+      await refreshSelectedRecord();
       setStatus('idle');
     } catch (caught) {
       setStatus('error');
@@ -304,6 +360,7 @@ const App = () => {
     try {
       const result = await window.reviewAssistant.submitFeedback(selectedProjectId, record.recordId, input);
       setRecord(result.record);
+      updateUnsavedChanges(true);
       await refreshProjectUser(selectedProjectId);
       setStatus('idle');
     } catch (caught) {
@@ -312,12 +369,140 @@ const App = () => {
     }
   };
 
-  const createProject = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const projectId = newProjectId.trim();
-    if (!projectId) {
+  const saveSelectedRecordChanges = async (): Promise<boolean> => {
+    if (!selectedProjectId || !record) {
+      return false;
+    }
+    setStatus('loading');
+    setError(undefined);
+    try {
+      setRecord(await window.reviewAssistant.saveRecordChanges(selectedProjectId, record.recordId));
+      updateUnsavedChanges(false);
+      await refreshProjectUser(selectedProjectId);
+      setStatus('idle');
+      return true;
+    } catch (caught) {
+      setStatus('error');
+      setError(caught instanceof Error ? caught.message : String(caught));
+      return false;
+    }
+  };
+
+  const discardSelectedRecordChanges = async () => {
+    if (!selectedProjectId || !record) {
+      updateUnsavedChanges(false);
       return;
     }
+    await window.reviewAssistant.discardRecordChanges(selectedProjectId, record.recordId);
+    updateUnsavedChanges(false);
+  };
+
+  const requestProjectOpen = async (projectId: string) => {
+    if (projectId === selectedProjectId) {
+      return;
+    }
+    if (chatState === 'streaming') {
+      setPendingNavigation({ kind: 'project', projectId });
+      return;
+    }
+    if (await refreshUnsavedStatus()) {
+      setPendingNavigation({ kind: 'project', projectId });
+      return;
+    }
+    await openProject(projectId);
+  };
+
+  const requestRecordOpen = async (recordId: string) => {
+    if (recordId === selectedRecordId) {
+      return;
+    }
+    if (chatState === 'streaming') {
+      setPendingNavigation({ kind: 'record', recordId });
+      return;
+    }
+    if (await refreshUnsavedStatus()) {
+      setPendingNavigation({ kind: 'record', recordId });
+      return;
+    }
+    await openRecord(recordId);
+  };
+
+  const requestRefreshRecords = async () => {
+    if (chatState === 'streaming') {
+      setPendingNavigation({ kind: 'refreshRecords' });
+      return;
+    }
+    if (await refreshUnsavedStatus()) {
+      setPendingNavigation({ kind: 'refreshRecords' });
+      return;
+    }
+    await refreshRecords();
+  };
+
+  const cancelPendingNavigation = () => setPendingNavigation(undefined);
+
+  const discardAndContinue = async () => {
+    if (chatStateRef.current === 'streaming') {
+      return;
+    }
+    const pending = pendingNavigation;
+    setPendingNavigation(undefined);
+    await discardSelectedRecordChanges();
+    if (!pending) {
+      return;
+    }
+    if (pending.kind === 'project') {
+      await openProject(pending.projectId);
+      return;
+    }
+    if (pending.kind === 'createProject') {
+      await createAndOpenProject(pending.projectId);
+      return;
+    }
+    if (pending.kind === 'record') {
+      await openRecord(pending.recordId);
+      return;
+    }
+    if (pending.kind === 'refreshRecords') {
+      await refreshRecords();
+      return;
+    }
+    await window.reviewAssistant.closeWindow();
+  };
+
+  const saveAndContinue = async () => {
+    if (chatStateRef.current === 'streaming') {
+      return;
+    }
+    const pending = pendingNavigation;
+    const saved = await saveSelectedRecordChanges();
+    if (!saved) {
+      return;
+    }
+    setPendingNavigation(undefined);
+    if (!pending) {
+      return;
+    }
+    if (pending.kind === 'project') {
+      await openProject(pending.projectId);
+      return;
+    }
+    if (pending.kind === 'createProject') {
+      await createAndOpenProject(pending.projectId);
+      return;
+    }
+    if (pending.kind === 'record') {
+      await openRecord(pending.recordId);
+      return;
+    }
+    if (pending.kind === 'refreshRecords') {
+      await refreshRecords();
+      return;
+    }
+    await window.reviewAssistant.closeWindow();
+  };
+
+  const createAndOpenProject = async (projectId: string) => {
     setStatus('loading');
     setError(undefined);
     try {
@@ -339,6 +524,25 @@ const App = () => {
       setStatus('error');
       setError(caught instanceof Error ? caught.message : String(caught));
     }
+  };
+
+  const createProject = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const projectId = newProjectId.trim();
+    if (!projectId) {
+      return;
+    }
+    if (chatState === 'streaming') {
+      setCreateProjectDialogOpen(false);
+      setPendingNavigation({ kind: 'createProject', projectId });
+      return;
+    }
+    if (await refreshUnsavedStatus()) {
+      setCreateProjectDialogOpen(false);
+      setPendingNavigation({ kind: 'createProject', projectId });
+      return;
+    }
+    await createAndOpenProject(projectId);
   };
 
   const sendChat = async (event: React.FormEvent) => {
@@ -422,6 +626,7 @@ const App = () => {
   const agentErrorText = agentStatus?.error?.remediation ? `${agentStatus.error.message} ${agentStatus.error.remediation}` : agentStatus?.error?.message;
   const pendingAssistantMessageId =
     chatState === 'streaming' ? [...messages].reverse().find((message) => message.role === 'assistant')?.id : undefined;
+  const pendingNavigationBlockedByChat = Boolean(pendingNavigation && chatState === 'streaming');
 
   const resizeColumns = (left: ColumnKey, right: ColumnKey, delta: number) => {
     setColumns((current) => {
@@ -460,7 +665,7 @@ const App = () => {
           <select
             aria-label="Current project"
             value={selectedProjectId}
-            onChange={(event) => void openProject(event.target.value)}
+            onChange={(event) => void requestProjectOpen(event.target.value)}
             disabled={Boolean(bootstrap?.configError)}
           >
             <option value="">Choose a project</option>
@@ -483,7 +688,10 @@ const App = () => {
           type="button"
           className="secondary-button"
           disabled={!selectedProjectId || !project || !draftFeedbackConfig}
-          onClick={() => setFeedbackConfigOpen(true)}
+          onClick={() => {
+            setDraftFeedbackConfig(feedbackConfig);
+            setFeedbackConfigOpen(true);
+          }}
         >
           Configure
         </button>
@@ -575,7 +783,7 @@ const App = () => {
               aria-label="Refresh records"
               title="Refresh records"
               disabled={!selectedProjectId || status === 'loading'}
-              onClick={() => void refreshRecords()}
+              onClick={() => void requestRefreshRecords()}
             >
               Refresh
             </button>
@@ -588,7 +796,7 @@ const App = () => {
                   <button
                     type="button"
                     className={item.id === selectedRecordId ? 'selected record-button' : 'record-button'}
-                    onClick={() => void openRecord(item.id)}
+                    onClick={() => void requestRecordOpen(item.id)}
                   >
                     {item.displayName}
                   </button>
@@ -605,7 +813,24 @@ const App = () => {
         />
 
         <section className="column details" aria-labelledby="details-heading" tabIndex={0}>
-          <h2 id="details-heading">Record details</h2>
+          <div className="details-header">
+            <h2 id="details-heading">Record details</h2>
+            {record ? (
+              <div className="save-controls">
+                <span className={hasUnsavedChanges ? 'unsaved-status' : 'saved-status'} aria-live="polite">
+                  {hasUnsavedChanges ? 'Unsaved changes' : 'All changes saved'}
+                </span>
+                <button
+                  type="button"
+                  className="create-project-button"
+                  disabled={!hasUnsavedChanges || status === 'loading'}
+                  onClick={() => void saveSelectedRecordChanges()}
+                >
+                  Save
+                </button>
+              </div>
+            ) : null}
+          </div>
           {status === 'loading' ? <p aria-live="polite">Loading...</p> : null}
           {record ? (
             <RecordDetails record={record} feedbackConfig={feedbackConfig} projectUser={projectUser} onSubmitFeedback={submitFeedback} />
@@ -715,6 +940,40 @@ const App = () => {
                 }}
               >
                 Close
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {pendingNavigation ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal warning-modal" role="dialog" aria-modal="true" aria-labelledby="unsaved-changes-title">
+            <h2 id="unsaved-changes-title">Unsaved changes</h2>
+            <p className="modal-help">
+              {pendingNavigationBlockedByChat
+                ? 'The agent is still running and may stage record changes. Stay here, then cancel the response or wait for it to finish before leaving.'
+                : 'Save this record before leaving, or discard the unsaved changes to continue.'}
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={cancelPendingNavigation}>
+                Stay
+              </button>
+              <button
+                type="button"
+                className="secondary-button danger-button"
+                disabled={pendingNavigationBlockedByChat}
+                onClick={() => void discardAndContinue()}
+              >
+                Discard changes
+              </button>
+              <button
+                type="button"
+                className="create-project-button"
+                disabled={pendingNavigationBlockedByChat}
+                onClick={() => void saveAndContinue()}
+              >
+                Save
               </button>
             </div>
           </section>
@@ -1403,6 +1662,7 @@ const FeedbackPanel = ({
   const [feedbackValue, setFeedbackValue] = useState('');
   const [commentValue, setCommentValue] = useState('');
   const [editValue, setEditValue] = useState(initialEditValue);
+  const editInputId = useId();
   useEffect(() => {
     setEditValue(initialEditValue);
   }, [initialEditValue, path]);
@@ -1425,11 +1685,11 @@ const FeedbackPanel = ({
         <FeedbackValueInput mode={config.feedback} label={node.label} value={feedbackValue} onChange={setFeedbackValue} />
       ) : null}
       {showFeedbackControls && config.editable ? (
-        <label className="feedback-input">
-          Edit
-          <EditInput node={node} value={editValue} onChange={setEditValue} />
+        <div className="feedback-input">
+          <label htmlFor={editInputId}>Edit</label>
+          <EditInput id={editInputId} node={node} value={editValue} onChange={setEditValue} />
           {showEditDiff ? <EditDiff original={initialEditValue} edited={editValue} /> : null}
-        </label>
+        </div>
       ) : null}
       {showFeedbackControls && config.comments ? (
         <label className="feedback-input">
@@ -1455,7 +1715,7 @@ const FeedbackPanel = ({
             });
           }}
         >
-          Submit feedback
+          Stage feedback
         </button>
       ) : null}
       {allHistory.length > 0 ? (
@@ -1505,7 +1765,7 @@ const EditDiff = ({ original, edited }: { original: string; edited: string }) =>
     return <p className="edit-diff-empty">No edits yet.</p>;
   }
   return (
-    <div className="edit-diff" aria-label="Edit diff">
+    <div className="edit-diff" aria-label="Diff preview">
       <p className="edit-diff-title">Diff preview</p>
       <PatchDiff
         patch={createFieldPatch(original, edited)}
@@ -1587,10 +1847,10 @@ const FeedbackValueInput = ({
   );
 };
 
-const EditInput = ({ node, value, onChange }: { node: RenderNode; value: string; onChange: (value: string) => void }) => {
+const EditInput = ({ id, node, value, onChange }: { id: string; node: RenderNode; value: string; onChange: (value: string) => void }) => {
   if (node.kind === 'value' && node.enumValues) {
     return (
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <select id={id} value={value} onChange={(event) => onChange(event.target.value)}>
         {node.enumValues.map((option) => (
           <option key={enumOptionValue(option)} value={formatValue(option)}>
             {formatValue(option)}
@@ -1599,7 +1859,7 @@ const EditInput = ({ node, value, onChange }: { node: RenderNode; value: string;
       </select>
     );
   }
-  return <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={2} />;
+  return <textarea id={id} value={value} onChange={(event) => onChange(event.target.value)} rows={2} />;
 };
 
 const editableValue = (node: RenderNode): string => (node.kind === 'value' ? formatValue(node.value) : '');
