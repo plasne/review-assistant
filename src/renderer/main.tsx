@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { PatchDiff } from '@pierre/diffs/react';
 import type {
   AgentStatusSnapshot,
   AppBootstrap,
@@ -1082,6 +1083,18 @@ const RenderTree = ({
     );
   }
   if (node.kind === 'array') {
+    if (node.presentation === 'evidence-list') {
+      return (
+        <EvidenceList
+          node={node}
+          issues={issues}
+          feedbackConfig={feedbackConfig}
+          history={history}
+          projectUser={projectUser}
+          onSubmitFeedback={onSubmitFeedback}
+        />
+      );
+    }
     return (
       <section className="node array-node">
         <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
@@ -1102,24 +1115,206 @@ const RenderTree = ({
     );
   }
   if (node.kind === 'raw') {
+    if (isCollapsiblePresentation(node.presentation)) {
+      return (
+        <CollapsiblePresentationField node={node}>
+          <p className="raw-reason">{node.reason}</p>
+          <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
+          <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+        </CollapsiblePresentationField>
+      );
+    }
     return (
-      <section className="field">
+      <section className={fieldClassName(node.presentation)}>
         <FieldHeading label={node.label} description={node.description} />
         {issues}
         <p className="raw-reason">{node.reason}</p>
-        <pre>{JSON.stringify(node.value, null, 2)}</pre>
+        <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
         <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
       </section>
     );
   }
+  if (isCollapsiblePresentation(node.presentation)) {
+    return (
+      <CollapsiblePresentationField node={node}>
+        {issues}
+        {node.enumValues ? <EnumValue node={node} /> : <output className={presentationOutputClassName(node.presentation)}>{formatValue(node.value)}</output>}
+        <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+      </CollapsiblePresentationField>
+    );
+  }
   return (
-    <section className="field">
+    <section className={fieldClassName(node.presentation)}>
       <FieldHeading label={node.label} description={node.description} />
       {issues}
-      {node.enumValues ? <EnumValue node={node} /> : <output>{formatValue(node.value)}</output>}
+      {node.enumValues ? <EnumValue node={node} /> : <output className={presentationOutputClassName(node.presentation)}>{formatValue(node.value)}</output>}
       <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
     </section>
   );
+};
+
+const fieldClassName = (presentation: RenderNode['presentation']): string =>
+  presentation ? `field presentation-field presentation-${presentation}` : 'field';
+
+const presentationOutputClassName = (presentation: RenderNode['presentation']): string | undefined => (presentation ? 'presentation-output' : undefined);
+
+const isCollapsiblePresentation = (presentation: RenderNode['presentation']): boolean => presentation === 'chat-request' || presentation === 'chat-response';
+
+const CollapsiblePresentationField = ({ node, children }: { node: RenderNode; children: React.ReactNode }) => (
+  <details className={fieldClassName(node.presentation)} open>
+    <summary>
+      <FieldHeading label={node.label} description={node.description} />
+    </summary>
+    {children}
+  </details>
+);
+
+const EvidenceList = ({
+  node,
+  issues,
+  feedbackConfig,
+  history,
+  projectUser,
+  onSubmitFeedback
+}: {
+  node: Extract<RenderNode, { kind: 'array' }>;
+  issues: React.ReactNode;
+  feedbackConfig?: FeedbackConfig;
+  history?: Record<string, FeedbackHistory>;
+  projectUser?: ProjectUser;
+  onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+}) => (
+  <section className="node array-node evidence-list">
+    <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
+    {issues}
+    <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+    <div className="evidence-items">
+      {node.items.map((item, index) =>
+        item.kind === 'object' ? (
+          <EvidenceCard
+            key={item.path ?? item.label}
+            node={item}
+            index={index}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+          />
+        ) : (
+          <RenderTree
+            key={item.path ?? item.label}
+            node={item}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+          />
+        )
+      )}
+    </div>
+  </section>
+);
+
+const EvidenceCard = ({
+  node,
+  index,
+  feedbackConfig,
+  history,
+  projectUser,
+  onSubmitFeedback
+}: {
+  node: Extract<RenderNode, { kind: 'object' }>;
+  index: number;
+  feedbackConfig?: FeedbackConfig;
+  history?: Record<string, FeedbackHistory>;
+  projectUser?: ProjectUser;
+  onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+}) => {
+  const source = evidenceChildText(node, 'source');
+  const id = evidenceChildText(node, 'id');
+  const fields = node.children.map((child) => ({ node: child, editable: evidenceFieldIsEditable(child, feedbackConfig) }));
+  const readonlyFields = fields.filter((field) => !field.editable);
+  const editableFields = fields.filter((field) => field.editable);
+  return (
+    <details className="evidence-card" open>
+      <summary className="evidence-card-header">
+        <h4>{source ?? `Evidence ${index + 1}`}</h4>
+        {id ? <span className="evidence-id">{id}</span> : null}
+      </summary>
+      {readonlyFields.length > 0 ? (
+        <dl className="evidence-readonly-grid" aria-label="Read-only evidence fields">
+          {readonlyFields.map(({ node: child }) => (
+           <EvidenceField
+             key={child.path ?? child.label}
+             node={child}
+             feedbackConfig={feedbackConfig}
+             history={history}
+             projectUser={projectUser}
+             onSubmitFeedback={onSubmitFeedback}
+           />
+          ))}
+        </dl>
+      ) : null}
+      {editableFields.length > 0 ? (
+        <dl className="evidence-editable-fields" aria-label="Editable evidence fields">
+          {editableFields.map(({ node: child }) => (
+          <EvidenceField
+            key={child.path ?? child.label}
+            node={child}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+          />
+          ))}
+        </dl>
+      ) : null}
+    </details>
+  );
+};
+
+const EvidenceField = ({
+  node,
+  feedbackConfig,
+  history,
+  projectUser,
+  onSubmitFeedback
+}: {
+  node: RenderNode;
+  feedbackConfig?: FeedbackConfig;
+  history?: Record<string, FeedbackHistory>;
+  projectUser?: ProjectUser;
+  onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+}) => {
+  const editable = evidenceFieldIsEditable(node, feedbackConfig);
+  return (
+    <div className={`evidence-field ${editable ? 'editable' : 'readonly'}`}>
+      <dt>
+        <span>{node.label}</span>
+        <span className={`editability-badge ${editable ? 'editable' : 'readonly'}`}>{editable ? 'Editable' : 'Read-only'}</span>
+      </dt>
+      {editable ? null : (
+        <dd>
+          {node.kind === 'value' || node.kind === 'raw' ? (
+            formatValue(node.value)
+          ) : (
+            <RenderTree node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+          )}
+        </dd>
+      )}
+      <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} showEditDiff={editable} />
+    </div>
+  );
+};
+
+const evidenceFieldIsEditable = (node: RenderNode, feedbackConfig?: FeedbackConfig): boolean => {
+  const config = node.path && feedbackConfig ? feedbackConfigEntryForPath(feedbackConfig, node.path) : undefined;
+  return config?.editable === true;
+};
+
+const evidenceChildText = (node: Extract<RenderNode, { kind: 'object' }>, label: string): string | undefined => {
+  const child = node.children.find((item) => item.label === label);
+  return child && (child.kind === 'value' || child.kind === 'raw') ? formatValue(child.value) : undefined;
 };
 
 const FieldHeading = ({ label, description, meta }: { label: string; description?: string; meta?: string }) => (
@@ -1135,13 +1330,15 @@ const FeedbackPanel = ({
   feedbackConfig,
   history,
   projectUser,
-  onSubmitFeedback
+  onSubmitFeedback,
+  showEditDiff = false
 }: {
   node: RenderNode;
   feedbackConfig?: FeedbackConfig;
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+  showEditDiff?: boolean;
 }) => {
   const path = node.path;
   const config = path && feedbackConfig ? feedbackConfigEntryForPath(feedbackConfig, path) : undefined;
@@ -1171,16 +1368,17 @@ const FeedbackPanel = ({
       {showFeedbackControls && config.feedback !== 'none' ? (
         <FeedbackValueInput mode={config.feedback} label={node.label} value={feedbackValue} onChange={setFeedbackValue} />
       ) : null}
-      {showFeedbackControls && config.comments ? (
-        <label className="feedback-input">
-          Comment
-          <textarea value={commentValue} onChange={(event) => setCommentValue(event.target.value)} rows={2} />
-        </label>
-      ) : null}
       {showFeedbackControls && config.editable ? (
         <label className="feedback-input">
           Edit
           <EditInput node={node} value={editValue} onChange={setEditValue} />
+          {showEditDiff ? <EditDiff original={initialEditValue} edited={editValue} /> : null}
+        </label>
+      ) : null}
+      {showFeedbackControls && config.comments ? (
+        <label className="feedback-input">
+          Comment
+          <textarea value={commentValue} onChange={(event) => setCommentValue(event.target.value)} rows={2} />
         </label>
       ) : null}
       {showFeedbackControls ? (
@@ -1244,6 +1442,48 @@ const FeedbackPanel = ({
       ) : null}
     </section>
   );
+};
+
+const EditDiff = ({ original, edited }: { original: string; edited: string }) => {
+  if (original === edited) {
+    return <p className="edit-diff-empty">No edits yet.</p>;
+  }
+  return (
+    <div className="edit-diff" aria-label="Edit diff">
+      <p className="edit-diff-title">Diff preview</p>
+      <PatchDiff
+        patch={createFieldPatch(original, edited)}
+        disableWorkerPool
+        options={{
+          diffStyle: 'unified',
+          disableFileHeader: true,
+          disableLineNumbers: true,
+          diffIndicators: 'classic',
+          overflow: 'wrap',
+          theme: 'pierre-dark-soft',
+          themeType: 'dark'
+        }}
+      />
+    </div>
+  );
+};
+
+const createFieldPatch = (original: string, edited: string): string => {
+  const originalLines = splitPatchLines(original);
+  const editedLines = splitPatchLines(edited);
+  return [
+    'diff --git a/evidence-content.txt b/evidence-content.txt',
+    '--- a/evidence-content.txt',
+    '+++ b/evidence-content.txt',
+    `@@ -1,${originalLines.length} +1,${editedLines.length} @@`,
+    ...originalLines.map((line) => `-${line}`),
+    ...editedLines.map((line) => `+${line}`)
+  ].join('\n');
+};
+
+const splitPatchLines = (value: string): string[] => {
+  const lines = value.split(/\r?\n/);
+  return lines.length > 0 ? lines : [''];
 };
 
 const FeedbackValueInput = ({

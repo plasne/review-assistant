@@ -91,6 +91,95 @@ beforeEach(() => {
 });
 
 describe('review UI', () => {
+  it('renders request and response presentations with distinct classes', () => {
+    render(
+      <RenderTree
+        node={{
+          kind: 'object',
+          label: 'turn',
+          path: '/turns/0',
+          children: [
+            { kind: 'value', label: 'request', path: '/turns/0/request', value: 'What happened?', presentation: 'chat-request', validationIssues: [] },
+            { kind: 'value', label: 'response', path: '/turns/0/response', value: 'It succeeded.', presentation: 'chat-response', validationIssues: [] }
+          ],
+          validationIssues: []
+        }}
+      />
+    );
+
+    expect(screen.getByText('What happened?').closest('details')).toHaveClass('presentation-chat-request');
+    expect(screen.getByText('It succeeded.').closest('details')).toHaveClass('presentation-chat-response');
+    expect(screen.getByText('What happened?').closest('details')).toHaveAttribute('open');
+    expect(screen.getByText('It succeeded.').closest('details')).toHaveAttribute('open');
+  });
+
+  it('renders evidence lists compactly with editable and read-only indicators', () => {
+    const onSubmitFeedback = vi.fn().mockResolvedValue(undefined);
+    render(
+      <RenderTree
+        node={{
+          kind: 'array',
+          label: 'evidence',
+          path: '/turns/0/evidence',
+          presentation: 'evidence-list',
+          items: [
+            {
+              kind: 'object',
+              label: '0',
+              path: '/turns/0/evidence/0',
+              children: [
+                { kind: 'value', label: 'id', path: '/turns/0/evidence/0/id', value: 'doc-1', validationIssues: [] },
+                { kind: 'value', label: 'source', path: '/turns/0/evidence/0/source', value: 'Architecture Notes', validationIssues: [] },
+                { kind: 'value', label: 'content', path: '/turns/0/evidence/0/content', value: 'The dial path enters through Dial Gateway.', validationIssues: [] }
+              ],
+              validationIssues: []
+            }
+          ],
+          validationIssues: []
+        }}
+        feedbackConfig={{
+          properties: {
+            '/turns/*/evidence/*/id': {
+              path: '/turns/*/evidence/*/id',
+              target: 'Evidence > Id',
+              tab: 'Evidence',
+              supportsEdit: true,
+              feedback: 'none',
+              comments: false,
+              editable: false
+            },
+            '/turns/*/evidence/*/content': {
+              path: '/turns/*/evidence/*/content',
+              target: 'Evidence > Content',
+              tab: 'Evidence',
+              supportsEdit: true,
+              feedback: 'none',
+              comments: true,
+              editable: true
+            }
+          }
+        }}
+        history={{}}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={onSubmitFeedback}
+      />
+    );
+
+    expect(screen.getByRole('heading', { name: 'Architecture Notes' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Architecture Notes' }).closest('details')).toHaveAttribute('open');
+    expect(screen.getByLabelText('Read-only evidence fields')).toBeInTheDocument();
+    expect(screen.getByLabelText('Editable evidence fields')).toBeInTheDocument();
+    expect(screen.getAllByText('doc-1').find((element) => element.closest('.evidence-field'))?.closest('.evidence-field')).toHaveClass('readonly');
+    expect(screen.getByText('No edits yet.')).toBeInTheDocument();
+    expect(screen.queryByText('The dial path enters through Dial Gateway.', { selector: 'dd' })).not.toBeInTheDocument();
+    expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0);
+    expect(screen.getByText('Editable')).toBeInTheDocument();
+    const contentFeedback = screen.getByLabelText('content feedback');
+    expect(contentFeedback).toBeInTheDocument();
+    expect(contentFeedback.textContent?.indexOf('Edit')).toBeLessThan(contentFeedback.textContent?.indexOf('Comment') ?? 0);
+    expect(screen.queryByLabelText('id feedback')).not.toBeInTheDocument();
+  });
+
   it('supports project selection, record detail rendering, and chat', async () => {
     vi.mocked(api.getBootstrap).mockResolvedValue({
       backendKind: 'local',

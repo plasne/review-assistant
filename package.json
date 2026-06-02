@@ -25,6 +25,7 @@
     "@azure/identity": "^4.5.0",
     "@azure/storage-blob": "^12.26.0",
     "@github/copilot-sdk": "1.0.0",
+    "@pierre/diffs": "^1.2.7",
     "@vitejs/plugin-react": "^4.3.4",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
