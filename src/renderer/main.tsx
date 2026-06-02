@@ -23,6 +23,12 @@ import './styles.css';
 type Status = 'idle' | 'loading' | 'error';
 type ChatState = 'ready' | 'streaming' | 'canceled' | 'error';
 type ColumnKey = 'records' | 'details' | 'chat';
+type NodeTab = {
+  id: string;
+  label: string;
+  node: RenderNode;
+};
+type OpenNodeTab = (node: RenderNode) => void;
 
 const MIN_COLUMN_PERCENT = 16;
 
@@ -47,6 +53,7 @@ const App = () => {
   const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState<string | undefined>();
   const [columns, setColumns] = useState({ records: 22, details: 48, chat: 30 });
+  const [recordsCollapsed, setRecordsCollapsed] = useState(false);
   const columnsRef = useRef<HTMLElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const activeRequestIdRef = useRef<string | undefined>(undefined);
@@ -190,6 +197,7 @@ const App = () => {
     setRecord(undefined);
     setFeedbackConfig(undefined);
     setDraftFeedbackConfig(undefined);
+    setRecordsCollapsed(false);
     if (!projectId) {
       return;
     }
@@ -216,6 +224,7 @@ const App = () => {
     setError(undefined);
     try {
       setRecord(await window.reviewAssistant.getRecord(selectedProjectId, recordId));
+      setRecordsCollapsed(true);
       setStatus('idle');
     } catch (caught) {
       setStatus('error');
@@ -394,6 +403,10 @@ const App = () => {
   const agentAuthRequired = agentUnavailable && agentStatus?.error?.code === 'AUTH_REQUIRED';
   const canSendChat = Boolean(chatInput.trim() && chatState !== 'streaming' && !agentUnavailable && status !== 'loading');
   const agentErrorText = agentStatus?.error?.remediation ? `${agentStatus.error.message} ${agentStatus.error.remediation}` : agentStatus?.error?.message;
+  const recordsColumnTemplate = recordsCollapsed ? '3.25rem' : `minmax(12rem, ${columns.records}fr)`;
+  const workspaceColumnTemplate = recordsCollapsed
+    ? `${recordsColumnTemplate} 1px minmax(20rem, ${columns.details}fr) 0.5rem minmax(16rem, ${columns.chat}fr)`
+    : `${recordsColumnTemplate} 0.5rem minmax(20rem, ${columns.details}fr) 0.5rem minmax(16rem, ${columns.chat}fr)`;
 
   const resizeColumns = (left: ColumnKey, right: ColumnKey, delta: number) => {
     setColumns((current) => {
@@ -535,46 +548,65 @@ const App = () => {
         className="columns"
         aria-label="Review workspace"
         style={{
-          gridTemplateColumns: `minmax(12rem, ${columns.records}fr) 0.5rem minmax(20rem, ${columns.details}fr) 0.5rem minmax(16rem, ${columns.chat}fr)`
+          gridTemplateColumns: workspaceColumnTemplate
         }}
       >
-        <section className="column records" aria-labelledby="record-list-heading" tabIndex={0}>
+        <section className={recordsCollapsed ? 'column records collapsed' : 'column records'} aria-labelledby="record-list-heading" tabIndex={0}>
           <div className="records-header">
-            <h2 id="record-list-heading">{title}</h2>
             <button
               type="button"
-              className="refresh-records-button"
-              aria-label="Refresh records"
-              title="Refresh records"
-              disabled={!selectedProjectId || status === 'loading'}
-              onClick={() => void refreshRecords()}
+              className="records-collapse-button"
+              aria-label={recordsCollapsed ? 'Expand records sidebar' : 'Collapse records sidebar'}
+              aria-expanded={!recordsCollapsed}
+              aria-controls="records-list-panel"
+              title={recordsCollapsed ? 'Expand records sidebar' : 'Collapse records sidebar'}
+              onClick={() => setRecordsCollapsed((current) => !current)}
             >
-              Refresh
+              <RecordsQueueIcon />
             </button>
+            <h2 id="record-list-heading">{title}</h2>
+            {recordsCollapsed ? null : (
+              <button
+                type="button"
+                className="refresh-records-button"
+                aria-label="Refresh records"
+                title="Refresh records"
+                disabled={!selectedProjectId || status === 'loading'}
+                onClick={() => void refreshRecords()}
+              >
+                Refresh
+              </button>
+            )}
           </div>
-          <div className="records-list-container" role="region" aria-label="Records list" tabIndex={0}>
-            {records.length === 0 ? <p className="empty">No records loaded.</p> : null}
-            <ul aria-label="Records">
-              {records.map((item) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    className={item.id === selectedRecordId ? 'selected record-button' : 'record-button'}
-                    onClick={() => void openRecord(item.id)}
-                  >
-                    {item.displayName}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {recordsCollapsed ? null : (
+            <div id="records-list-panel" className="records-list-container" role="region" aria-label="Records list" tabIndex={0}>
+              {records.length === 0 ? <p className="empty">No records loaded.</p> : null}
+              <ul aria-label="Records">
+                {records.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className={item.id === selectedRecordId ? 'selected record-button' : 'record-button'}
+                      onClick={() => void openRecord(item.id)}
+                    >
+                      {item.displayName}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
 
-        <ColumnResizer
-          label="Resize records and details columns"
-          onResize={(delta) => resizeColumns('records', 'details', delta)}
-          onPointerResize={(startX) => beginResize('records', 'details', startX)}
-        />
+        {recordsCollapsed ? (
+          <div className="column-divider" aria-hidden="true" />
+        ) : (
+          <ColumnResizer
+            label="Resize records and details columns"
+            onResize={(delta) => resizeColumns('records', 'details', delta)}
+            onPointerResize={(startX) => beginResize('records', 'details', startX)}
+          />
+        )}
 
         <section className="column details" aria-labelledby="details-heading" tabIndex={0}>
           <h2 id="details-heading">Record details</h2>
@@ -957,44 +989,113 @@ const RecordDetails = ({
   feedbackConfig: FeedbackConfig | undefined;
   projectUser: ProjectUser | undefined;
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
-}) => (
-  <div>
-    {record.validationIssues.length > 0 ? (
-      <section className="validation" aria-label="Validation errors">
-        <h3>Validation errors</h3>
-        <ul>
-          {record.validationIssues.map((issue, index) => (
-            <li key={`${issue.path}-${issue.keyword}-${index}`}>
-              <code>{issue.path}</code> {issue.message}
-            </li>
-          ))}
-        </ul>
-      </section>
-    ) : (
-      <p className="valid">Record passes schema validation.</p>
-    )}
-    <RenderTreeRoot
-      node={record.renderTree}
-      feedbackConfig={feedbackConfig}
-      history={record.feedbackHistory ?? {}}
-      projectUser={projectUser}
-      onSubmitFeedback={onSubmitFeedback}
-    />
-  </div>
-);
+}) => {
+  const [nodeTabs, setNodeTabs] = useState<NodeTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState('all');
+  const history = record.feedbackHistory ?? {};
+  const activeNodeTab = nodeTabs.find((tab) => tab.id === activeTabId);
+
+  useEffect(() => {
+    const evidenceTabs = collectEvidenceNodeTabs(record.renderTree);
+    setNodeTabs(evidenceTabs);
+    setActiveTabId('all');
+  }, [record.projectId, record.recordId, record.renderTree]);
+
+  const openNodeTab: OpenNodeTab = (node) => {
+    const id = nodeTabId(node);
+    setNodeTabs((current) => (current.some((tab) => tab.id === id) ? current : [...current, { id, label: nodeTabLabel(node), node }]));
+    setActiveTabId(id);
+  };
+
+  const closeNodeTab = (tabId: string) => {
+    setNodeTabs((current) => current.filter((tab) => tab.id !== tabId));
+    if (activeTabId === tabId) {
+      setActiveTabId('all');
+    }
+  };
+
+  return (
+    <div>
+      <div className="node-tabs" role="tablist" aria-label="Record detail tabs">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTabId === 'all'}
+          className={activeTabId === 'all' ? 'node-tab active' : 'node-tab'}
+          onClick={() => setActiveTabId('all')}
+        >
+          Overview
+        </button>
+        {nodeTabs.map((tab) => (
+          <span key={tab.id} className={activeTabId === tab.id ? 'node-tab-wrap active' : 'node-tab-wrap'}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTabId === tab.id}
+              className="node-tab"
+              onClick={() => setActiveTabId(tab.id)}
+            >
+              {tab.label}
+            </button>
+            <button type="button" className="node-tab-close" aria-label={`Close ${tab.label} tab`} onClick={() => closeNodeTab(tab.id)}>
+              x
+            </button>
+          </span>
+        ))}
+      </div>
+      {record.validationIssues.length > 0 ? (
+        <section className="validation" aria-label="Validation errors">
+          <h3>Validation errors</h3>
+          <ul>
+            {record.validationIssues.map((issue, index) => (
+              <li key={`${issue.path}-${issue.keyword}-${index}`}>
+                <code>{issue.path}</code> {issue.message}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : (
+        <p className="valid">Record passes schema validation.</p>
+      )}
+      <div className="node-tab-panel" role="tabpanel">
+        {activeNodeTab ? (
+          <RenderTree
+            node={activeNodeTab.node}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+            onOpenTab={openNodeTab}
+          />
+        ) : (
+          <RenderTreeRoot
+            node={record.renderTree}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+            onOpenTab={openNodeTab}
+          />
+        )}
+      </div>
+    </div>
+  );
+};
 
 const RenderTreeRoot = ({
   node,
   feedbackConfig,
   history,
   projectUser,
-  onSubmitFeedback
+  onSubmitFeedback,
+  onOpenTab
 }: {
   node: RenderNode;
   feedbackConfig?: FeedbackConfig;
   history: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
+  onOpenTab?: OpenNodeTab;
 }) => {
   if (node.kind === 'object') {
     return (
@@ -1008,12 +1109,13 @@ const RenderTreeRoot = ({
             history={history}
             projectUser={projectUser}
             onSubmitFeedback={onSubmitFeedback}
+            onOpenTab={onOpenTab}
           />
         ))}
       </>
     );
   }
-  return <RenderTree node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />;
+  return <RenderTree node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} onOpenTab={onOpenTab} />;
 };
 
 const RenderTree = ({
@@ -1022,7 +1124,9 @@ const RenderTree = ({
   feedbackConfig,
   history,
   projectUser,
-  onSubmitFeedback
+  onSubmitFeedback,
+  onOpenTab,
+  disableNodeActions = false
 }: {
   node: RenderNode;
   collapseObject?: boolean;
@@ -1030,6 +1134,8 @@ const RenderTree = ({
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+  onOpenTab?: OpenNodeTab;
+  disableNodeActions?: boolean;
 }) => {
   const issues = node.validationIssues.length > 0 ? (
     <ul className="field-errors">
@@ -1059,6 +1165,8 @@ const RenderTree = ({
               history={history}
               projectUser={projectUser}
               onSubmitFeedback={onSubmitFeedback}
+              onOpenTab={onOpenTab}
+              disableNodeActions={disableNodeActions}
             />
           ))}
         </details>
@@ -1066,7 +1174,7 @@ const RenderTree = ({
     }
     return (
       <section className="node">
-        <FieldHeading label={node.label} description={node.description} />
+        <NodeHeading node={node} />
         {issues}
         <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
         {node.children.map((child) => (
@@ -1077,6 +1185,8 @@ const RenderTree = ({
             history={history}
             projectUser={projectUser}
             onSubmitFeedback={onSubmitFeedback}
+            onOpenTab={onOpenTab}
+            disableNodeActions={disableNodeActions}
           />
         ))}
       </section>
@@ -1092,12 +1202,14 @@ const RenderTree = ({
           history={history}
           projectUser={projectUser}
           onSubmitFeedback={onSubmitFeedback}
+          onOpenTab={disableNodeActions ? undefined : onOpenTab}
+          disableNodeActions={disableNodeActions}
         />
       );
     }
     return (
       <section className="node array-node">
-        <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
+        <NodeHeading node={node} meta={formatItemCount(node.items.length)} />
         {issues}
         <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
         {node.items.map((child) => (
@@ -1109,6 +1221,8 @@ const RenderTree = ({
             history={history}
             projectUser={projectUser}
             onSubmitFeedback={onSubmitFeedback}
+            onOpenTab={onOpenTab}
+            disableNodeActions={disableNodeActions}
           />
         ))}
       </section>
@@ -1126,7 +1240,7 @@ const RenderTree = ({
     }
     return (
       <section className={fieldClassName(node.presentation)}>
-        <FieldHeading label={node.label} description={node.description} />
+        <NodeHeading node={node} />
         {issues}
         <p className="raw-reason">{node.reason}</p>
         <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
@@ -1145,9 +1259,15 @@ const RenderTree = ({
   }
   return (
     <section className={fieldClassName(node.presentation)}>
-      <FieldHeading label={node.label} description={node.description} />
+      <NodeHeading node={node} />
       {issues}
-      {node.enumValues ? <EnumValue node={node} /> : <output className={presentationOutputClassName(node.presentation)}>{formatValue(node.value)}</output>}
+      {node.presentation === 'diff-view' ? (
+        <DiffView node={node} history={history} />
+      ) : node.enumValues ? (
+        <EnumValue node={node} />
+      ) : (
+        <output className={presentationOutputClassName(node.presentation)}>{formatValue(node.value)}</output>
+      )}
       <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
     </section>
   );
@@ -1175,7 +1295,9 @@ const EvidenceList = ({
   feedbackConfig,
   history,
   projectUser,
-  onSubmitFeedback
+  onSubmitFeedback,
+  onOpenTab,
+  disableNodeActions = false
 }: {
   node: Extract<RenderNode, { kind: 'array' }>;
   issues: React.ReactNode;
@@ -1183,37 +1305,68 @@ const EvidenceList = ({
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
-}) => (
-  <section className="node array-node evidence-list">
-    <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
-    {issues}
-    <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
-    <div className="evidence-items">
-      {node.items.map((item, index) =>
-        item.kind === 'object' ? (
-          <EvidenceCard
-            key={item.path ?? item.label}
-            node={item}
-            index={index}
-            feedbackConfig={feedbackConfig}
-            history={history}
-            projectUser={projectUser}
-            onSubmitFeedback={onSubmitFeedback}
-          />
-        ) : (
+  onOpenTab?: OpenNodeTab;
+  disableNodeActions?: boolean;
+}) => {
+  const [modalOpen, setModalOpen] = useState(false);
+  return (
+    <section className="node array-node evidence-list">
+      <div className="node-heading-row">
+        <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
+        {disableNodeActions ? null : (
+          <div className="node-heading-actions">
+            {onOpenTab ? (
+              <OpenInTabButton onClick={() => onOpenTab(node)} />
+            ) : null}
+            <button type="button" className="secondary-button compact-button" onClick={() => setModalOpen(true)}>
+              Display in modal
+            </button>
+          </div>
+        )}
+      </div>
+      {issues}
+      <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+      <div className="evidence-items">
+        {node.items.map((item, index) =>
+          item.kind === 'object' ? (
+            <EvidenceCard
+              key={item.path ?? item.label}
+              node={item}
+              index={index}
+              feedbackConfig={feedbackConfig}
+              history={history}
+              projectUser={projectUser}
+              onSubmitFeedback={onSubmitFeedback}
+            />
+          ) : (
+            <RenderTree
+              key={item.path ?? item.label}
+              node={item}
+              feedbackConfig={feedbackConfig}
+              history={history}
+              projectUser={projectUser}
+              onSubmitFeedback={onSubmitFeedback}
+              onOpenTab={onOpenTab}
+              disableNodeActions={disableNodeActions}
+            />
+          )
+        )}
+      </div>
+      {modalOpen ? (
+        <NodeModal title="Evidence details" onClose={() => setModalOpen(false)}>
           <RenderTree
-            key={item.path ?? item.label}
-            node={item}
+            node={node}
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
             onSubmitFeedback={onSubmitFeedback}
+            disableNodeActions
           />
-        )
-      )}
-    </div>
-  </section>
-);
+        </NodeModal>
+      ) : null}
+    </section>
+  );
+};
 
 const EvidenceCard = ({
   node,
@@ -1295,7 +1448,9 @@ const EvidenceField = ({
       </dt>
       {editable ? null : (
         <dd>
-          {node.kind === 'value' || node.kind === 'raw' ? (
+          {node.presentation === 'diff-view' && (node.kind === 'value' || node.kind === 'raw') ? (
+            <DiffView node={node} history={history} />
+          ) : node.kind === 'value' || node.kind === 'raw' ? (
             formatValue(node.value)
           ) : (
             <RenderTree node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
@@ -1323,6 +1478,49 @@ const FieldHeading = ({ label, description, meta }: { label: string; description
     {description ? <span className="field-description">{description}</span> : null}
     {meta ? <span className="field-meta">{meta}</span> : null}
   </h3>
+);
+
+const NodeHeading = ({ node, meta, onOpenTab }: { node: RenderNode; meta?: string; onOpenTab?: OpenNodeTab }) => (
+  <div className="node-heading-row">
+    <FieldHeading label={node.label} description={node.description} meta={meta} />
+    {onOpenTab ? (
+      <div className="node-heading-actions">
+        <OpenInTabButton onClick={() => onOpenTab(node)} />
+      </div>
+    ) : null}
+  </div>
+);
+
+const RecordsQueueIcon = () => (
+  <svg className="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <rect x="2" y="2" width="4" height="12" rx="1" fill="currentColor" stroke="none" opacity="0.5" />
+    <line x1="8" y1="4" x2="14" y2="4" />
+    <line x1="8" y1="8" x2="14" y2="8" />
+    <line x1="8" y1="12" x2="14" y2="12" />
+  </svg>
+);
+
+const OpenInTabButton = ({ onClick }: { onClick: () => void }) => (
+  <button type="button" className="secondary-button compact-button icon-button" aria-label="Open in tab" title="Open in tab" onClick={onClick}>
+    <svg className="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M2 5L2 3Q2 2 3 2L6 2Q7 2 7 3L7 5L13 5Q14 5 14 6L14 13Q14 14 13 14L3 14Q2 14 2 13Z" />
+      <path d="M8 7.5V11.5M6 9.5H10" />
+    </svg>
+  </button>
+);
+
+const NodeModal = ({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) => (
+  <div className="modal-backdrop" role="presentation">
+    <section className="modal node-modal" role="dialog" aria-modal="true" aria-labelledby="node-modal-title">
+      <div className="modal-header">
+        <h2 id="node-modal-title">{title}</h2>
+        <button type="button" className="secondary-button compact-button" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      <div className="node-modal-content">{children}</div>
+    </section>
+  </div>
 );
 
 const FeedbackPanel = ({
@@ -1372,7 +1570,7 @@ const FeedbackPanel = ({
         <label className="feedback-input">
           Edit
           <EditInput node={node} value={editValue} onChange={setEditValue} />
-          {showEditDiff ? <EditDiff original={initialEditValue} edited={editValue} /> : null}
+          {showEditDiff ? <EditDiff original={nodeHistory?.original ?? initialEditValue} edited={editValue} /> : null}
         </label>
       ) : null}
       {showFeedbackControls && config.comments ? (
@@ -1448,6 +1646,9 @@ const EditDiff = ({ original, edited }: { original: string; edited: string }) =>
   if (original === edited) {
     return <p className="edit-diff-empty">No edits yet.</p>;
   }
+  if (!supportsRichDiff()) {
+    return <SimpleDiff original={original} edited={edited} />;
+  }
   return (
     <div className="edit-diff" aria-label="Edit diff">
       <p className="edit-diff-title">Diff preview</p>
@@ -1466,6 +1667,32 @@ const EditDiff = ({ original, edited }: { original: string; edited: string }) =>
       />
     </div>
   );
+};
+
+const SimpleDiff = ({ original, edited }: { original: string; edited: string }) => (
+  <div className="edit-diff" aria-label="Edit diff">
+    <p className="edit-diff-title">Diff preview</p>
+    {splitPatchLines(original).map((line, index) => (
+      <div key={`removed-${index}`} className="edit-diff-line removed">
+        <span>-</span>
+        <del>{line}</del>
+      </div>
+    ))}
+    {splitPatchLines(edited).map((line, index) => (
+      <div key={`added-${index}`} className="edit-diff-line added">
+        <span>+</span>
+        <ins>{line}</ins>
+      </div>
+    ))}
+  </div>
+);
+
+const supportsRichDiff = (): boolean => typeof CSSStyleSheet !== 'undefined' && typeof CSSStyleSheet.prototype.replaceSync === 'function';
+
+const DiffView = ({ node, history }: { node: Extract<RenderNode, { kind: 'value' | 'raw' }>; history?: Record<string, FeedbackHistory> }) => {
+  const currentValue = formatValue(node.value);
+  const originalValue = node.path ? history?.[node.path]?.original : undefined;
+  return <EditDiff original={originalValue ?? currentValue} edited={currentValue} />;
 };
 
 const createFieldPatch = (original: string, edited: string): string => {
@@ -1629,6 +1856,31 @@ const enumOptionValue = (value: unknown): string => {
 };
 
 const formatItemCount = (count: number): string => `${count} ${count === 1 ? 'item' : 'items'}`;
+
+const collectEvidenceNodeTabs = (node: RenderNode): NodeTab[] => {
+  const tabs: NodeTab[] = [];
+  const visit = (current: RenderNode) => {
+    if (current.presentation === 'evidence-list') {
+      tabs.push({ id: nodeTabId(current), label: nodeTabLabel(current), node: current });
+      return;
+    }
+    if (current.kind === 'object') {
+      current.children.forEach(visit);
+    }
+    if (current.kind === 'array') {
+      current.items.forEach(visit);
+    }
+  };
+  visit(node);
+  return tabs;
+};
+
+const nodeTabId = (node: RenderNode): string => node.path || node.label;
+
+const nodeTabLabel = (node: RenderNode): string => {
+  const pathPrefix = node.path ? `${node.path} ` : '';
+  return `${node.label}${pathPrefix ? ` (${pathPrefix.trim()})` : ''}`;
+};
 
 const formatValue = (value: unknown): string => {
   if (value === undefined) {

@@ -31,7 +31,7 @@ export type ValidationIssue = {
   keyword: string;
 };
 
-export type FieldPresentation = 'chat-request' | 'chat-response' | 'evidence-list';
+export type FieldPresentation = 'chat-request' | 'chat-response' | 'evidence-list' | 'diff-view';
 
 export type DisplayConfigEntry = {
   path: string;

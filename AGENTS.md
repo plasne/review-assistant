@@ -27,6 +27,14 @@ The underlying deterministic npm gates are:
 - `npm run test:e2e`
 - `npm run smoke`
 
+## Worktree Setup Skill
+
+Use `.agents/skills/worktree-setup/SKILL.md` when preparing a new Review Assistant worktree for local app runs. Copy the main worktree data folder from `/Users/andrewvineyard/Engagements/ATT/review-assistant/data` into the current worktree `data/`, write `.env` with `LOCAL_PATH=$PWD/data`, then start the app from the current worktree.
+
+## UI Skill
+
+Use `.agents/skills/ui/SKILL.md` when configuring schema-driven renderer behavior with project `_display.json` files. Drive chat, evidence, tabs, and diff presentations through display metadata paths that use `*` for numeric array item segments.
+
 ## Constraints And Guardrails
 
 - Prefer deterministic scripts over interactive/manual steps.

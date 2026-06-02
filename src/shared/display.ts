@@ -1,6 +1,6 @@
 import type { DisplayConfig, DisplayConfigEntry, FieldPresentation } from './types';
 
-export const FIELD_PRESENTATIONS: FieldPresentation[] = ['chat-request', 'chat-response', 'evidence-list'];
+export const FIELD_PRESENTATIONS: FieldPresentation[] = ['chat-request', 'chat-response', 'evidence-list', 'diff-view'];
 
 const ARRAY_ITEM_PATH_SEGMENT = '*';
 

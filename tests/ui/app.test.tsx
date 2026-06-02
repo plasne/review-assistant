@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App, RenderTree } from '../../src/renderer/main';
@@ -180,6 +180,187 @@ describe('review UI', () => {
     expect(screen.queryByLabelText('id feedback')).not.toBeInTheDocument();
   });
 
+  it('displays the evidence node in a modal', async () => {
+    render(
+      <RenderTree
+        node={{
+          kind: 'array',
+          label: 'evidence',
+          path: '/turns/0/evidence',
+          presentation: 'evidence-list',
+          items: [
+            {
+              kind: 'object',
+              label: '0',
+              path: '/turns/0/evidence/0',
+              children: [
+                { kind: 'value', label: 'id', path: '/turns/0/evidence/0/id', value: 'doc-1', validationIssues: [] },
+                { kind: 'value', label: 'source', path: '/turns/0/evidence/0/source', value: 'Architecture Notes', validationIssues: [] },
+                { kind: 'value', label: 'content', path: '/turns/0/evidence/0/content', value: 'The dial path enters through Dial Gateway.', validationIssues: [] }
+              ],
+              validationIssues: []
+            }
+          ],
+          validationIssues: []
+        }}
+      />
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Display in modal' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Evidence details' });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Architecture Notes' })).toBeInTheDocument();
+    expect(within(dialog).getByText('The dial path enters through Dial Gateway.')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog', { name: 'Evidence details' })).not.toBeInTheDocument();
+  });
+
+  it('renders evidence content with the diff-view presentation', () => {
+    const commentSubmittedAt = new Date(Date.now() - 120000).toISOString();
+    const editSubmittedAt = new Date(Date.now() - 60000).toISOString();
+    render(
+      <RenderTree
+        node={{
+          kind: 'array',
+          label: 'evidence',
+          path: '/turns/0/evidence',
+          presentation: 'evidence-list',
+          items: [
+            {
+              kind: 'object',
+              label: '0',
+              path: '/turns/0/evidence/0',
+              children: [
+                { kind: 'value', label: 'source', path: '/turns/0/evidence/0/source', value: 'Architecture Notes', validationIssues: [] },
+                {
+                  kind: 'value',
+                  label: 'content',
+                  path: '/turns/0/evidence/0/content',
+                  presentation: 'diff-view',
+                  value: 'Updated evidence content.',
+                  validationIssues: []
+                }
+              ],
+              validationIssues: []
+            }
+          ],
+          validationIssues: []
+        }}
+        history={{
+          '/turns/0/evidence/0/content': {
+            original: 'Original evidence content.',
+            feedback: [],
+            comments: [{ value: 'Add the update detail.', username: 'sme@example.com', timestamp: commentSubmittedAt }],
+            edits: [{ value: 'Updated evidence content.', username: 'sme@example.com', timestamp: editSubmittedAt }]
+          }
+        }}
+        feedbackConfig={{
+          properties: {
+            '/turns/*/evidence/*/content': {
+              path: '/turns/*/evidence/*/content',
+              target: 'Evidence > Content',
+              tab: 'Evidence',
+              supportsEdit: true,
+              feedback: 'none',
+              comments: true,
+              editable: true
+            }
+          }
+        }}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    expect(screen.getByLabelText('Editable evidence fields')).toBeInTheDocument();
+    expect(screen.getByText('Editable')).toBeInTheDocument();
+    expect(screen.getByLabelText('content feedback')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Updated evidence content.')).toBeInTheDocument();
+    const diff = screen.getByLabelText('Edit diff');
+    expect(diff).toBeInTheDocument();
+    expect(screen.getByText('Diff preview')).toBeInTheDocument();
+    expect(within(diff).getByText('Original evidence content.')).toBeInTheDocument();
+    expect(within(diff).getByText('Updated evidence content.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Comment')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeDisabled();
+    expect(screen.getByText('History (3)')).toBeInTheDocument();
+  });
+
+  it('auto-opens evidence nodes into tabs and limits open-tab actions to evidence', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [{ id: 'valid-record', displayName: 'valid-record' }]
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'valid-record',
+      displayName: 'valid-record',
+      data: { answer: 'Run npm run check.', evidence: [{ id: 'doc-1', source: 'README' }] },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        path: '',
+        children: [
+          { kind: 'value', label: 'answer', path: '/answer', value: 'Run npm run check.', validationIssues: [] },
+          {
+            kind: 'array',
+            label: 'evidence',
+            path: '/evidence',
+            presentation: 'evidence-list',
+            items: [
+              {
+                kind: 'object',
+                label: '0',
+                path: '/evidence/0',
+                children: [
+                  { kind: 'value', label: 'id', path: '/evidence/0/id', value: 'doc-1', validationIssues: [] },
+                  { kind: 'value', label: 'source', path: '/evidence/0/source', value: 'README', validationIssues: [] }
+                ],
+                validationIssues: []
+              }
+            ],
+            validationIssues: []
+          }
+        ],
+        validationIssues: []
+      }
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+
+    expect(await screen.findByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'evidence (/evidence)' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.queryByRole('tab', { name: 'answer (/answer)' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Run npm run check.');
+    expect(screen.getByRole('heading', { name: 'evidence 1 item' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'evidence (/evidence)' }));
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('doc-1');
+    expect(within(screen.getByRole('tabpanel')).queryByRole('heading', { name: 'answer' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
+    const answerSection = screen.getByRole('heading', { name: 'answer' }).closest('section');
+    expect(answerSection).not.toBeNull();
+    expect(within(answerSection as HTMLElement).queryByRole('button', { name: 'Open in tab' })).not.toBeInTheDocument();
+    const evidenceSection = screen.getByRole('heading', { name: 'evidence 1 item' }).closest('section');
+    expect(evidenceSection).not.toBeNull();
+    expect(within(evidenceSection as HTMLElement).getByRole('button', { name: 'Open in tab' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'evidence 1 item' })).toBeInTheDocument();
+  });
+
   it('supports project selection, record detail rendering, and chat', async () => {
     vi.mocked(api.getBootstrap).mockResolvedValue({
       backendKind: 'local',
@@ -209,14 +390,27 @@ describe('review UI', () => {
     vi.mocked(api.startChat).mockResolvedValue({ requestId: 'request-1', messageId: 'assistant-1' });
 
     render(<App />);
+    const workspace = screen.getByRole('main', { name: 'Review workspace' });
     expect(await screen.findByRole('button', { name: 'Configure' })).toBeDisabled();
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
     await waitFor(() => expect(screen.getByLabelText('Current feedback username')).toHaveTextContent('sme@example.com'));
     const recordList = await screen.findByRole('region', { name: 'Records list' });
     const recordButton = await screen.findByRole('button', { name: 'valid-record' });
+    expect(screen.getByRole('separator', { name: 'Resize records and details columns' })).toBeInTheDocument();
+    expect(workspace.querySelector('.column-divider')).not.toBeInTheDocument();
     expect(recordList).toContainElement(recordButton);
     await userEvent.click(recordButton);
     expect(await screen.findByText('Record passes schema validation.')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Records list' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('separator', { name: 'Resize records and details columns' })).not.toBeInTheDocument();
+    expect(workspace.querySelector('.column-divider')).toBeInTheDocument();
+    const expandRecords = screen.getByRole('button', { name: 'Expand records sidebar' });
+    expect(expandRecords).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(expandRecords);
+    expect(await screen.findByRole('region', { name: 'Records list' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse records sidebar' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('separator', { name: 'Resize records and details columns' })).toBeInTheDocument();
+    expect(workspace.querySelector('.column-divider')).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'record' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'question' })).toBeInTheDocument();
     expect(screen.getByText('How?')).toBeInTheDocument();
