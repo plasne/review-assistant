@@ -12,7 +12,7 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 | Storage adapters (`src/main/storage.ts`) | Validated project/record identifiers | Project summaries, record details, project prompts | Main storage layer |
 | Local tool runtime (`src/main/tools.ts`) | Tool invocation requests from agent worker | Backend-neutral tool responses | Main tool layer |
 | Agent runtime (`src/main/agent.ts`) | Chat context and stream handlers | Worker lifecycle, cancellation, tool request routing | Main agent layer |
-| Agent worker (`src/agent/agent-process.ts`) | Chat context and MCP tool metadata | GitHub Copilot process output, MCP tool bridge requests | Isolated worker |
+| Agent worker (`src/agent/agent-process.ts`) | Chat context, local MCP tool metadata, and resolved external MCP server configs | GitHub Copilot process output, MCP tool bridge requests | Isolated worker |
 
 ## Data Shape Contracts
 
@@ -29,10 +29,11 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 2. Main opens projects and reads records through the configured `StorageAdapter`.
 3. The renderer starts chat by sending the user message plus selected project/record identifiers.
 4. Main assembles project prompt, selected record context identifiers, and local tool metadata.
-5. The agent worker launches GitHub Copilot with an isolated temporary workspace and MCP configuration.
-6. Copilot calls Review Assistant MCP tools when it needs selected record contents.
-7. Tool calls return through the worker to main, where the trusted UI-selected project and record determine storage access.
-8. Streamed chunks, completion, errors, and cancellation events return to the renderer through typed preload event bridges.
+5. Main resolves app-level external MCP connectors from `_mcp.json` beside the app `.env` and project-scoped connectors from the selected project's `_mcp.json`, including environment placeholders from app/project configuration.
+6. The agent worker launches GitHub Copilot with an isolated temporary workspace and MCP configuration.
+7. Copilot calls Review Assistant MCP tools when it needs selected record contents and may call allowlisted external MCP tools.
+8. Local tool calls return through the worker to main, where the trusted UI-selected project and record determine storage access.
+9. Streamed chunks, completion, errors, and cancellation events return to the renderer through typed preload event bridges.
 
 ## Module Ownership Rules
 
@@ -40,6 +41,7 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 - Preload owns IPC allowlisting and runtime validation at the renderer boundary.
 - Main owns app lifecycle, config loading, backend selection, storage access, validation policy, local tool execution, and agent orchestration.
 - Agent worker owns provider transport details, temporary directories, MCP server wiring, and process cleanup.
+- External MCP connector credentials remain in main/worker configuration and must not be exposed to the renderer. Project-level MCP server definitions override app-level definitions with the same server id for the active request.
 - Provider-specific logic must not leak into renderer components.
 - Storage backends must stay behind `StorageAdapter`; local filesystem and Azure Blob details must not leak into renderer or agent worker code.
 

@@ -15,6 +15,8 @@ const storage: StorageAdapter = {
     record: await storage.getRecord(projectId, recordId)
   }),
   updateRecord: async (projectId, recordId) => storage.getRecord(projectId, recordId),
+  getProjectConfig: async () => ({}),
+  getProjectMcpConfig: async () => undefined,
   getRecord: async (projectId, recordId) => ({
     projectId,
     recordId,

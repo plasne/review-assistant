@@ -18,8 +18,9 @@ describe('environment config', () => {
   });
 
   it('redacts secret values in logs', () => {
-    expect(redactConfig({ AZURE_STORAGE_ACCOUNT_CONNSTRING: 'secret', LOCAL_PATH: '/tmp/projects' })).toEqual({
+    expect(redactConfig({ AZURE_STORAGE_ACCOUNT_CONNSTRING: 'secret', SOURCE_TOKEN: 'source-secret', LOCAL_PATH: '/tmp/projects' })).toEqual({
       AZURE_STORAGE_ACCOUNT_CONNSTRING: '****',
+      SOURCE_TOKEN: '****',
       LOCAL_PATH: '/tmp/projects'
     });
   });

@@ -11,6 +11,7 @@ import type {
   ChatStreamComplete,
   ChatStreamError,
   ChatStreamStartResult,
+  ExternalMcpServerConfig,
   LocalToolMetadata,
   ToolInvocationRequest,
   ToolInvocationResponse
@@ -23,6 +24,7 @@ export type ChatContext = {
   recordId?: string;
   projectPrompt?: string;
   tools: LocalToolMetadata[];
+  mcpServers?: ExternalMcpServerConfig[];
 };
 
 type ProviderWorkerRequest =
@@ -140,6 +142,7 @@ export class AgentRuntime {
       recordId: context.recordId ?? 'none',
       toolCount: context.tools.length,
       tools: context.tools.map((tool) => tool.name).join(',') || 'none',
+      externalMcpServers: context.mcpServers?.map((server) => server.id).join(',') || 'none',
       statusCheckMs: Date.now() - startedAt
     });
     setImmediate(() => child.send({ type: 'start', requestId, messageId, context } satisfies ProviderWorkerRequest));

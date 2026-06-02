@@ -19,3 +19,26 @@ npm run check
 ```
 
 Individual gates are `lint`, `typecheck`, `test:unit`, `test:integration`, `test:ui`, `test:e2e`, and `smoke`.
+
+## External MCP connectors
+
+Drop an `_mcp.json` file next to the app `.env` to define MCP sources shared by all projects, or into a project to define project-specific sources. The file uses the standard `mcpServers` shape and can contain as many servers as needed:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "allowedTools": ["search_code", "get_file_contents"]
+    }
+  }
+}
+```
+
+`${NAME}` placeholders resolve from the project/app `.env` or process environment at chat start, so customers can use different sources and auth without changing application code. Secret-like values are redacted from renderer-visible project configuration and logs. Omit `allowedTools` to allow all tools exposed by that MCP server.
+
+For each chat request, Review Assistant merges app-level and selected project-level MCP servers, then registers the merged set with the spawned Copilot process through a temporary MCP config. If app and project files define the same server id, the project-level definition overrides the app-level definition for that request.

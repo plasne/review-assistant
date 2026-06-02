@@ -16,6 +16,7 @@ Long-running chat and tool workflows should also include:
 - `provider`: active agent provider identifier when provider work is involved.
 - `projectId`: selected project identifier or `none`.
 - `recordId`: selected record identifier or `none`.
+- `externalMcpServers`: comma-separated external MCP server identifiers configured for a chat request, or `none`.
 - `elapsedMs`: elapsed duration for completed work.
 - `code`: stable error code for failed work.
 

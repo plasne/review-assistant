@@ -5,3 +5,4 @@ test-results/
 playwright-report/
 .env
 data/
+**/_mcp.json

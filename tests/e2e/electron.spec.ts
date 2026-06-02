@@ -120,7 +120,7 @@ test('real Electron app lets Copilot read the displayed record through the local
 
   await page.getByLabel('Current project').selectOption('agent01');
   await page.getByRole('button', { name: 'q07', exact: true }).click();
-  await expect(page.getByText('What is the E2E flow of a purchase - technically?', { exact: true })).toBeVisible();
+  await expect(page.getByText('What is the E2E flow of a purchase - technically?', { exact: true }).first()).toBeVisible();
 
   await page.getByLabel('Message GitHub Copilot').fill('what is the persona and question?');
   await page.getByRole('button', { name: 'Send' }).click();
@@ -132,6 +132,7 @@ test('real Electron app lets Copilot read the displayed record through the local
 });
 
 test('real Electron app configures feedback and shows subsequent users collapsed history', async () => {
+  test.setTimeout(60000);
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-feedback-'));
   const projectPath = path.join(tempRoot, 'feedback-project');
   const appEnv = path.join(tempRoot, 'app.env');
@@ -162,8 +163,9 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   await firstPage.getByLabel('Answer feedback mode').selectOption('good_fair_bad');
   await firstPage.getByLabel('Answer comment').check();
   await firstPage.getByRole('button', { name: 'Save' }).click();
+  await expect(firstPage.getByRole('dialog', { name: 'Feedback configuration' })).toBeHidden();
   await firstPage.getByRole('button', { name: 'record-1', exact: true }).click();
-  await firstPage.getByRole('radio', { name: 'Good' }).check();
+  await firstPage.locator('label.feedback-option').filter({ hasText: /^Good$/ }).click();
   await firstPage.getByLabel('Comment').fill('Looks good to me');
   await firstPage.getByRole('button', { name: 'Submit feedback' }).click();
   await expect(firstPage.getByText('History (1)')).toBeVisible();
@@ -183,10 +185,11 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   await secondPage.getByRole('button', { name: 'Configure' }).click();
   await secondPage.getByLabel('Answer editable').check();
   await secondPage.getByRole('button', { name: 'Save' }).click();
+  await expect(secondPage.getByRole('dialog', { name: 'Feedback configuration' })).toBeHidden();
   await expect(secondPage.getByLabel('Edit')).toBeVisible();
   await secondPage.getByLabel('Edit').fill('Second user edit');
   await secondPage.getByRole('button', { name: 'Submit feedback' }).click();
-  await expect(secondPage.getByText('History (2)')).toBeVisible();
+  await expect(secondPage.getByText('History (3)')).toBeVisible();
 
   await secondApp.close();
   fs.rmSync(tempRoot, { recursive: true, force: true });

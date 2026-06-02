@@ -121,6 +121,83 @@ describe('agent runtime streaming pipeline', () => {
     await expect(complete).resolves.toBe('Streamed Copilot response');
   });
 
+  it('passes configured external MCP servers to Copilot with allowlisted tools', async () => {
+    const chunks: ChatStreamChunk[] = [];
+    const runtime = new AgentRuntime({
+      workerPath,
+      command: process.execPath,
+      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')],
+      commandEnv: { FAKE_COPILOT_REQUIRE_EXTERNAL_MCP: '1' }
+    });
+    const complete = new Promise<string>((resolve, reject) => {
+      runtime
+        .start(
+          {
+            projectId: 'sample-project',
+            message: 'search external sources for review harness examples',
+            tools: [],
+            mcpServers: [
+              {
+                id: 'source',
+                command: 'source-mcp',
+                args: ['stdio'],
+                env: { SOURCE_TOKEN: 'secret-token' },
+                allowedTools: ['search']
+              }
+            ]
+          },
+          {
+            chunk: (chunk) => chunks.push(chunk),
+            complete: () => resolve(chunks.map((chunk) => chunk.content).join('')),
+            error: (event) => reject(new Error(event.error.message)),
+            canceled: () => reject(new Error('unexpected cancel'))
+          },
+          createFakeToolRuntime()
+        )
+        .catch(reject);
+    });
+
+    await expect(complete).resolves.toBe('Streamed Copilot response');
+  });
+
+  it('passes app-level external MCP servers without project context', async () => {
+    const chunks: ChatStreamChunk[] = [];
+    const runtime = new AgentRuntime({
+      workerPath,
+      command: process.execPath,
+      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')],
+      commandEnv: { FAKE_COPILOT_REQUIRE_EXTERNAL_MCP: '1' }
+    });
+    const complete = new Promise<string>((resolve, reject) => {
+      runtime
+        .start(
+          {
+            message: 'search shared external sources',
+            tools: [],
+            mcpServers: [
+              {
+                id: 'source',
+                command: 'source-mcp',
+                args: ['stdio'],
+                env: { SOURCE_TOKEN: 'secret-token' },
+                allowedTools: ['search']
+              }
+            ]
+          },
+          {
+            chunk: (chunk) => chunks.push(chunk),
+            complete: () => resolve(chunks.map((chunk) => chunk.content).join('')),
+            error: (event) => reject(new Error(event.error.message)),
+            canceled: () => reject(new Error('unexpected cancel'))
+          },
+          createFakeToolRuntime()
+        )
+        .catch(reject);
+    });
+
+    await expect(complete).resolves.toBe('Streamed Copilot response');
+  });
+
   it('gates unavailable backends before chat starts', async () => {
     const runtime = new AgentRuntime({
       workerPath,

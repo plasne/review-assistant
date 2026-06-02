@@ -19,6 +19,29 @@ if (process.env.FAKE_COPILOT_REQUIRE_AVAILABLE_TOOLS_NONE === '1') {
   }
 }
 
+if (process.env.FAKE_COPILOT_REQUIRE_EXTERNAL_MCP === '1') {
+  const configIndex = process.argv.indexOf('--additional-mcp-config');
+  const allowToolArgs = process.argv.flatMap((arg, index) => (arg === '--allow-tool' ? [process.argv[index + 1]] : []));
+  if (configIndex < 0 || !process.argv[configIndex + 1]?.startsWith('@')) {
+    process.stderr.write('Expected additional MCP config for external MCP.\n');
+    process.exit(45);
+  }
+  const configPath = process.argv[configIndex + 1].slice(1);
+  const config = JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(configPath, 'utf8')));
+  const source = config.mcpServers.source;
+  if (
+    !source ||
+    source.command !== 'source-mcp' ||
+    source.args[0] !== 'stdio' ||
+    source.args.some((arg) => arg.includes('secret-token')) ||
+    source.env?.SOURCE_TOKEN !== 'secret-token' ||
+    !allowToolArgs.includes('source(search)')
+  ) {
+    process.stderr.write('Expected external MCP server with token env and allowed tools.\n');
+    process.exit(46);
+  }
+}
+
 const promptIndex = process.argv.indexOf('-p');
 const prompt = promptIndex >= 0 ? process.argv[promptIndex + 1] ?? '' : '';
 
@@ -49,11 +72,11 @@ if (prompt.includes('slow-cancel')) {
   setInterval(() => undefined, 1000);
 } else if (prompt.includes('summarize this record') && process.argv.includes('--additional-mcp-config')) {
   const result = await callReviewAssistantTool('readRecord', { includeSchema: false });
-  process.stdout.write(`Record question: ${result.record.question}`);
+  process.stdout.write(`Record question: ${recordQuestion(result.record)}`);
   process.exit(0);
 } else if (prompt.includes('persona and question') && process.argv.includes('--additional-mcp-config')) {
   const result = await callReviewAssistantTool('readRecord', { includeSchema: false });
-  process.stdout.write(`Record persona: ${result.record.persona}\nRecord question: ${result.record.question}`);
+  process.stdout.write(`Record persona: ${result.record.persona}\nRecord question: ${recordQuestion(result.record)}`);
   process.exit(0);
 } else {
   process.stdout.write('Streamed ');
@@ -61,6 +84,10 @@ if (prompt.includes('slow-cancel')) {
     process.stdout.write('Copilot response');
     process.exit(0);
   }, 25);
+}
+
+function recordQuestion(record) {
+  return record.question || record.turns?.[0]?.question || record.turns?.[0]?.request || record.turns?.[0]?.input || record.turns?.[0]?.user;
 }
 
 async function callReviewAssistantTool(name, args) {

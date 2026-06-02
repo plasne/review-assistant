@@ -25,7 +25,7 @@ import {
 } from '../shared/feedback';
 import { assertNewProjectId, assertProjectId, assertRecordId } from '../shared/validators';
 import { buildRenderTree, validateRecord } from './schema';
-import { loadProjectEnv, readEnvFile } from './env';
+import { loadProjectEnv, readEnvFile, redactConfig } from './env';
 
 export interface StorageAdapter {
   listProjects(): Promise<ProjectSummary[]>;
@@ -38,6 +38,8 @@ export interface StorageAdapter {
   submitFeedback(projectId: string, recordId: string, input: FeedbackSubmissionInput): Promise<FeedbackSubmissionResult>;
   updateRecord(projectId: string, recordId: string, data: unknown): Promise<RecordDetail>;
   getProjectPrompt(projectId: string): Promise<string | undefined>;
+  getProjectConfig(projectId: string): Promise<Record<string, string>>;
+  getProjectMcpConfig(projectId: string): Promise<string | undefined>;
 }
 
 const NEW_PROJECT_SCHEMA = {
@@ -87,7 +89,7 @@ export class LocalStorageAdapter implements StorageAdapter {
   async openProject(projectId: string): Promise<OpenProjectResult> {
     const project = this.projectPath(assertProjectId(projectId));
     const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
-    const projectConfig = this.loadProjectConfig(project);
+    const projectConfig = redactConfig(this.loadProjectConfig(project));
     const feedbackConfig = await this.readFeedbackConfig(project, schema);
     const entries = await fs.readdir(project, { withFileTypes: true });
     const records = entries
@@ -165,6 +167,14 @@ export class LocalStorageAdapter implements StorageAdapter {
     return readOptionalTextFile(path.join(project, '_prompt.txt'));
   }
 
+  async getProjectConfig(projectId: string): Promise<Record<string, string>> {
+    return this.loadProjectConfig(this.projectPath(assertProjectId(projectId)));
+  }
+
+  async getProjectMcpConfig(projectId: string): Promise<string | undefined> {
+    return readOptionalTextFile(path.join(this.projectPath(assertProjectId(projectId)), '_mcp.json'));
+  }
+
   private projectPath(projectId: string): string {
     return containedPath(this.root, projectId);
   }
@@ -222,7 +232,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const schemaText = await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.');
     const schema = JSON.parse(schemaText) as unknown;
     const projectEnv = await this.readOptionalBlob(container, '.env');
-    const projectConfig = this.mergeAzureProjectConfig(projectEnv);
+    const projectConfig = redactConfig(this.mergeAzureProjectConfig(projectEnv));
     const feedbackConfig = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, '_feedback.json'));
     const records: RecordSummary[] = [];
     for await (const blob of container.listBlobsFlat()) {
@@ -307,6 +317,17 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
     const id = assertProjectId(projectId);
     return this.readOptionalBlob(this.client.getContainerClient(id), '_prompt.txt');
+  }
+
+  async getProjectConfig(projectId: string): Promise<Record<string, string>> {
+    const id = assertProjectId(projectId);
+    const projectEnv = await this.readOptionalBlob(this.client.getContainerClient(id), '.env');
+    return this.mergeAzureProjectConfig(projectEnv);
+  }
+
+  async getProjectMcpConfig(projectId: string): Promise<string | undefined> {
+    const id = assertProjectId(projectId);
+    return this.readOptionalBlob(this.client.getContainerClient(id), '_mcp.json');
   }
 
   private async readBlob(container: ReturnType<BlobServiceClient['getContainerClient']>, name: string, missingMessage: string): Promise<string> {

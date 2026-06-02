@@ -75,16 +75,23 @@ describe('local project creation', () => {
     });
     await fs.mkdir(path.join(tempRoot, 'env-project'));
     await fs.writeFile(path.join(tempRoot, 'env-project', '_schema.json'), '{"type":"object"}\n');
-    await fs.writeFile(path.join(tempRoot, 'env-project', '.env'), 'APP_SETTING=project-value\nUSERNAME=project@example.com\nPROJECT_ONLY=enabled\n');
+    await fs.writeFile(
+      path.join(tempRoot, 'env-project', '.env'),
+      'APP_SETTING=project-value\nUSERNAME=project@example.com\nPROJECT_ONLY=enabled\nSOURCE_TOKEN=secret-token\n'
+    );
+    await fs.writeFile(path.join(tempRoot, 'env-project', '_mcp.json'), '{"mcpServers":{"source":{"command":"source-mcp"}}}\n');
 
     await expect(tempAdapter.openProject('env-project')).resolves.toMatchObject({
       projectConfig: {
         LOCAL_PATH: tempRoot,
         APP_SETTING: 'project-value',
         USERNAME: 'project@example.com',
-        PROJECT_ONLY: 'enabled'
+        PROJECT_ONLY: 'enabled',
+        SOURCE_TOKEN: '****'
       }
     });
+    await expect(tempAdapter.getProjectConfig('env-project')).resolves.toMatchObject({ SOURCE_TOKEN: 'secret-token' });
+    await expect(tempAdapter.getProjectMcpConfig('env-project')).resolves.toContain('"source"');
     await expect(tempAdapter.getProjectUser('env-project')).resolves.toEqual({ username: 'project@example.com', valid: true });
 
     await fs.writeFile(path.join(tempRoot, 'env-project', '.env'), '');

@@ -5,7 +5,14 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import type { AgentErrorEnvelope, AgentStatusSnapshot, LocalToolMetadata, ToolInvocationRequest, ToolInvocationResponse } from '../shared/types';
+import type {
+  AgentErrorEnvelope,
+  AgentStatusSnapshot,
+  ExternalMcpServerConfig,
+  LocalToolMetadata,
+  ToolInvocationRequest,
+  ToolInvocationResponse
+} from '../shared/types';
 
 type ChatContext = {
   message: string;
@@ -13,6 +20,7 @@ type ChatContext = {
   recordId?: string;
   projectPrompt?: string;
   tools: LocalToolMetadata[];
+  mcpServers?: ExternalMcpServerConfig[];
 };
 
 type WorkerRequest =
@@ -47,7 +55,7 @@ let active:
       child: ChildProcessWithoutNullStreams;
       tempDir: string;
       canceled: boolean;
-      toolBridge?: ToolBridge;
+      mcpConfig?: ActiveMcpConfig;
     }
   | undefined;
 const canceledRequests = new Set<string>();
@@ -73,21 +81,22 @@ process.on('message', (message: WorkerRequest) => {
 const startChat = async (request: Extract<WorkerRequest, { type: 'start' }>): Promise<void> => {
   const startedAt = Date.now();
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-copilot-'));
-  const toolBridge = request.context.tools.length > 0 ? await createToolBridge(request.requestId, tempDir, request.context.tools) : undefined;
+  const mcpConfig = await createMcpConfig(request.requestId, tempDir, request.context.tools, request.context.mcpServers ?? []);
   const prompt = buildPrompt(request.context);
   if (prompt.length > MAX_PROMPT_CHARS) {
     sendError(request.requestId, request.messageId, normalizeProviderError(new Error('Context too large for GitHub Copilot request.')));
-    await toolBridge?.close();
+    await mcpConfig?.close();
     await cleanupTempDir(tempDir);
     return;
   }
 
-  const { command, args } = getCopilotCommand(prompt, tempDir, toolBridge);
+  const { command, args } = getCopilotCommand(prompt, tempDir, mcpConfig);
   sendLog('info', 'review-assistant.agent-worker-starting', {
     requestId: request.requestId,
     toolCount: request.context.tools.length,
     promptChars: prompt.length,
-    mcpEnabled: Boolean(toolBridge),
+    mcpEnabled: Boolean(mcpConfig),
+    externalMcpServers: (request.context.mcpServers ?? []).map((server) => server.id).join(',') || 'none',
     setupMs: Date.now() - startedAt
   });
   const child = spawn(command, args, {
@@ -105,7 +114,7 @@ const startChat = async (request: Extract<WorkerRequest, { type: 'start' }>): Pr
     argCount: args.length,
     elapsedMs: Date.now() - startedAt
   });
-  active = { requestId: request.requestId, messageId: request.messageId, child, tempDir, canceled: false, toolBridge };
+  active = { requestId: request.requestId, messageId: request.messageId, child, tempDir, canceled: false, mcpConfig };
   if (canceledRequests.delete(request.requestId)) {
     cancelActive(request.requestId);
   }
@@ -224,9 +233,9 @@ const finish = async (requestId: string): Promise<void> => {
     return;
   }
   const tempDir = active.tempDir;
-  const toolBridge = active.toolBridge;
+  const mcpConfig = active.mcpConfig;
   active = undefined;
-  await toolBridge?.close();
+  await mcpConfig?.close();
   await cleanupTempDir(tempDir);
 };
 
@@ -266,51 +275,74 @@ const buildPrompt = (context: ChatContext): string => {
       null,
       2
     )}`,
+    `External MCP servers:\n${JSON.stringify(
+      (context.mcpServers ?? []).map(({ id, allowedTools }) => ({
+        id,
+        allowedTools: allowedTools ?? 'all'
+      })),
+      null,
+      2
+    )}`,
     `User message:\n${context.message}`
   ];
   return parts.join('\n\n');
 };
 
-type ToolBridge = {
+type ActiveMcpConfig = {
   configPath: string;
   tools: LocalToolMetadata[];
+  externalServers: ExternalMcpServerConfig[];
   close: () => Promise<void>;
 };
 
-const createToolBridge = async (chatRequestId: string, tempDir: string, tools: LocalToolMetadata[]): Promise<ToolBridge> => {
+const createMcpConfig = async (
+  chatRequestId: string,
+  tempDir: string,
+  tools: LocalToolMetadata[],
+  externalServers: ExternalMcpServerConfig[]
+): Promise<ActiveMcpConfig | undefined> => {
+  if (tools.length === 0 && externalServers.length === 0) {
+    return undefined;
+  }
   const startedAt = Date.now();
   const token = randomUUID();
   const serverPath = path.join(tempDir, 'review-assistant-mcp-server.mjs');
   const configPath = path.join(tempDir, 'mcp-config.json');
-  await fs.writeFile(serverPath, MCP_SERVER_SCRIPT);
 
-  const server = net.createServer((socket) => {
-    let buffer = '';
-    socket.setEncoding('utf8');
-    socket.on('data', (chunk) => {
-      buffer += chunk;
-      let lineEnd = buffer.indexOf('\n');
-      while (lineEnd >= 0) {
-        const line = buffer.slice(0, lineEnd);
-        buffer = buffer.slice(lineEnd + 1);
-        if (line.trim()) {
-          void handleToolBridgeLine(chatRequestId, token, line, socket);
+  let server: net.Server | undefined;
+  let port: number | undefined;
+  if (tools.length > 0) {
+    await fs.writeFile(serverPath, MCP_SERVER_SCRIPT);
+    const localServer = net.createServer((socket) => {
+      let buffer = '';
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk) => {
+        buffer += chunk;
+        let lineEnd = buffer.indexOf('\n');
+        while (lineEnd >= 0) {
+          const line = buffer.slice(0, lineEnd);
+          buffer = buffer.slice(lineEnd + 1);
+          if (line.trim()) {
+            void handleToolBridgeLine(chatRequestId, token, line, socket);
+          }
+          lineEnd = buffer.indexOf('\n');
         }
-        lineEnd = buffer.indexOf('\n');
-      }
+      });
     });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      server.off('error', reject);
-      resolve();
+    await new Promise<void>((resolve, reject) => {
+      localServer.once('error', reject);
+      localServer.listen(0, '127.0.0.1', () => {
+        localServer.off('error', reject);
+        resolve();
+      });
     });
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    server.close();
-    throw new Error('Failed to start Review Assistant tool bridge.');
+    const address = localServer.address();
+    if (!address || typeof address === 'string') {
+      localServer.close();
+      throw new Error('Failed to start Review Assistant tool bridge.');
+    }
+    server = localServer;
+    port = address.port;
   }
 
   await fs.writeFile(
@@ -318,17 +350,32 @@ const createToolBridge = async (chatRequestId: string, tempDir: string, tools: L
     `${JSON.stringify(
       {
         mcpServers: {
-          [TOOL_SERVER_NAME]: {
-            command: process.execPath,
-            args: [serverPath],
-            timeout: 5000,
-            env: {
-              REVIEW_ASSISTANT_TOOL_HOST: '127.0.0.1',
-              REVIEW_ASSISTANT_TOOL_PORT: String(address.port),
-              REVIEW_ASSISTANT_TOOL_TOKEN: token,
-              REVIEW_ASSISTANT_TOOLS_JSON: JSON.stringify(tools)
-            }
-          }
+          ...(tools.length > 0 && port !== undefined
+            ? {
+                [TOOL_SERVER_NAME]: {
+                  command: process.execPath,
+                  args: [serverPath],
+                  timeout: 5000,
+                  env: {
+                    REVIEW_ASSISTANT_TOOL_HOST: '127.0.0.1',
+                    REVIEW_ASSISTANT_TOOL_PORT: String(port),
+                    REVIEW_ASSISTANT_TOOL_TOKEN: token,
+                    REVIEW_ASSISTANT_TOOLS_JSON: JSON.stringify(tools)
+                  }
+                }
+              }
+            : {}),
+          ...Object.fromEntries(
+            externalServers.map((external) => [
+              external.id,
+              {
+                command: external.command,
+                args: external.args,
+                ...(external.timeout === undefined ? {} : { timeout: external.timeout }),
+                ...(external.env === undefined ? {} : { env: external.env })
+              }
+            ])
+          )
         }
       },
       null,
@@ -337,17 +384,23 @@ const createToolBridge = async (chatRequestId: string, tempDir: string, tools: L
   );
   sendLog('info', 'review-assistant.tool-bridge-ready', {
     requestId: chatRequestId,
-    port: address.port,
+    port: port ?? 'none',
     toolCount: tools.length,
     tools: tools.map((tool) => tool.name).join(',') || 'none',
+    externalMcpServers: externalServers.map((server) => server.id).join(',') || 'none',
     elapsedMs: Date.now() - startedAt
   });
 
   return {
     configPath,
     tools,
+    externalServers,
     close: async () =>
       await new Promise<void>((resolve) => {
+        if (!server) {
+          resolve();
+          return;
+        }
         server.close(() => resolve());
       })
   };
@@ -436,14 +489,15 @@ const sendLog = (level: 'info' | 'error', event: string, fields: Record<string, 
   process.send?.({ type: 'log', level, event, fields });
 };
 
-const getCopilotCommand = (prompt: string, tempDir: string, toolBridge?: ToolBridge): { command: string; args: string[] } => {
+const getCopilotCommand = (prompt: string, tempDir: string, mcpConfig?: ActiveMcpConfig): { command: string; args: string[] } => {
   const { command, commandArgs } = getConfiguredCommand();
-  const toolArgs = toolBridge
+  const toolArgs = mcpConfig
     ? [
         '--additional-mcp-config',
-        `@${toolBridge.configPath}`,
+        `@${mcpConfig.configPath}`,
         '--allow-all-tools',
-        ...toolBridge.tools.flatMap((tool) => ['--allow-tool', `${TOOL_SERVER_NAME}(${tool.name})`])
+        ...mcpConfig.tools.flatMap((tool) => ['--allow-tool', `${TOOL_SERVER_NAME}(${tool.name})`]),
+        ...mcpConfig.externalServers.flatMap((server) => (server.allowedTools ?? []).flatMap((tool) => ['--allow-tool', `${server.id}(${tool})`]))
       ]
     : ['--available-tools', 'none'];
   return {

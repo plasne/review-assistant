@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { APP_VERSION } from '../generated/version';
@@ -24,11 +25,14 @@ import { ConfigError, loadAppConfig } from './env';
 import { createStorageAdapter, type StorageAdapter } from './storage';
 import { AgentRuntime, AgentRuntimeError } from './agent';
 import { createLocalToolRuntime } from './tools';
+import { mergeExternalMcpServers, parseExternalMcpServers } from './mcp';
 
 let mainWindow: BrowserWindow | undefined;
 let storage: StorageAdapter | undefined;
 let bootstrapError: string | undefined;
 let backendKind: AppBootstrap['backendKind'];
+let appConfigValues: Record<string, string> = {};
+let appMcpConfigPath: string | undefined;
 const agent = new AgentRuntime({ workerPath: path.join(__dirname, '../agent/agent-process.js') });
 
 const initializeBackend = (): void => {
@@ -36,6 +40,8 @@ const initializeBackend = (): void => {
     const config = loadAppConfig();
     storage = createStorageAdapter(config);
     backendKind = config.backendKind;
+    appConfigValues = config.values;
+    appMcpConfigPath = path.join(path.dirname(config.appEnvPath), '_mcp.json');
   } catch (error) {
     bootstrapError = error instanceof ConfigError || error instanceof Error ? error.message : String(error);
     logError('review-assistant.config-error', { message: bootstrapError });
@@ -68,6 +74,20 @@ const requireStorage = (): StorageAdapter => {
     throw new Error(bootstrapError ?? 'Storage backend is not configured.');
   }
   return storage;
+};
+
+const readOptionalTextFile = async (filePath: string | undefined): Promise<string | undefined> => {
+  if (!filePath) {
+    return undefined;
+  }
+  try {
+    return await fs.readFile(filePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
+  }
 };
 
 const registerIpc = (): void => {
@@ -109,6 +129,12 @@ const registerIpc = (): void => {
     }
     const activeStorage = validProjectId ? requireStorage() : storage;
     const projectPrompt = activeStorage && validProjectId ? await activeStorage.getProjectPrompt(validProjectId) : undefined;
+    const projectConfig = activeStorage && validProjectId ? await activeStorage.getProjectConfig(validProjectId) : {};
+    const appMcpConfig = await readOptionalTextFile(appMcpConfigPath);
+    const projectMcpConfig = activeStorage && validProjectId ? await activeStorage.getProjectMcpConfig(validProjectId) : undefined;
+    const appMcpServers = parseExternalMcpServers(appMcpConfig, appConfigValues);
+    const projectMcpServers = parseExternalMcpServers(projectMcpConfig, { ...appConfigValues, ...projectConfig });
+    const mcpServers = mergeExternalMcpServers(appMcpServers, projectMcpServers);
     const tools = createLocalToolRuntime({ storage: activeStorage, selectedProjectId: validProjectId, selectedRecordId: validRecordId });
     const toolList = tools.listTools();
     logInfo('review-assistant.chat-start-context', {
@@ -118,6 +144,7 @@ const registerIpc = (): void => {
       projectPromptChars: projectPrompt?.length ?? 0,
       toolCount: toolList.length,
       tools: toolList.map((tool) => tool.name).join(',') || 'none',
+      externalMcpServers: mcpServers.map((server) => server.id).join(',') || 'none',
       contextMs: Date.now() - startedAt
     });
     try {
@@ -127,7 +154,8 @@ const registerIpc = (): void => {
           projectId: validProjectId,
           recordId: validRecordId,
           projectPrompt,
-          tools: toolList
+          tools: toolList,
+          mcpServers
         },
         {
           chunk: (chunk) => event.sender.send('chat:chunk', chunk),

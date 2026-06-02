@@ -6,6 +6,15 @@ export type AppConfig = {
   appEnvPath: string;
 };
 
+export type ExternalMcpServerConfig = {
+  id: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  timeout?: number;
+  allowedTools?: string[];
+};
+
 export type ProjectSummary = {
   id: string;
   name: string;

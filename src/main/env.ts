@@ -43,7 +43,9 @@ export const readEnvFile = (envPath: string): Record<string, string> => {
 };
 
 export const redactConfig = (values: Record<string, string>): Record<string, string> =>
-  Object.fromEntries(Object.entries(values).map(([key, value]) => [key, SECRET_KEYS.has(key) ? '****' : value]));
+  Object.fromEntries(Object.entries(values).map(([key, value]) => [key, isSecretKey(key) ? '****' : value]));
+
+const isSecretKey = (key: string): boolean => SECRET_KEYS.has(key) || /(?:TOKEN|SECRET|PASSWORD|CONNSTRING)$/i.test(key);
 
 export const selectBackend = (values: Record<string, string>): BackendKind => {
   if (values.AZURE_STORAGE_ACCOUNT_CONNSTRING) {
