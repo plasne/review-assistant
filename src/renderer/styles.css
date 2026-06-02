@@ -211,18 +211,6 @@ section:focus-visible,
   margin: 0;
 }
 
-.node-modal {
-  max-height: min(80vh, 52rem);
-  max-width: 72rem;
-  width: min(72rem, calc(100vw - 2rem));
-}
-
-.node-modal-content {
-  max-height: calc(80vh - 7rem);
-  overflow: auto;
-  padding-right: 0.25rem;
-}
-
 .feedback-config-modal {
   max-width: 62rem;
   width: min(62rem, calc(100vw - 2rem));
@@ -589,21 +577,32 @@ ul {
 
 .node-tab-close {
   border-top: 2px solid transparent;
-  color: #c3cad4;
-  font-size: 1.35rem;
-  line-height: 1;
-  padding: 0 0.75rem 0 0.35rem;
+  color: #8a93a0;
+  justify-content: center;
+  padding: 0 0.6rem;
+}
+
+.node-tab-close .icon {
+  border-radius: 4px;
+  height: 1.05rem;
+  padding: 2px;
+  width: 1.05rem;
 }
 
 .node-tab-wrap.active .node-tab-close {
   background: #101419;
   border-top-color: #55b7e8;
-  color: #f3f6fa;
+  color: #c3cad4;
 }
 
 .node-tab:hover,
 .node-tab-close:hover {
   background: #1f2630;
+  color: #f3f6fa;
+}
+
+.node-tab-close:hover .icon {
+  background: #38414d;
   color: #f3f6fa;
 }
 

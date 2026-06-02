@@ -180,42 +180,6 @@ describe('review UI', () => {
     expect(screen.queryByLabelText('id feedback')).not.toBeInTheDocument();
   });
 
-  it('displays the evidence node in a modal', async () => {
-    render(
-      <RenderTree
-        node={{
-          kind: 'array',
-          label: 'evidence',
-          path: '/turns/0/evidence',
-          presentation: 'evidence-list',
-          items: [
-            {
-              kind: 'object',
-              label: '0',
-              path: '/turns/0/evidence/0',
-              children: [
-                { kind: 'value', label: 'id', path: '/turns/0/evidence/0/id', value: 'doc-1', validationIssues: [] },
-                { kind: 'value', label: 'source', path: '/turns/0/evidence/0/source', value: 'Architecture Notes', validationIssues: [] },
-                { kind: 'value', label: 'content', path: '/turns/0/evidence/0/content', value: 'The dial path enters through Dial Gateway.', validationIssues: [] }
-              ],
-              validationIssues: []
-            }
-          ],
-          validationIssues: []
-        }}
-      />
-    );
-
-    await userEvent.click(screen.getByRole('button', { name: 'Display in modal' }));
-
-    const dialog = screen.getByRole('dialog', { name: 'Evidence details' });
-    expect(dialog).toBeInTheDocument();
-    expect(within(dialog).getByRole('heading', { name: 'Architecture Notes' })).toBeInTheDocument();
-    expect(within(dialog).getByText('The dial path enters through Dial Gateway.')).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
-    expect(screen.queryByRole('dialog', { name: 'Evidence details' })).not.toBeInTheDocument();
-  });
-
   it('renders evidence content with the diff-view presentation', () => {
     const commentSubmittedAt = new Date(Date.now() - 120000).toISOString();
     const editSubmittedAt = new Date(Date.now() - 60000).toISOString();

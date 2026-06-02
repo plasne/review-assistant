@@ -1037,8 +1037,14 @@ const RecordDetails = ({
             >
               {tab.label}
             </button>
-            <button type="button" className="node-tab-close" aria-label={`Close ${tab.label} tab`} onClick={() => closeNodeTab(tab.id)}>
-              x
+            <button
+              type="button"
+              className="node-tab-close"
+              aria-label={`Close ${tab.label} tab`}
+              title={`Close ${tab.label} tab`}
+              onClick={() => closeNodeTab(tab.id)}
+            >
+              <CloseIcon />
             </button>
           </span>
         ))}
@@ -1308,7 +1314,6 @@ const EvidenceList = ({
   onOpenTab?: OpenNodeTab;
   disableNodeActions?: boolean;
 }) => {
-  const [modalOpen, setModalOpen] = useState(false);
   return (
     <section className="node array-node evidence-list">
       <div className="node-heading-row">
@@ -1318,9 +1323,6 @@ const EvidenceList = ({
             {onOpenTab ? (
               <OpenInTabButton onClick={() => onOpenTab(node)} />
             ) : null}
-            <button type="button" className="secondary-button compact-button" onClick={() => setModalOpen(true)}>
-              Display in modal
-            </button>
           </div>
         )}
       </div>
@@ -1352,18 +1354,6 @@ const EvidenceList = ({
           )
         )}
       </div>
-      {modalOpen ? (
-        <NodeModal title="Evidence details" onClose={() => setModalOpen(false)}>
-          <RenderTree
-            node={node}
-            feedbackConfig={feedbackConfig}
-            history={history}
-            projectUser={projectUser}
-            onSubmitFeedback={onSubmitFeedback}
-            disableNodeActions
-          />
-        </NodeModal>
-      ) : null}
     </section>
   );
 };
@@ -1509,18 +1499,10 @@ const OpenInTabButton = ({ onClick }: { onClick: () => void }) => (
   </button>
 );
 
-const NodeModal = ({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) => (
-  <div className="modal-backdrop" role="presentation">
-    <section className="modal node-modal" role="dialog" aria-modal="true" aria-labelledby="node-modal-title">
-      <div className="modal-header">
-        <h2 id="node-modal-title">{title}</h2>
-        <button type="button" className="secondary-button compact-button" onClick={onClose}>
-          Close
-        </button>
-      </div>
-      <div className="node-modal-content">{children}</div>
-    </section>
-  </div>
+const CloseIcon = () => (
+  <svg className="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M4 4L12 12M12 4L4 12" />
+  </svg>
 );
 
 const FeedbackPanel = ({
