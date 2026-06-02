@@ -4,6 +4,7 @@ import type {
   AppBootstrap,
   ChatCanceled,
   ChatCancelResult,
+  ContinueWithGitHubResult,
   ChatStreamChunk,
   ChatStreamComplete,
   ChatStreamError,
@@ -11,6 +12,7 @@ import type {
   FeedbackConfig,
   FeedbackSubmissionInput,
   FeedbackSubmissionResult,
+  GitHubLoginCompletion,
   OpenProjectResult,
   ProjectUser,
   ProjectSummary,
@@ -240,6 +242,32 @@ export const assertChatCancelResult = (value: unknown): ChatCancelResult => {
     throw new ValidationError('Invalid chat cancel response.');
   }
   return value as ChatCancelResult;
+};
+
+export const assertContinueWithGitHubResult = (value: unknown): ContinueWithGitHubResult => {
+  if (!isRecord(value) || !isString(value.loginId) || typeof value.opened !== 'boolean') {
+    throw new ValidationError('Invalid GitHub continuation response.');
+  }
+  if (value.deviceCode !== undefined && !isString(value.deviceCode)) {
+    throw new ValidationError('Invalid GitHub continuation device code.');
+  }
+  if (value.verificationUri !== undefined && !isString(value.verificationUri)) {
+    throw new ValidationError('Invalid GitHub continuation verification URI.');
+  }
+  if (value.copiedToClipboard !== undefined && typeof value.copiedToClipboard !== 'boolean') {
+    throw new ValidationError('Invalid GitHub continuation clipboard status.');
+  }
+  return value as ContinueWithGitHubResult;
+};
+
+export const assertGitHubLoginCompletion = (value: unknown): GitHubLoginCompletion => {
+  if (!isRecord(value) || !isString(value.loginId) || typeof value.success !== 'boolean') {
+    throw new ValidationError('Invalid GitHub login completion response.');
+  }
+  if (value.errorMessage !== undefined && !isString(value.errorMessage)) {
+    throw new ValidationError('Invalid GitHub login completion error.');
+  }
+  return value as GitHubLoginCompletion;
 };
 
 export const assertChatCanceled = (value: unknown): ChatCanceled => {

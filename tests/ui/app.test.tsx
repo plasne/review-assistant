@@ -3,20 +3,22 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App, RenderTree } from '../../src/renderer/main';
-import type { Api, ChatCanceled, ChatStreamChunk, ChatStreamComplete, ChatStreamError, RenderNode } from '../../src/shared/types';
+import type { Api, ChatCanceled, ChatStreamChunk, ChatStreamComplete, ChatStreamError, GitHubLoginCompletion, RenderNode } from '../../src/shared/types';
 
 type ListenerMap = {
   chunk: ((chunk: ChatStreamChunk) => void)[];
   complete: ((complete: ChatStreamComplete) => void)[];
   error: ((error: ChatStreamError) => void)[];
   canceled: ((canceled: ChatCanceled) => void)[];
+  loginComplete: ((completion: GitHubLoginCompletion) => void)[];
 };
 
 const listeners: ListenerMap = {
   chunk: [],
   complete: [],
   error: [],
-  canceled: []
+  canceled: [],
+  loginComplete: []
 };
 
 const api: Api = {
@@ -30,8 +32,15 @@ const api: Api = {
   getProjectUser: vi.fn(),
   submitFeedback: vi.fn(),
   getAgentStatus: vi.fn(),
+  continueWithGitHub: vi.fn(),
   startChat: vi.fn(),
   cancelChat: vi.fn(),
+  onGitHubLoginComplete: vi.fn((listener) => {
+    listeners.loginComplete.push(listener);
+    return () => {
+      listeners.loginComplete = listeners.loginComplete.filter((item) => item !== listener);
+    };
+  }),
   onChatChunk: vi.fn((listener) => {
     listeners.chunk.push(listener);
     return () => {
@@ -64,12 +73,20 @@ beforeEach(() => {
   listeners.complete = [];
   listeners.error = [];
   listeners.canceled = [];
+  listeners.loginComplete = [];
   vi.mocked(api.getAgentStatus).mockResolvedValue({
     provider: { id: 'github-copilot', name: 'GitHub Copilot' },
     availability: 'ready'
   });
   vi.mocked(api.getProjectUser).mockResolvedValue({ username: 'sme@example.com', valid: true });
   vi.mocked(api.saveFeedbackConfig).mockImplementation(async (_projectId, config) => config);
+  vi.mocked(api.continueWithGitHub).mockResolvedValue({
+    opened: true,
+    loginId: 'login-1',
+    deviceCode: '1234-ABCD',
+    verificationUri: 'https://github.com/login/device',
+    copiedToClipboard: true
+  });
   window.reviewAssistant = api;
 });
 
@@ -209,8 +226,18 @@ describe('review UI', () => {
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('GitHub Copilot is not signed in.'));
     expect(screen.getByLabelText('Message GitHub Copilot')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    const continueButton = screen.getByRole('button', { name: 'Continue with GitHub' });
+    expect(continueButton).toHaveClass('github-login-button');
+    await userEvent.click(continueButton);
+    expect(api.continueWithGitHub).toHaveBeenCalledOnce();
+    expect(await screen.findByRole('dialog', { name: 'Login to GitHub Copilot' })).toBeVisible();
+    expect(screen.getByLabelText('GitHub Copilot device code')).toHaveTextContent('1234-ABCD');
+    expect(screen.getByText('Copied to clipboard')).toHaveClass('clipboard-status');
+    act(() => {
+      listeners.loginComplete.forEach((listener) => listener({ loginId: 'login-1', success: true }));
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Login to GitHub Copilot' })).not.toBeInTheDocument());
 
-    await userEvent.click(screen.getByRole('button', { name: 'Check again' }));
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
     await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'hello');
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
@@ -228,6 +255,15 @@ describe('review UI', () => {
 
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+    const loginButton = screen.getByRole('button', { name: 'Login' });
+    expect(loginButton).toHaveClass('github-login-button');
+    await userEvent.click(loginButton);
+    expect(await screen.findByRole('dialog', { name: 'Login to GitHub Copilot' })).toBeVisible();
+    expect(screen.getByText('Copied to clipboard')).toHaveClass('clipboard-status');
+    act(() => {
+      listeners.loginComplete.forEach((listener) => listener({ loginId: 'login-1', success: true }));
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Login to GitHub Copilot' })).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Clear chat' })).not.toBeInTheDocument();
   });
@@ -510,7 +546,7 @@ describe('review UI', () => {
       properties: {
         '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none' as const, comments: false, editable: false },
         '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', supportsEdit: false, feedback: 'none' as const, comments: false, editable: false },
-        '/evidence/~2/id': { path: '/evidence/~2/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true, feedback: 'none' as const, comments: false, editable: false }
+        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true, feedback: 'none' as const, comments: false, editable: false }
       }
     };
     vi.mocked(api.getBootstrap).mockResolvedValue({
