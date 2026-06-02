@@ -510,7 +510,7 @@ describe('review UI', () => {
       properties: {
         '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none' as const, comments: false, editable: false },
         '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', supportsEdit: false, feedback: 'none' as const, comments: false, editable: false },
-        '/evidence/~2/id': { path: '/evidence/~2/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true, feedback: 'none' as const, comments: false, editable: false }
+        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true, feedback: 'none' as const, comments: false, editable: false }
       }
     };
     vi.mocked(api.getBootstrap).mockResolvedValue({

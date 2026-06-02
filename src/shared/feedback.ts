@@ -14,7 +14,7 @@ export const USERNAME_VALIDATION_MESSAGE = 'USERNAME environment variable not co
 
 const FEEDBACK_SUFFIXES = ['_feedback', '_edits', '_comments'];
 const USERNAME_PATTERN = /^[a-zA-Z0-9._@-]{1,254}$/;
-const ARRAY_ITEM_PATH_SEGMENT = '~2';
+const ARRAY_ITEM_PATH_SEGMENT = '*';
 
 type JsonSchema = Record<string, unknown>;
 type FeedbackRecord = {
