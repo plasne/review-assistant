@@ -23,7 +23,7 @@ import {
   assertRecordDetail,
   assertRecordId
 } from '../shared/validators';
-import { ConfigError, loadAppConfig } from './env';
+import { ConfigError, loadAppConfig, parseBooleanFlag } from './env';
 import { createStorageAdapter, type StorageAdapter } from './storage';
 import { AgentRuntime, AgentRuntimeError } from './agent';
 import { createLocalToolRuntime } from './tools';
@@ -36,6 +36,7 @@ let bootstrapError: string | undefined;
 let backendKind: AppBootstrap['backendKind'];
 let appConfigValues: Record<string, string> = {};
 let appMcpConfigPath: string | undefined;
+let autoOpenFirst = true;
 const agent = new AgentRuntime({ workerPath: path.join(__dirname, '../agent/agent-process.js') });
 
 const initializeBackend = (): void => {
@@ -45,6 +46,7 @@ const initializeBackend = (): void => {
     backendKind = config.backendKind;
     appConfigValues = config.values;
     appMcpConfigPath = path.join(path.dirname(config.appEnvPath), '_mcp.json');
+    autoOpenFirst = parseBooleanFlag(config.values.AUTO_OPEN_FIRST, true);
   } catch (error) {
     bootstrapError = error instanceof ConfigError || error instanceof Error ? error.message : String(error);
     logError('review-assistant.config-error', { message: bootstrapError });
@@ -97,7 +99,7 @@ const readOptionalTextFile = async (filePath: string | undefined): Promise<strin
 const registerIpc = (): void => {
   ipcMain.handle('app:getBootstrap', async () => {
     const projects = storage ? await storage.listProjects() : [];
-    return assertBootstrap({ configError: bootstrapError, backendKind, projects, version: APP_VERSION });
+    return assertBootstrap({ configError: bootstrapError, backendKind, projects, version: APP_VERSION, autoOpenFirst });
   });
   ipcMain.handle('projects:list', async () => assertProjectSummaries(await requireStorage().listProjects()));
   ipcMain.handle('projects:create', async (_event, projectId: unknown) =>

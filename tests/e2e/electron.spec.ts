@@ -61,6 +61,36 @@ test('real Electron app opens a local project and reviews a record', async () =>
   fs.rmSync(createdProjectPath, { recursive: true, force: true });
 });
 
+test('real Electron app auto-opens the first project and record by default', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-autoopen-'));
+  const projectPath = path.join(tempRoot, 'auto-project');
+  const appEnv = path.join(tempRoot, 'app.env');
+  fs.mkdirSync(projectPath);
+  fs.writeFileSync(
+    path.join(projectPath, '_schema.json'),
+    JSON.stringify({ type: 'object', properties: { question: { type: 'string' } }, required: ['question'] }, null, 2)
+  );
+  fs.writeFileSync(path.join(projectPath, 'only-record.json'), JSON.stringify({ question: 'Auto opened question?' }, null, 2));
+  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\n`);
+  const electronApp = await electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      REVIEW_ASSISTANT_APP_ENV: appEnv,
+      ...fakeProviderEnv
+    }
+  });
+  const page = await electronApp.firstWindow();
+  try {
+    await expect(page.getByLabel('Current project')).toHaveValue('auto-project');
+    await expect(page.getByText('Auto opened question?')).toBeVisible();
+    await expect(page.getByText('Record passes schema validation.')).toBeVisible();
+  } finally {
+    await electronApp.close();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('records list scroll area reaches the records column edge and keeps content clear of the scrollbar', async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-scroll-'));
   const projectPath = path.join(tempRoot, 'scroll-project');
@@ -74,7 +104,7 @@ test('records list scroll area reaches the records column edge and keeps content
     const id = `q${String(index).padStart(2, '0')}`;
     fs.writeFileSync(path.join(projectPath, `${id}.json`), JSON.stringify({ question: `Question ${index}` }, null, 2));
   }
-  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\n`);
+  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nAUTO_OPEN_FIRST=false\n`);
   const electronApp = await electron.launch({
     args: ['.'],
     env: {
@@ -158,7 +188,7 @@ test('real Electron app configures feedback and shows subsequent users collapsed
     JSON.stringify({ type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] }, null, 2)
   );
   fs.writeFileSync(path.join(projectPath, 'record-1.json'), JSON.stringify({ answer: 'Initial answer' }, null, 2));
-  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=first@example.com\n`);
+  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=first@example.com\nAUTO_OPEN_FIRST=false\n`);
 
   const launch = () =>
     electron.launch({
@@ -186,7 +216,7 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   await expect(firstPage.getByText('History (1)')).toBeVisible();
   await firstApp.close();
 
-  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=second@example.com\n`);
+  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=second@example.com\nAUTO_OPEN_FIRST=false\n`);
   const secondApp = await launch();
   const secondPage = await secondApp.firstWindow();
   await secondPage.getByLabel('Current project').selectOption('feedback-project');

@@ -47,6 +47,23 @@ export const redactConfig = (values: Record<string, string>): Record<string, str
 
 const isSecretKey = (key: string): boolean => SECRET_KEYS.has(key) || /(?:TOKEN|SECRET|PASSWORD|CONNSTRING)$/i.test(key);
 
+export const parseBooleanFlag = (rawValue: string | undefined, defaultValue: boolean): boolean => {
+  if (rawValue === undefined) {
+    return defaultValue;
+  }
+  const normalized = rawValue.trim().toLowerCase();
+  if (normalized === '') {
+    return defaultValue;
+  }
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  return defaultValue;
+};
+
 export const selectBackend = (values: Record<string, string>): BackendKind => {
   if (values.AZURE_STORAGE_ACCOUNT_CONNSTRING) {
     return 'azure-connection-string';

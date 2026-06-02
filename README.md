@@ -10,6 +10,16 @@ printf 'LOCAL_PATH=%s\n' "$PWD/test-fixtures/local-projects" > .env
 npm run electron
 ```
 
+## Configuration
+
+The app reads its `.env` from the current working directory (override with `REVIEW_ASSISTANT_APP_ENV`).
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `LOCAL_PATH` | – | Local projects directory (selects the local storage backend). |
+| `AZURE_STORAGE_ACCOUNT_NAME` / `AZURE_STORAGE_ACCOUNT_CONNSTRING` | – | Selects an Azure Blob storage backend. |
+| `AUTO_OPEN_FIRST` | `true` | When enabled, the app automatically opens the first project and its first record (question) on launch. Set to `false`/`0`/`off` to start on the empty project picker. |
+
 ## Harness
 
 Run all release gates with:

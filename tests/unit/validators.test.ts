@@ -38,9 +38,18 @@ describe('IPC boundary validators', () => {
       assertBootstrap({
         backendKind: 'local',
         projects: [{ id: 'sample-project', name: 'sample-project' }],
-        version: 'v0.1.0-test'
+        version: 'v0.1.0-test',
+        autoOpenFirst: true
       })
-    ).toMatchObject({ backendKind: 'local' });
+    ).toMatchObject({ backendKind: 'local', autoOpenFirst: true });
+
+    expect(() =>
+      assertBootstrap({
+        projects: [{ id: 'sample-project', name: 'sample-project' }],
+        version: 'v0.1.0-test',
+        autoOpenFirst: 'yes'
+      })
+    ).toThrow(ValidationError);
 
     expect(
       assertOpenProjectResult({

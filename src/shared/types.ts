@@ -281,6 +281,7 @@ export type AppBootstrap = {
   backendKind?: BackendKind;
   projects: ProjectSummary[];
   version: string;
+  autoOpenFirst?: boolean;
 };
 
 export type Api = {

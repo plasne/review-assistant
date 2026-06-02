@@ -182,6 +182,9 @@ export const assertBootstrap = (value: unknown): AppBootstrap => {
   if (!isRecord(value) || !Array.isArray(value.projects) || !isString(value.version)) {
     throw new ValidationError('Invalid bootstrap response.');
   }
+  if (value.autoOpenFirst !== undefined && typeof value.autoOpenFirst !== 'boolean') {
+    throw new ValidationError('Invalid bootstrap response.');
+  }
   return value as AppBootstrap;
 };
 

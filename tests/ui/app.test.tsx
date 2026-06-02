@@ -325,6 +325,63 @@ describe('review UI', () => {
     expect(screen.getByRole('heading', { name: 'evidence 1 item' })).toBeInTheDocument();
   });
 
+  it('auto-opens the first project and first record when autoOpenFirst is enabled', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [
+        { id: 'sample-project', name: 'sample-project' },
+        { id: 'other-project', name: 'other-project' }
+      ],
+      version: 'v0.1.0-test',
+      autoOpenFirst: true
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [
+        { id: 'first-record', displayName: 'first-record' },
+        { id: 'second-record', displayName: 'second-record' }
+      ]
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'first-record',
+      displayName: 'first-record',
+      data: { answer: 'Auto opened answer.' },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        path: '',
+        children: [{ kind: 'value', label: 'answer', path: '/answer', value: 'Auto opened answer.', validationIssues: [] }],
+        validationIssues: []
+      }
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Auto opened answer.')).toBeInTheDocument();
+    expect(api.openProject).toHaveBeenCalledWith('sample-project');
+    expect(api.getRecord).toHaveBeenCalledWith('sample-project', 'first-record');
+    expect(await screen.findByLabelText('Current project')).toHaveValue('sample-project');
+  });
+
+  it('does not auto-open when autoOpenFirst is disabled', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test',
+      autoOpenFirst: false
+    });
+
+    render(<App />);
+
+    expect(await screen.findByLabelText('Current project')).toHaveValue('');
+    expect(api.openProject).not.toHaveBeenCalled();
+  });
+
   it('supports project selection, record detail rendering, and chat', async () => {
     vi.mocked(api.getBootstrap).mockResolvedValue({
       backendKind: 'local',

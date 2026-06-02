@@ -58,6 +58,7 @@ const App = () => {
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const activeRequestIdRef = useRef<string | undefined>(undefined);
   const activeLoginIdRef = useRef<string | undefined>(undefined);
+  const autoOpenRef = useRef({ project: false, record: false });
   const loginDialogTitleId = useId();
 
   useEffect(() => {
@@ -239,6 +240,30 @@ const App = () => {
       setProjectUser({ valid: false, validationMessage: caught instanceof Error ? caught.message : String(caught) });
     }
   };
+
+  useEffect(() => {
+    if (bootstrap?.autoOpenFirst !== true || autoOpenRef.current.project || selectedProjectId) {
+      return;
+    }
+    const firstProject = bootstrap.projects[0];
+    if (!firstProject) {
+      return;
+    }
+    autoOpenRef.current.project = true;
+    void openProject(firstProject.id);
+  }, [bootstrap, selectedProjectId]);
+
+  useEffect(() => {
+    if (bootstrap?.autoOpenFirst !== true || !autoOpenRef.current.project || autoOpenRef.current.record || record || !project) {
+      return;
+    }
+    const firstRecord = project.records[0];
+    if (!firstRecord) {
+      return;
+    }
+    autoOpenRef.current.record = true;
+    void openRecord(firstRecord.id);
+  }, [bootstrap, project, record]);
 
   const refreshRecords = async () => {
     if (!selectedProjectId) {

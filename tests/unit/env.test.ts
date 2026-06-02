@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseEnv, redactConfig, selectBackend } from '../../src/main/env';
+import { parseBooleanFlag, parseEnv, redactConfig, selectBackend } from '../../src/main/env';
 
 describe('environment config', () => {
   it('parses env files without variable expansion', () => {
@@ -23,6 +23,20 @@ describe('environment config', () => {
       SOURCE_TOKEN: '****',
       LOCAL_PATH: '/tmp/projects'
     });
+  });
+
+  it('parses boolean flags with a default fallback', () => {
+    expect(parseBooleanFlag(undefined, true)).toBe(true);
+    expect(parseBooleanFlag('', true)).toBe(true);
+    expect(parseBooleanFlag('false', true)).toBe(false);
+    expect(parseBooleanFlag('0', true)).toBe(false);
+    expect(parseBooleanFlag('off', true)).toBe(false);
+    expect(parseBooleanFlag('no', true)).toBe(false);
+    expect(parseBooleanFlag('true', false)).toBe(true);
+    expect(parseBooleanFlag('1', false)).toBe(true);
+    expect(parseBooleanFlag('on', false)).toBe(true);
+    expect(parseBooleanFlag('unexpected', true)).toBe(true);
+    expect(parseBooleanFlag('unexpected', false)).toBe(false);
   });
 
 });
