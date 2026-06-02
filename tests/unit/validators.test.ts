@@ -4,6 +4,7 @@ import {
   assertBootstrap,
   assertChatStreamChunk,
   assertChatStreamStart,
+  assertContinueWithGitHubResult,
   assertChatMessage,
   assertNewProjectId,
   assertOpenProjectResult,
@@ -83,5 +84,10 @@ describe('IPC boundary validators', () => {
     );
     expect(() => assertChatStreamStart({ requestId: 'request-1' })).toThrow(ValidationError);
     expect(() => assertChatStreamChunk({ requestId: 'request-1', messageId: 'message-1' })).toThrow(ValidationError);
+  });
+
+  it('validates GitHub continuation responses', () => {
+    expect(assertContinueWithGitHubResult({ opened: true })).toEqual({ opened: true });
+    expect(() => assertContinueWithGitHubResult({ opened: 'true' })).toThrow(ValidationError);
   });
 });

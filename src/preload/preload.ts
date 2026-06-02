@@ -17,6 +17,7 @@ import {
   assertChatStreamComplete,
   assertChatStreamError,
   assertChatStreamStart,
+  assertContinueWithGitHubResult,
   assertFeedbackConfig,
   assertFeedbackSubmissionInput,
   assertFeedbackSubmissionResult,
@@ -52,6 +53,7 @@ const api: Api = {
       assertFeedbackSubmissionInput(input)
     ),
   getAgentStatus: () => invoke('agent:getStatus', assertAgentStatus),
+  continueWithGitHub: () => invoke('auth:continueWithGitHub', assertContinueWithGitHubResult),
   startChat: (projectId, recordId, message) =>
     invoke(
       'chat:start',

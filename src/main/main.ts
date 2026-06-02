@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -34,6 +34,7 @@ let backendKind: AppBootstrap['backendKind'];
 let appConfigValues: Record<string, string> = {};
 let appMcpConfigPath: string | undefined;
 const agent = new AgentRuntime({ workerPath: path.join(__dirname, '../agent/agent-process.js') });
+const GITHUB_LOGIN_URL = 'https://github.com/login';
 
 const initializeBackend = (): void => {
   try {
@@ -62,8 +63,9 @@ const createWindow = async (): Promise<void> => {
     }
   });
 
-  if (process.env.VITE_DEV_SERVER_URL) {
-    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+  const devServerUrl = process.env.ELECTRON_RENDERER_URL ?? process.env.VITE_DEV_SERVER_URL;
+  if (devServerUrl) {
+    await mainWindow.loadURL(devServerUrl);
     return;
   }
   await mainWindow.loadURL(pathToFileURL(path.join(__dirname, '../renderer/index.html')).toString());
@@ -120,6 +122,10 @@ const registerIpc = (): void => {
     )
   );
   ipcMain.handle('agent:getStatus', async () => agent.getStatus());
+  ipcMain.handle('auth:continueWithGitHub', async () => {
+    await shell.openExternal(GITHUB_LOGIN_URL);
+    return { opened: true };
+  });
   ipcMain.handle('chat:start', async (event, projectId: unknown, recordId: unknown, message: unknown) => {
     const startedAt = Date.now();
     const validProjectId = projectId === undefined ? undefined : assertProjectId(projectId);

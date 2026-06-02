@@ -203,6 +203,10 @@ export type ChatCancelResult = {
   canceled: boolean;
 };
 
+export type ContinueWithGitHubResult = {
+  opened: boolean;
+};
+
 export type ChatCanceled = {
   requestId: string;
   messageId?: string;
@@ -261,6 +265,7 @@ export type Api = {
   getProjectUser: (projectId: string) => Promise<ProjectUser>;
   submitFeedback: (projectId: string, recordId: string, input: FeedbackSubmissionInput) => Promise<FeedbackSubmissionResult>;
   getAgentStatus: () => Promise<AgentStatusSnapshot>;
+  continueWithGitHub: () => Promise<ContinueWithGitHubResult>;
   startChat: (projectId: string | undefined, recordId: string | undefined, message: string) => Promise<ChatStreamStartResult>;
   cancelChat: (requestId: string) => Promise<ChatCancelResult>;
 } & ChatStreamEventHandlers;

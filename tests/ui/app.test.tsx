@@ -30,6 +30,7 @@ const api: Api = {
   getProjectUser: vi.fn(),
   submitFeedback: vi.fn(),
   getAgentStatus: vi.fn(),
+  continueWithGitHub: vi.fn(),
   startChat: vi.fn(),
   cancelChat: vi.fn(),
   onChatChunk: vi.fn((listener) => {
@@ -70,6 +71,7 @@ beforeEach(() => {
   });
   vi.mocked(api.getProjectUser).mockResolvedValue({ username: 'sme@example.com', valid: true });
   vi.mocked(api.saveFeedbackConfig).mockImplementation(async (_projectId, config) => config);
+  vi.mocked(api.continueWithGitHub).mockResolvedValue({ opened: true });
   window.reviewAssistant = api;
 });
 
@@ -209,6 +211,10 @@ describe('review UI', () => {
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('GitHub Copilot is not signed in.'));
     expect(screen.getByLabelText('Message GitHub Copilot')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    const continueButton = screen.getByRole('button', { name: 'Continue with GitHub' });
+    expect(continueButton).toHaveClass('github-login-button');
+    await userEvent.click(continueButton);
+    expect(api.continueWithGitHub).toHaveBeenCalledOnce();
 
     await userEvent.click(screen.getByRole('button', { name: 'Check again' }));
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());

@@ -4,6 +4,7 @@ import type {
   AppBootstrap,
   ChatCanceled,
   ChatCancelResult,
+  ContinueWithGitHubResult,
   ChatStreamChunk,
   ChatStreamComplete,
   ChatStreamError,
@@ -240,6 +241,13 @@ export const assertChatCancelResult = (value: unknown): ChatCancelResult => {
     throw new ValidationError('Invalid chat cancel response.');
   }
   return value as ChatCancelResult;
+};
+
+export const assertContinueWithGitHubResult = (value: unknown): ContinueWithGitHubResult => {
+  if (!isRecord(value) || typeof value.opened !== 'boolean') {
+    throw new ValidationError('Invalid GitHub continuation response.');
+  }
+  return value as ContinueWithGitHubResult;
 };
 
 export const assertChatCanceled = (value: unknown): ChatCanceled => {
