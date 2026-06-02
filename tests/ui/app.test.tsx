@@ -313,6 +313,7 @@ describe('review UI', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'evidence (/evidence)' }));
     expect(screen.getByRole('tabpanel')).toHaveTextContent('doc-1');
     expect(within(screen.getByRole('tabpanel')).queryByRole('heading', { name: 'answer' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'README' }).closest('details')).toHaveAttribute('open');
 
     await userEvent.click(screen.getByRole('tab', { name: 'Overview' }));
     expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
@@ -323,6 +324,7 @@ describe('review UI', () => {
     expect(evidenceSection).not.toBeNull();
     expect(within(evidenceSection as HTMLElement).getByRole('button', { name: 'Open in tab' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'evidence 1 item' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'README' }).closest('details')).not.toHaveAttribute('open');
   });
 
   it('auto-opens the first project and first record when autoOpenFirst is enabled', async () => {

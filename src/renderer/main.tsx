@@ -1101,6 +1101,7 @@ const RecordDetails = ({
         ) : (
           <RenderTreeRoot
             node={record.renderTree}
+            collapseEvidence
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
@@ -1115,6 +1116,7 @@ const RecordDetails = ({
 
 const RenderTreeRoot = ({
   node,
+  collapseEvidence = false,
   feedbackConfig,
   history,
   projectUser,
@@ -1122,6 +1124,7 @@ const RenderTreeRoot = ({
   onOpenTab
 }: {
   node: RenderNode;
+  collapseEvidence?: boolean;
   feedbackConfig?: FeedbackConfig;
   history: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
@@ -1136,6 +1139,7 @@ const RenderTreeRoot = ({
           <RenderTree
             key={child.path ?? child.label}
             node={child}
+            collapseEvidence={collapseEvidence}
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
@@ -1146,12 +1150,23 @@ const RenderTreeRoot = ({
       </>
     );
   }
-  return <RenderTree node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} onOpenTab={onOpenTab} />;
+  return (
+    <RenderTree
+      node={node}
+      collapseEvidence={collapseEvidence}
+      feedbackConfig={feedbackConfig}
+      history={history}
+      projectUser={projectUser}
+      onSubmitFeedback={onSubmitFeedback}
+      onOpenTab={onOpenTab}
+    />
+  );
 };
 
 const RenderTree = ({
   node,
   collapseObject = false,
+  collapseEvidence = false,
   feedbackConfig,
   history,
   projectUser,
@@ -1161,6 +1176,7 @@ const RenderTree = ({
 }: {
   node: RenderNode;
   collapseObject?: boolean;
+  collapseEvidence?: boolean;
   feedbackConfig?: FeedbackConfig;
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
@@ -1192,6 +1208,7 @@ const RenderTree = ({
             <RenderTree
               key={child.path ?? child.label}
               node={child}
+              collapseEvidence={collapseEvidence}
               feedbackConfig={feedbackConfig}
               history={history}
               projectUser={projectUser}
@@ -1212,6 +1229,7 @@ const RenderTree = ({
           <RenderTree
             key={child.path ?? child.label}
             node={child}
+            collapseEvidence={collapseEvidence}
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
@@ -1229,6 +1247,7 @@ const RenderTree = ({
         <EvidenceList
           node={node}
           issues={issues}
+          collapseItems={collapseEvidence}
           feedbackConfig={feedbackConfig}
           history={history}
           projectUser={projectUser}
@@ -1248,6 +1267,7 @@ const RenderTree = ({
             key={child.path ?? child.label}
             node={child}
             collapseObject={child.kind === 'object'}
+            collapseEvidence={collapseEvidence}
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
@@ -1323,6 +1343,7 @@ const CollapsiblePresentationField = ({ node, children }: { node: RenderNode; ch
 const EvidenceList = ({
   node,
   issues,
+  collapseItems = false,
   feedbackConfig,
   history,
   projectUser,
@@ -1332,6 +1353,7 @@ const EvidenceList = ({
 }: {
   node: Extract<RenderNode, { kind: 'array' }>;
   issues: React.ReactNode;
+  collapseItems?: boolean;
   feedbackConfig?: FeedbackConfig;
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
@@ -1360,6 +1382,7 @@ const EvidenceList = ({
               key={item.path ?? item.label}
               node={item}
               index={index}
+              collapsed={collapseItems}
               feedbackConfig={feedbackConfig}
               history={history}
               projectUser={projectUser}
@@ -1369,6 +1392,7 @@ const EvidenceList = ({
             <RenderTree
               key={item.path ?? item.label}
               node={item}
+              collapseEvidence={collapseItems}
               feedbackConfig={feedbackConfig}
               history={history}
               projectUser={projectUser}
@@ -1386,6 +1410,7 @@ const EvidenceList = ({
 const EvidenceCard = ({
   node,
   index,
+  collapsed = false,
   feedbackConfig,
   history,
   projectUser,
@@ -1393,6 +1418,7 @@ const EvidenceCard = ({
 }: {
   node: Extract<RenderNode, { kind: 'object' }>;
   index: number;
+  collapsed?: boolean;
   feedbackConfig?: FeedbackConfig;
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
@@ -1404,7 +1430,7 @@ const EvidenceCard = ({
   const readonlyFields = fields.filter((field) => !field.editable);
   const editableFields = fields.filter((field) => field.editable);
   return (
-    <details className="evidence-card" open>
+    <details className="evidence-card" open={!collapsed}>
       <summary className="evidence-card-header">
         <h4>{source ?? `Evidence ${index + 1}`}</h4>
         {id ? <span className="evidence-id">{id}</span> : null}
