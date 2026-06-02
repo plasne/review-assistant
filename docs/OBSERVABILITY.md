@@ -40,6 +40,9 @@ Long-running chat and tool workflows should also include:
 | `review-assistant.agent-provider-stop-failed` | SDK runtime stop returned cleanup errors. |
 | `review-assistant.agent-first-output` | Provider emitted the first streamed output. |
 | `review-assistant.agent-worker-completed` | Agent worker completed provider execution. |
+| `review-assistant.auth-login-started` | Main process started the GitHub Copilot SDK-bundled login flow. |
+| `review-assistant.auth-device-code-ready` | Main process parsed a GitHub Copilot login device code and copied it for the renderer modal. |
+| `review-assistant.auth-login-completed` | Main process observed the GitHub Copilot login process complete after device authorization. |
 | `review-assistant.tool-request-started` | Worker forwarded a tool request to main. |
 | `review-assistant.tool-execute-started` | Main started executing a local tool. |
 | `review-assistant.tool-execute-completed` | Main completed local tool execution. |

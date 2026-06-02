@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CopilotClient, RuntimeConnection, ToolSet } from '@github/copilot-sdk';
 import type { MCPServerConfig, PermissionHandler, Tool, ToolResultObject } from '@github/copilot-sdk';
 import type { AgentErrorEnvelope, AgentStatusSnapshot, ExternalMcpServerConfig, LocalToolMetadata, ToolInvocationResponse } from '../shared/types';
+import { resolveCopilotRuntimePath } from '../main/copilot-runtime';
 import type { ActiveProviderRun, AgentProvider, AgentProviderFactoryDeps, ChatContext, ProviderStartRequest } from './provider';
 
 export const createCopilotSdkProvider = (deps: AgentProviderFactoryDeps): AgentProvider => ({
@@ -203,10 +204,10 @@ const createSdkTools = (deps: AgentProviderFactoryDeps, chatRequestId: string, t
   }));
 
 const createClient = (tempDir: string): CopilotClient => {
-  const command = process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND || process.env.REVIEW_ASSISTANT_COPILOT_COMMAND || undefined;
+  const command = process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND || process.env.REVIEW_ASSISTANT_COPILOT_COMMAND || resolveCopilotRuntimePath();
   const args = parseRuntimeArgs(process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS ?? '');
   return new CopilotClient({
-    ...(command ? { connection: RuntimeConnection.forStdio({ path: command, args }) } : {}),
+    connection: RuntimeConnection.forStdio({ path: command, args }),
     mode: 'empty',
     workingDirectory: tempDir,
     baseDirectory: tempDir,

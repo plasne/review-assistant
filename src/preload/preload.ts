@@ -21,6 +21,7 @@ import {
   assertFeedbackConfig,
   assertFeedbackSubmissionInput,
   assertFeedbackSubmissionResult,
+  assertGitHubLoginCompletion,
   assertProjectUser
 } from '../shared/validators';
 
@@ -66,7 +67,8 @@ const api: Api = {
   onChatChunk: (listener) => onEvent('chat:chunk', assertChatStreamChunk, listener),
   onChatComplete: (listener) => onEvent('chat:complete', assertChatStreamComplete, listener),
   onChatError: (listener) => onEvent('chat:error', assertChatStreamError, listener),
-  onChatCanceled: (listener) => onEvent('chat:canceled', assertChatCanceled, listener)
+  onChatCanceled: (listener) => onEvent('chat:canceled', assertChatCanceled, listener),
+  onGitHubLoginComplete: (listener) => onEvent('auth:login-completed', assertGitHubLoginCompletion, listener)
 };
 
 contextBridge.exposeInMainWorld('reviewAssistant', api);

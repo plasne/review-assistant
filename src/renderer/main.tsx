@@ -4,6 +4,7 @@ import type {
   AgentStatusSnapshot,
   AppBootstrap,
   ChatMessage,
+  ContinueWithGitHubResult,
   FeedbackConfig,
   FeedbackConfigEntry,
   FeedbackEntry,
@@ -35,6 +36,8 @@ const App = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [agentStatus, setAgentStatus] = useState<AgentStatusSnapshot | undefined>();
+  const [loginDialog, setLoginDialog] = useState<ContinueWithGitHubResult | undefined>();
+  const [loginInProgress, setLoginInProgress] = useState(false);
   const [chatState, setChatState] = useState<ChatState>('ready');
   const [activeRequestId, setActiveRequestId] = useState<string | undefined>();
   const [newProjectId, setNewProjectId] = useState('');
@@ -46,6 +49,8 @@ const App = () => {
   const columnsRef = useRef<HTMLElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const activeRequestIdRef = useRef<string | undefined>(undefined);
+  const activeLoginIdRef = useRef<string | undefined>(undefined);
+  const loginDialogTitleId = useId();
 
   useEffect(() => {
     activeRequestIdRef.current = activeRequestId;
@@ -114,6 +119,20 @@ const App = () => {
             current.map((message) => (message.id === event.messageId && !message.content ? { ...message, content: 'Response canceled.' } : message))
           );
         }
+      }),
+      window.reviewAssistant.onGitHubLoginComplete((completion) => {
+        if (completion.success) {
+          void refreshAgentStatus();
+        }
+        if (activeLoginIdRef.current !== completion.loginId) {
+          return;
+        }
+        activeLoginIdRef.current = undefined;
+        setLoginDialog(undefined);
+        if (!completion.success) {
+          setStatus('error');
+          setError(completion.errorMessage ?? 'GitHub Copilot login did not complete.');
+        }
       })
     ];
     return () => {
@@ -143,11 +162,20 @@ const App = () => {
   };
 
   const continueWithGitHub = async () => {
+    setLoginInProgress(true);
     try {
-      await window.reviewAssistant.continueWithGitHub();
+      const result = await window.reviewAssistant.continueWithGitHub();
+      if (result.deviceCode && result.verificationUri) {
+        activeLoginIdRef.current = result.loginId;
+        setLoginDialog(result);
+      } else {
+        void refreshAgentStatus();
+      }
     } catch (caught) {
       setStatus('error');
       setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoginInProgress(false);
     }
   };
 
@@ -572,7 +600,7 @@ const App = () => {
                   type="button"
                   className="github-login-button"
                   onClick={() => void continueWithGitHub()}
-                  disabled={chatState === 'streaming'}
+                  disabled={chatState === 'streaming' || loginInProgress}
                 >
                   <GitHubLogo />
                   Continue with GitHub
@@ -611,6 +639,15 @@ const App = () => {
               rows={4}
             />
             <div className="chat-actions">
+              <button
+                type="button"
+                className="github-login-button"
+                onClick={() => void continueWithGitHub()}
+                disabled={chatState === 'streaming' || loginInProgress}
+              >
+                <GitHubLogo />
+                {loginInProgress ? 'Waiting...' : 'Login'}
+              </button>
               <button type="submit" disabled={!canSendChat}>
                 Send
               </button>
@@ -624,6 +661,31 @@ const App = () => {
           </form>
         </section>
       </main>
+
+      {loginDialog?.deviceCode && loginDialog.verificationUri ? (
+        <div className="modal-backdrop">
+          <section className="login-modal" role="dialog" aria-modal="true" aria-labelledby={loginDialogTitleId}>
+            <h2 id={loginDialogTitleId}>Login to GitHub Copilot</h2>
+            <p>Enter this device code at {loginDialog.verificationUri}:</p>
+            <div className="device-code" aria-label="GitHub Copilot device code">
+              {loginDialog.deviceCode}
+            </div>
+            {loginDialog.copiedToClipboard ? <p className="clipboard-status">Copied to clipboard</p> : null}
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  activeLoginIdRef.current = undefined;
+                  setLoginDialog(undefined);
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <footer className="app-footer">Version {bootstrap?.version ?? 'loading'}</footer>
     </div>
