@@ -23,6 +23,7 @@
   "dependencies": {
     "@azure/identity": "^4.5.0",
     "@azure/storage-blob": "^12.26.0",
+    "@pierre/diffs": "^1.2.7",
     "@vitejs/plugin-react": "^4.3.4",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
@@ -39,9 +40,9 @@
     "electron": "^33.2.1",
     "esbuild": "^0.24.2",
     "jsdom": "^25.0.1",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }

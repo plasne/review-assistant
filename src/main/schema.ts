@@ -1,6 +1,7 @@
 import Ajv2020, { type ErrorObject, type ValidateFunction } from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
-import type { RenderNode, ValidationIssue } from '../shared/types';
+import { displayConfigEntryForPath } from '../shared/display';
+import type { DisplayConfig, FieldPresentation, RenderNode, ValidationIssue } from '../shared/types';
 
 type JsonSchema = Record<string, unknown>;
 
@@ -17,12 +18,12 @@ export const validateRecord = (schema: unknown, data: unknown): ValidationIssue[
   return (validate.errors ?? []).map(toValidationIssue);
 };
 
-export const buildRenderTree = (schema: unknown, data: unknown, issues: ValidationIssue[], label = 'record'): RenderNode => {
+export const buildRenderTree = (schema: unknown, data: unknown, issues: ValidationIssue[], label = 'record', displayConfig?: DisplayConfig): RenderNode => {
   if (!isSchema(schema)) {
     return rawNode(label, undefined, data, 'Schema is not an object.', issues, '');
   }
   const resolved = resolveRenderableSchema(schema);
-  return renderSchema(label, resolved, data, issues, '');
+  return renderSchema(label, resolved, data, issues, '', displayConfig);
 };
 
 const compileSchema = (schema: unknown): ValidateFunction => {
@@ -32,19 +33,20 @@ const compileSchema = (schema: unknown): ValidateFunction => {
   return ajv.compile(schema);
 };
 
-const renderSchema = (label: string, schema: JsonSchema, data: unknown, issues: ValidationIssue[], path: string): RenderNode => {
+const renderSchema = (label: string, schema: JsonSchema, data: unknown, issues: ValidationIssue[], path: string, displayConfig?: DisplayConfig): RenderNode => {
   const localIssues = issues.filter((issue) => issue.path === path);
   const description = typeof schema.description === 'string' ? schema.description : undefined;
+  const presentation = displayConfig ? displayConfigEntryForPath(displayConfig, path)?.presentation : undefined;
   const renderable = resolveRenderableSchema(schema);
   if (hasComplexConstruct(renderable)) {
-    return rawNode(label, description, data, 'Complex JSON Schema construct is validated and displayed as read-only JSON.', localIssues, path);
+    return rawNode(label, description, data, 'Complex JSON Schema construct is validated and displayed as read-only JSON.', localIssues, path, presentation);
   }
   const type = inferType(renderable, data);
   if (type === 'object') {
     const properties = isSchemaMap(renderable.properties) ? renderable.properties : {};
     const value = isPlainRecord(data) ? data : {};
     const children = Object.entries(properties).map(([childLabel, childSchema]) =>
-      renderSchema(childLabel, childSchema, value[childLabel], issues, `${path}/${escapePointer(childLabel)}`)
+      renderSchema(childLabel, childSchema, value[childLabel], issues, `${path}/${escapePointer(childLabel)}`, displayConfig)
     );
     const extraChildren = Object.keys(value)
       .filter((key) => !(key in properties))
@@ -56,23 +58,25 @@ const renderSchema = (label: string, schema: JsonSchema, data: unknown, issues: 
           value[key],
           'Field is present in data but not declared by schema.',
           issuesAt(issues, `${path}/${escapePointer(key)}`),
-          `${path}/${escapePointer(key)}`
+          `${path}/${escapePointer(key)}`,
+          displayConfig ? displayConfigEntryForPath(displayConfig, `${path}/${escapePointer(key)}`)?.presentation : undefined
         )
       );
-    return { kind: 'object', label, path, description, children: [...children, ...extraChildren], validationIssues: localIssues };
+    return { kind: 'object', label, path, description, presentation, children: [...children, ...extraChildren], validationIssues: localIssues };
   }
   if (type === 'array') {
     const itemsSchema = isSchema(renderable.items) ? renderable.items : {};
     const items = Array.isArray(data)
-      ? data.map((item, index) => renderSchema(String(index), itemsSchema, item, issues, `${path}/${index}`))
+      ? data.map((item, index) => renderSchema(String(index), itemsSchema, item, issues, `${path}/${index}`, displayConfig))
       : [];
-    return { kind: 'array', label, path, description, items, validationIssues: localIssues };
+    return { kind: 'array', label, path, description, presentation, items, validationIssues: localIssues };
   }
   return {
     kind: 'value',
     label,
     path,
     description,
+    presentation,
     value: data,
     type: typeof renderable.type === 'string' ? renderable.type : typeof data,
     enumValues: Array.isArray(renderable.enum) ? renderable.enum : undefined,
@@ -120,12 +124,14 @@ const rawNode = (
   value: unknown,
   reason: string,
   validationIssues: ValidationIssue[],
-  path?: string
+  path?: string,
+  presentation?: FieldPresentation
 ): RenderNode => ({
   kind: 'raw',
   label,
   path,
   description,
+  presentation,
   value,
   reason,
   validationIssues

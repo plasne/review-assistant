@@ -7,10 +7,18 @@ import { LocalStorageAdapter } from '../../src/main/storage';
 const fixtureRoot = path.resolve('test-fixtures/local-projects');
 
 describe('local storage adapter', () => {
+  let tempRoot: string | undefined;
   const adapter = new LocalStorageAdapter({
     backendKind: 'local',
     appEnvPath: '.env',
     values: { LOCAL_PATH: fixtureRoot }
+  });
+
+  afterEach(async () => {
+    if (tempRoot) {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+      tempRoot = undefined;
+    }
   });
 
   it('lists projects as local subdirectories', async () => {
@@ -31,6 +39,55 @@ describe('local storage adapter', () => {
     const detail = await adapter.getRecord('sample-project', 'valid-record');
     expect(detail.validationIssues).toEqual([]);
     expect(detail.renderTree.kind).toBe('object');
+  });
+
+  it('applies project display config to record render trees', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    await fs.mkdir(path.join(tempRoot, 'display-project'));
+    await fs.writeFile(
+      path.join(tempRoot, 'display-project', '_schema.json'),
+      JSON.stringify({
+        type: 'object',
+        properties: {
+          turns: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                request: { type: 'string' },
+                response: { type: 'string' },
+                evidence: { type: 'array', items: { type: 'object', properties: { content: { type: 'string' } } } }
+              }
+            }
+          }
+        }
+      })
+    );
+    await fs.writeFile(path.join(tempRoot, 'display-project', 'record-1.json'), JSON.stringify({ turns: [{ request: 'Question', response: 'Answer', evidence: [{ content: 'Source' }] }] }));
+    await fs.writeFile(
+      path.join(tempRoot, 'display-project', '_display.json'),
+      JSON.stringify({
+        properties: {
+          '/turns/*/request': { path: '/turns/*/request', presentation: 'chat-request' },
+          '/turns/*/response': { path: '/turns/*/response', presentation: 'chat-response' },
+          '/turns/*/evidence': { path: '/turns/*/evidence', presentation: 'evidence-list' }
+        }
+      })
+    );
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: '.env',
+      values: { LOCAL_PATH: tempRoot }
+    });
+
+    const detail = await tempAdapter.getRecord('display-project', 'record-1');
+    const turns = detail.renderTree.kind === 'object' ? detail.renderTree.children.find((child) => child.path === '/turns') : undefined;
+    const firstTurn = turns?.kind === 'array' ? turns.items[0] : undefined;
+    const fields = firstTurn?.kind === 'object' ? firstTurn.children : [];
+
+    expect(fields.find((field) => field.path === '/turns/0/request')).toMatchObject({ presentation: 'chat-request' });
+    expect(fields.find((field) => field.path === '/turns/0/response')).toMatchObject({ presentation: 'chat-response' });
+    expect(fields.find((field) => field.path === '/turns/0/evidence')).toMatchObject({ presentation: 'evidence-list' });
   });
 
   it('rejects path traversal through IPC-facing identifiers', async () => {

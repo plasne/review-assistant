@@ -31,12 +31,24 @@ export type ValidationIssue = {
   keyword: string;
 };
 
+export type FieldPresentation = 'chat-request' | 'chat-response' | 'evidence-list';
+
+export type DisplayConfigEntry = {
+  path: string;
+  presentation: FieldPresentation;
+};
+
+export type DisplayConfig = {
+  properties: Record<string, DisplayConfigEntry>;
+};
+
 export type RenderNode =
   | {
       kind: 'object';
       label: string;
       path?: string;
       description?: string;
+      presentation?: FieldPresentation;
       children: RenderNode[];
       validationIssues: ValidationIssue[];
     }
@@ -45,6 +57,7 @@ export type RenderNode =
       label: string;
       path?: string;
       description?: string;
+      presentation?: FieldPresentation;
       items: RenderNode[];
       validationIssues: ValidationIssue[];
     }
@@ -53,6 +66,7 @@ export type RenderNode =
       label: string;
       path?: string;
       description?: string;
+      presentation?: FieldPresentation;
       value: unknown;
       type?: string;
       enumValues?: unknown[];
@@ -63,6 +77,7 @@ export type RenderNode =
       label: string;
       path?: string;
       description?: string;
+      presentation?: FieldPresentation;
       value: unknown;
       reason: string;
       validationIssues: ValidationIssue[];
