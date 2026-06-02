@@ -473,8 +473,44 @@ ul {
   padding-left: 0.75rem;
 }
 
-.collapsible-node summary {
+.collapsible-node > summary,
+.presentation-field > summary,
+.feedback-history > summary,
+.evidence-card > summary {
+  align-items: center;
   cursor: pointer;
+  display: flex;
+  gap: 0.4rem;
+  list-style: none;
+}
+
+.collapsible-node > summary::-webkit-details-marker,
+.presentation-field > summary::-webkit-details-marker,
+.feedback-history > summary::-webkit-details-marker,
+.evidence-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-node > summary::before,
+.presentation-field > summary::before,
+.feedback-history > summary::before,
+.evidence-card > summary::before {
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  color: #8a93a0;
+  content: "";
+  flex: 0 0 auto;
+  height: 0;
+  transition: transform 0.15s ease;
+  width: 0;
+}
+
+.collapsible-node[open] > summary::before,
+.presentation-field[open] > summary::before,
+.feedback-history[open] > summary::before,
+.evidence-card[open] > summary::before {
+  transform: rotate(90deg);
 }
 
 .field-heading {
@@ -664,10 +700,6 @@ pre {
   padding-left: 1rem;
 }
 
-.presentation-field summary {
-  cursor: pointer;
-}
-
 .presentation-field summary .field-heading {
   display: inline-flex;
 }
@@ -718,12 +750,10 @@ pre {
 }
 
 .evidence-card-header {
-  align-items: baseline;
+  align-items: center;
   cursor: pointer;
   display: flex;
   gap: 0.5rem;
-  justify-content: space-between;
-  list-style-position: outside;
 }
 
 .evidence-card-header h4 {
@@ -736,6 +766,7 @@ pre {
 .evidence-id {
   color: #aebbd0;
   font-size: 0.75rem;
+  margin-left: auto;
 }
 
 .evidence-field {
@@ -948,10 +979,6 @@ pre {
 .feedback-history {
   border-top: 1px solid #30415f;
   padding-top: 0.5rem;
-}
-
-.feedback-history summary {
-  cursor: pointer;
 }
 
 .history-entry {
