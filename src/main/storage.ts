@@ -164,7 +164,7 @@ export class LocalStorageAdapter implements StorageAdapter {
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
     const project = this.projectPath(assertProjectId(projectId));
-    return readOptionalTextFile(path.join(project, '_prompt.txt'));
+    return readOptionalTextFile(path.join(project, '_prompt.md'));
   }
 
   async getProjectConfig(projectId: string): Promise<Record<string, string>> {
@@ -316,7 +316,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
     const id = assertProjectId(projectId);
-    return this.readOptionalBlob(this.client.getContainerClient(id), '_prompt.txt');
+    return this.readOptionalBlob(this.client.getContainerClient(id), '_prompt.md');
   }
 
   async getProjectConfig(projectId: string): Promise<Record<string, string>> {

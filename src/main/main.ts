@@ -9,6 +9,7 @@ import {
   assertChatCancelResult,
   assertBootstrap,
   assertChatMessage,
+  assertChatHistory,
   assertFeedbackConfig,
   assertFeedbackSubmissionInput,
   assertFeedbackSubmissionResult,
@@ -33,6 +34,7 @@ let bootstrapError: string | undefined;
 let backendKind: AppBootstrap['backendKind'];
 let appConfigValues: Record<string, string> = {};
 let appMcpConfigPath: string | undefined;
+let appPromptPath: string | undefined;
 const agent = new AgentRuntime({ workerPath: path.join(__dirname, '../agent/agent-process.js') });
 
 const initializeBackend = (): void => {
@@ -42,6 +44,7 @@ const initializeBackend = (): void => {
     backendKind = config.backendKind;
     appConfigValues = config.values;
     appMcpConfigPath = path.join(path.dirname(config.appEnvPath), '_mcp.json');
+    appPromptPath = path.join(path.dirname(config.appEnvPath), '_prompt.md');
   } catch (error) {
     bootstrapError = error instanceof ConfigError || error instanceof Error ? error.message : String(error);
     logError('review-assistant.config-error', { message: bootstrapError });
@@ -120,15 +123,19 @@ const registerIpc = (): void => {
     )
   );
   ipcMain.handle('agent:getStatus', async () => agent.getStatus());
-  ipcMain.handle('chat:start', async (event, projectId: unknown, recordId: unknown, message: unknown) => {
+  ipcMain.handle('chat:start', async (event, projectId: unknown, recordId: unknown, message: unknown, history: unknown) => {
     const startedAt = Date.now();
     const validProjectId = projectId === undefined ? undefined : assertProjectId(projectId);
     const validRecordId = recordId === undefined ? undefined : assertRecordId(recordId);
+    const validMessage = assertChatMessage(message);
+    const validHistory = assertChatHistory(history);
     if (validRecordId && !validProjectId) {
       throw new Error('A project must be selected before sending selected record context.');
     }
     const activeStorage = validProjectId ? requireStorage() : storage;
+    const appPrompt = await readOptionalTextFile(appPromptPath);
     const projectPrompt = activeStorage && validProjectId ? await activeStorage.getProjectPrompt(validProjectId) : undefined;
+    const systemPrompt = [appPrompt, projectPrompt].filter((prompt): prompt is string => Boolean(prompt?.trim())).join('\n\n') || undefined;
     const projectConfig = activeStorage && validProjectId ? await activeStorage.getProjectConfig(validProjectId) : {};
     const appMcpConfig = await readOptionalTextFile(appMcpConfigPath);
     const projectMcpConfig = activeStorage && validProjectId ? await activeStorage.getProjectMcpConfig(validProjectId) : undefined;
@@ -140,8 +147,11 @@ const registerIpc = (): void => {
     logInfo('review-assistant.chat-start-context', {
       projectId: validProjectId ?? 'none',
       recordId: validRecordId ?? 'none',
-      messageChars: assertChatMessage(message).length,
-      projectPromptChars: projectPrompt?.length ?? 0,
+      messageChars: validMessage.length,
+      historyMessageCount: validHistory.length,
+      historyChars: validHistory.reduce((total, item) => total + item.content.length, 0),
+      systemPromptSource: appPrompt && projectPrompt ? 'app+project' : projectPrompt ? 'project' : appPrompt ? 'app' : 'none',
+      systemPromptChars: systemPrompt?.length ?? 0,
       toolCount: toolList.length,
       tools: toolList.map((tool) => tool.name).join(',') || 'none',
       externalMcpServers: mcpServers.map((server) => server.id).join(',') || 'none',
@@ -150,10 +160,11 @@ const registerIpc = (): void => {
     try {
       return await agent.start(
         {
-          message: assertChatMessage(message),
+          message: validMessage,
+          history: validHistory,
           projectId: validProjectId,
           recordId: validRecordId,
-          projectPrompt,
+          systemPrompt,
           tools: toolList,
           mcpServers
         },

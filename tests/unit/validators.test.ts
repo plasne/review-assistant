@@ -4,6 +4,7 @@ import {
   assertBootstrap,
   assertChatStreamChunk,
   assertChatStreamStart,
+  assertChatHistory,
   assertChatMessage,
   assertNewProjectId,
   assertOpenProjectResult,
@@ -29,6 +30,34 @@ describe('IPC boundary validators', () => {
     expect(assertChatMessage('review this')).toBe('review this');
     expect(() => assertChatMessage('')).toThrow('Chat message must be non-empty');
     expect(() => assertChatMessage('x'.repeat(20001))).toThrow('Chat message must be non-empty');
+  });
+
+  it('validates bounded user and assistant chat history for provider context', () => {
+    expect(
+      assertChatHistory([
+        { id: 'user-1', role: 'user', content: 'search for "configuration management"', createdAt: '2026-06-02T12:00:00.000Z' },
+        {
+          id: 'assistant-1',
+          role: 'assistant',
+          content: 'Found vinsol/nectarcommerce README.md.',
+          createdAt: '2026-06-02T12:00:01.000Z'
+        }
+      ])
+    ).toEqual([
+      { id: 'user-1', role: 'user', content: 'search for "configuration management"', createdAt: '2026-06-02T12:00:00.000Z' },
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        content: 'Found vinsol/nectarcommerce README.md.',
+        createdAt: '2026-06-02T12:00:01.000Z'
+      }
+    ]);
+    expect(() =>
+      assertChatHistory([{ id: 'pending', role: 'assistant', content: '', createdAt: '2026-06-02T12:00:02.000Z' }])
+    ).toThrow('Chat history messages must be non-empty');
+    expect(() =>
+      assertChatHistory([{ id: 'system-1', role: 'system', content: 'Provider error', createdAt: '2026-06-02T12:00:02.000Z' }])
+    ).toThrow('Chat history can only include user and assistant messages');
   });
 
   it('validates response shapes that cross preload and IPC boundaries', () => {

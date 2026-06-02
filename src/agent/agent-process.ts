@@ -8,6 +8,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type {
   AgentErrorEnvelope,
   AgentStatusSnapshot,
+  ChatMessage,
   ExternalMcpServerConfig,
   LocalToolMetadata,
   ToolInvocationRequest,
@@ -16,9 +17,10 @@ import type {
 
 type ChatContext = {
   message: string;
+  history?: ChatMessage[];
   projectId?: string;
   recordId?: string;
-  projectPrompt?: string;
+  systemPrompt?: string;
   tools: LocalToolMetadata[];
   mcpServers?: ExternalMcpServerConfig[];
 };
@@ -46,6 +48,9 @@ type WorkerRequest =
     };
 
 const MAX_PROMPT_CHARS = 120000;
+const MAX_HISTORY_MESSAGES = 20;
+const MAX_HISTORY_CHARS = 40000;
+const MAX_HISTORY_MESSAGE_CHARS = 8000;
 const TOOL_SERVER_NAME = 'review_assistant';
 const provider = { id: 'github-copilot' as const, name: 'GitHub Copilot' };
 let active:
@@ -256,15 +261,11 @@ const killProcessGroup = (child: ChildProcessWithoutNullStreams): void => {
 
 const buildPrompt = (context: ChatContext): string => {
   const parts = [
-    'You are GitHub Copilot helping review inference records in Review Assistant.',
-    'Answer the user using only the supplied project prompt and Review Assistant local tools. Do not access files or infer hidden data.',
-    'Use the readRecord tool when the user asks about the displayed record. Use listTools when the user asks which Review Assistant tools are available.',
-    'Call readRecord before answering questions about record contents. If no record is displayed, readRecord returns a no-record response.',
+    context.systemPrompt ? `System prompt:\n${context.systemPrompt}` : 'System prompt: none',
     context.projectId
       ? `Selected project: ${context.projectId}`
       : 'Selected project: none. No project prompt, selected record, or project-scoped tools are available for this request.',
     context.recordId ? `Selected record: ${context.recordId}` : 'Selected record: none',
-    context.projectPrompt ? `Project prompt:\n${context.projectPrompt}` : 'Project prompt: none',
     `Review Assistant tools:\n${JSON.stringify(
       context.tools.map(({ name, description, source, pluginId }) => ({
         name,
@@ -283,9 +284,46 @@ const buildPrompt = (context: ChatContext): string => {
       null,
       2
     )}`,
+    `Conversation so far:\n${formatHistory(context.history ?? [])}`,
     `User message:\n${context.message}`
   ];
   return parts.join('\n\n');
+};
+
+const formatHistory = (history: ChatMessage[]): string => {
+  const eligible = history.filter((message) => (message.role === 'user' || message.role === 'assistant') && message.content.trim() !== '');
+  const recent = eligible.slice(-MAX_HISTORY_MESSAGES);
+  const selected: ChatMessage[] = [];
+  let remaining = MAX_HISTORY_CHARS;
+  for (const message of recent.slice().reverse()) {
+    const content = truncateText(message.content.trim(), MAX_HISTORY_MESSAGE_CHARS);
+    const chars = content.length;
+    if (chars > remaining && selected.length > 0) {
+      break;
+    }
+    selected.push({ ...message, content: truncateText(content, remaining) });
+    remaining -= Math.min(chars, remaining);
+    if (remaining <= 0) {
+      break;
+    }
+  }
+  if (selected.length === 0) {
+    return 'none';
+  }
+  return selected
+    .reverse()
+    .map((message) => `${message.role}: ${message.content}`)
+    .join('\n\n');
+};
+
+const truncateText = (value: string, maxChars: number): string => {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  if (maxChars <= 12) {
+    return value.slice(0, Math.max(0, maxChars));
+  }
+  return `${value.slice(0, maxChars - 12)}\n[truncated]`;
 };
 
 type ActiveMcpConfig = {
@@ -307,12 +345,16 @@ const createMcpConfig = async (
   const startedAt = Date.now();
   const token = randomUUID();
   const serverPath = path.join(tempDir, 'review-assistant-mcp-server.mjs');
+  const externalProxyPath = path.join(tempDir, 'external-mcp-proxy.mjs');
   const configPath = path.join(tempDir, 'mcp-config.json');
 
   let server: net.Server | undefined;
   let port: number | undefined;
-  if (tools.length > 0) {
+  if (tools.length > 0 || externalServers.length > 0) {
     await fs.writeFile(serverPath, MCP_SERVER_SCRIPT);
+    if (externalServers.length > 0) {
+      await fs.writeFile(externalProxyPath, EXTERNAL_MCP_PROXY_SCRIPT);
+    }
     const localServer = net.createServer((socket) => {
       let buffer = '';
       socket.setEncoding('utf8');
@@ -369,10 +411,18 @@ const createMcpConfig = async (
             externalServers.map((external) => [
               external.id,
               {
-                command: external.command,
-                args: external.args,
+                command: process.execPath,
+                args: [externalProxyPath],
                 ...(external.timeout === undefined ? {} : { timeout: external.timeout }),
-                ...(external.env === undefined ? {} : { env: external.env })
+                env: {
+                  ...(external.env ?? {}),
+                  REVIEW_ASSISTANT_TOOL_HOST: '127.0.0.1',
+                  REVIEW_ASSISTANT_TOOL_PORT: String(port),
+                  REVIEW_ASSISTANT_TOOL_TOKEN: token,
+                  REVIEW_ASSISTANT_EXTERNAL_MCP_ID: external.id,
+                  REVIEW_ASSISTANT_EXTERNAL_MCP_COMMAND: external.command,
+                  REVIEW_ASSISTANT_EXTERNAL_MCP_ARGS_JSON: JSON.stringify(external.args)
+                }
               }
             ])
           )
@@ -644,6 +694,174 @@ async function bridgeLog(event, fields) {
 const send = (message) => {
   process.stdout.write(JSON.stringify(message) + '\n');
 };
+`;
+
+const EXTERNAL_MCP_PROXY_SCRIPT = String.raw`import { spawn } from 'node:child_process';
+import net from 'node:net';
+
+const serverId = process.env.REVIEW_ASSISTANT_EXTERNAL_MCP_ID || 'unknown';
+const command = process.env.REVIEW_ASSISTANT_EXTERNAL_MCP_COMMAND || '';
+const args = JSON.parse(process.env.REVIEW_ASSISTANT_EXTERNAL_MCP_ARGS_JSON || '[]');
+const host = process.env.REVIEW_ASSISTANT_TOOL_HOST || '127.0.0.1';
+const port = Number(process.env.REVIEW_ASSISTANT_TOOL_PORT);
+const token = process.env.REVIEW_ASSISTANT_TOOL_TOKEN || '';
+const pending = new Map();
+let logQueue = Promise.resolve();
+let outputQueue = Promise.resolve();
+let inbound = '';
+let outbound = '';
+
+if (!command) {
+  queueBridgeLog('review-assistant.external-mcp-proxy-error', { serverId, message: 'Missing external MCP command.' });
+  process.exit(1);
+}
+
+queueBridgeLog('review-assistant.external-mcp-started', { serverId, argCount: args.length });
+
+const child = spawn(command, args, {
+  stdio: ['pipe', 'pipe', 'pipe'],
+  env: { ...process.env }
+});
+
+process.stdin.on('data', (chunk) => {
+  inbound += chunk.toString('utf8');
+  processInbound();
+  child.stdin.write(chunk);
+});
+process.stdin.on('end', () => child.stdin.end());
+
+child.stdout.on('data', (chunk) => {
+  outputQueue = outputQueue.then(async () => {
+    const priorLogQueue = logQueue;
+    outbound += chunk.toString('utf8');
+    processOutbound();
+    if (logQueue !== priorLogQueue) {
+      await logQueue;
+    }
+    process.stdout.write(chunk);
+  });
+});
+
+child.stderr.on('data', (chunk) => {
+  process.stderr.write(chunk);
+  queueBridgeLog('review-assistant.external-mcp-stderr', { serverId, chars: chunk.toString('utf8').length });
+});
+
+child.once('error', async (error) => {
+  queueBridgeLog('review-assistant.external-mcp-error', { serverId, message: error.message });
+  await logQueue;
+  process.exit(1);
+});
+
+child.once('close', async (code, signal) => {
+  await outputQueue;
+  queueBridgeLog('review-assistant.external-mcp-closed', { serverId, code: code ?? 'none', signal: signal ?? 'none' });
+  await logQueue;
+  process.exit(code ?? 0);
+});
+
+function processInbound() {
+  for (const message of consumeJsonLines('inbound')) {
+    if (message?.id === undefined || typeof message?.method !== 'string') {
+      continue;
+    }
+    const id = String(message.id);
+    if (message.method === 'tools/list') {
+      pending.set(id, { method: 'tools/list', startedAt: Date.now() });
+      queueBridgeLog('review-assistant.external-mcp-tools-list-started', { serverId });
+    }
+    if (message.method === 'tools/call') {
+      const tool = typeof message.params?.name === 'string' ? message.params.name : 'unknown';
+      pending.set(id, { method: 'tools/call', tool, startedAt: Date.now() });
+      queueBridgeLog('review-assistant.external-mcp-tool-call-started', { serverId, tool });
+    }
+  }
+}
+
+function processOutbound() {
+  for (const message of consumeJsonLines('outbound')) {
+    if (message?.id === undefined) {
+      continue;
+    }
+    const id = String(message.id);
+    const pendingRequest = pending.get(id);
+    if (!pendingRequest) {
+      continue;
+    }
+    pending.delete(id);
+    const elapsedMs = Date.now() - pendingRequest.startedAt;
+    if (pendingRequest.method === 'tools/list') {
+      const tools = Array.isArray(message.result?.tools) ? message.result.tools : [];
+      queueBridgeLog('review-assistant.external-mcp-tools-list-completed', {
+        serverId,
+        toolCount: tools.length,
+        tools: tools.map((tool) => tool?.name).filter((name) => typeof name === 'string').join(',') || 'none',
+        ok: !message.error,
+        elapsedMs
+      });
+      continue;
+    }
+    if (pendingRequest.method === 'tools/call') {
+      const content = Array.isArray(message.result?.content) ? message.result.content : [];
+      const textChars = content.reduce((sum, item) => sum + (typeof item?.text === 'string' ? item.text.length : 0), 0);
+      queueBridgeLog('review-assistant.external-mcp-tool-call-completed', {
+        serverId,
+        tool: pendingRequest.tool,
+        ok: !message.error && message.result?.isError !== true,
+        isError: Boolean(message.error || message.result?.isError),
+        contentItems: content.length,
+        textChars,
+        hasContent: content.length > 0 || textChars > 0,
+        elapsedMs
+      });
+    }
+  }
+}
+
+function consumeJsonLines(direction) {
+  const source = direction === 'inbound' ? inbound : outbound;
+  const messages = [];
+  let buffer = source;
+  while (true) {
+    const lineEnd = buffer.indexOf('\n');
+    if (lineEnd < 0) {
+      break;
+    }
+    const line = buffer.slice(0, lineEnd).trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) {
+      continue;
+    }
+    try {
+      messages.push(JSON.parse(line));
+    } catch {
+      queueBridgeLog('review-assistant.external-mcp-proxy-parse-error', { serverId, direction });
+    }
+  }
+  if (direction === 'inbound') {
+    inbound = buffer;
+  } else {
+    outbound = buffer;
+  }
+  return messages;
+}
+
+function queueBridgeLog(event, fields) {
+  logQueue = logQueue.then(() => bridgeLog(event, fields));
+}
+
+async function bridgeLog(event, fields) {
+  await new Promise((resolve) => {
+    if (!port || !token) {
+      resolve();
+      return;
+    }
+    const socket = net.createConnection({ host, port }, () => {
+      socket.end(JSON.stringify({ token, type: 'log', event, fields }) + '\n', () => resolve());
+    });
+    socket.once('error', () => resolve());
+  });
+}
 `;
 
 const sendError = (requestId: string, messageId: string | undefined, error: AgentErrorEnvelope): void => {

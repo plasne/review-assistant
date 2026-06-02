@@ -7,6 +7,7 @@ import type {
   AgentProviderMetadata,
   AgentStatusSnapshot,
   ChatCanceled,
+  ChatMessage,
   ChatStreamChunk,
   ChatStreamComplete,
   ChatStreamError,
@@ -20,9 +21,10 @@ import type { LocalToolRuntime } from './tools';
 
 export type ChatContext = {
   message: string;
+  history?: ChatMessage[];
   projectId?: string;
   recordId?: string;
-  projectPrompt?: string;
+  systemPrompt?: string;
   tools: LocalToolMetadata[];
   mcpServers?: ExternalMcpServerConfig[];
 };

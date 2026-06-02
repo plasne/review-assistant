@@ -21,6 +21,7 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 - Preload validates request arguments before invoking allowlisted IPC channels and validates responses/events before exposing them to renderer code.
 - Main validates project identifiers, record identifiers, chat messages, and IPC payloads before crossing into storage or agent orchestration.
 - Storage adapters implement one stable project contract: `listProjects`, `createProject`, `openProject`, `getRecord`, and `getProjectPrompt`.
+- Agent instructions come from `_prompt.md` beside the app `.env`, unless the selected project has its own `_prompt.md`, which fully overrides the app prompt for that request.
 - Local tool responses use `ToolInvocationResponse` with stable `requestId`, `ok`, `result`, and structured `error` fields.
 
 ## Execution Flow
@@ -28,7 +29,7 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 1. The renderer selects a project and record through preload API calls.
 2. Main opens projects and reads records through the configured `StorageAdapter`.
 3. The renderer starts chat by sending the user message plus selected project/record identifiers.
-4. Main assembles project prompt, selected record context identifiers, and local tool metadata.
+4. Main assembles the selected app/project prompt, selected record context identifiers, and local tool metadata.
 5. Main resolves app-level external MCP connectors from `_mcp.json` beside the app `.env` and project-scoped connectors from the selected project's `_mcp.json`, including environment placeholders from app/project configuration.
 6. The agent worker launches GitHub Copilot with an isolated temporary workspace and MCP configuration.
 7. Copilot calls Review Assistant MCP tools when it needs selected record contents and may call allowlisted external MCP tools.

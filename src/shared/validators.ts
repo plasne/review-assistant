@@ -4,6 +4,7 @@ import type {
   AppBootstrap,
   ChatCanceled,
   ChatCancelResult,
+  ChatMessage,
   ChatStreamChunk,
   ChatStreamComplete,
   ChatStreamError,
@@ -61,6 +62,37 @@ export const assertChatMessage = (value: unknown): string => {
     throw new ValidationError('Chat message must be non-empty and under 20,000 characters.');
   }
   return value;
+};
+
+export const assertChatHistory = (value: unknown): ChatMessage[] => {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > 40) {
+    throw new ValidationError('Chat history must be an array with at most 40 messages.');
+  }
+  let totalChars = 0;
+  return value.map((message) => {
+    if (!isRecord(message) || !isString(message.id) || !isString(message.content) || !isString(message.createdAt)) {
+      throw new ValidationError('Invalid chat history message.');
+    }
+    if (message.role !== 'user' && message.role !== 'assistant') {
+      throw new ValidationError('Chat history can only include user and assistant messages.');
+    }
+    if (message.content.trim() === '' || message.content.length > 20000) {
+      throw new ValidationError('Chat history messages must be non-empty and under 20,000 characters.');
+    }
+    totalChars += message.content.length;
+    if (totalChars > 80000) {
+      throw new ValidationError('Chat history must be under 80,000 characters.');
+    }
+    return {
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      createdAt: message.createdAt
+    };
+  });
 };
 
 export const assertProjectSummary = (value: unknown): ProjectSummary => {

@@ -48,7 +48,7 @@ describe('agent runtime streaming pipeline', () => {
           {
             projectId: 'sample-project',
             recordId: 'valid-record',
-            projectPrompt: 'Answer briefly.',
+            systemPrompt: 'Answer briefly.',
             message: 'summarize this record',
             tools: tools.listTools()
           },
@@ -183,6 +183,89 @@ describe('agent runtime streaming pipeline', () => {
                 allowedTools: ['search']
               }
             ]
+          },
+          {
+            chunk: (chunk) => chunks.push(chunk),
+            complete: () => resolve(chunks.map((chunk) => chunk.content).join('')),
+            error: (event) => reject(new Error(event.error.message)),
+            canceled: () => reject(new Error('unexpected cancel'))
+          },
+          createFakeToolRuntime()
+        )
+        .catch(reject);
+    });
+
+    await expect(complete).resolves.toBe('Streamed Copilot response');
+  });
+
+  it('proxies external MCP tool calls while preserving responses', async () => {
+    const chunks: ChatStreamChunk[] = [];
+    const runtime = new AgentRuntime({
+      workerPath,
+      command: process.execPath,
+      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')]
+    });
+    const complete = new Promise<string>((resolve, reject) => {
+      runtime
+        .start(
+          {
+            message: 'call external source',
+            tools: [],
+            mcpServers: [
+              {
+                id: 'source',
+                command: process.execPath,
+                args: [path.resolve('test-fixtures/fake-external-mcp.mjs')],
+                allowedTools: ['search']
+              }
+            ]
+          },
+          {
+            chunk: (chunk) => chunks.push(chunk),
+            complete: () => resolve(chunks.map((chunk) => chunk.content).join('')),
+            error: (event) => reject(new Error(event.error.message)),
+            canceled: () => reject(new Error('unexpected cancel'))
+          },
+          createFakeToolRuntime()
+        )
+        .catch(reject);
+    });
+
+    await expect(complete).resolves.toBe('External result: found 2 fake external matches');
+  });
+
+  it('passes prior search context to follow-up save turns', async () => {
+    const chunks: ChatStreamChunk[] = [];
+    const runtime = new AgentRuntime({
+      workerPath,
+      command: process.execPath,
+      commandArgs: [path.resolve('test-fixtures/fake-copilot.mjs')],
+      commandEnv: { FAKE_COPILOT_REQUIRE_CHAT_HISTORY: '1' }
+    });
+    const complete = new Promise<string>((resolve, reject) => {
+      runtime
+        .start(
+          {
+            projectId: 'sample-project',
+            recordId: 'valid-record',
+            systemPrompt:
+              'Search result persistence: run or re-run the relevant external search if structured result entries are not available before saving. The saved result content should be a relevant excerpt of actual source text returned by the MCP source, long enough to support later fact extraction and review. Do not synthesize provider-specific links from partial metadata.',
+            message: 'put them in turn 1 evidence',
+            history: [
+              {
+                id: 'user-1',
+                role: 'user',
+                content: 'search for "configuration management"',
+                createdAt: '2026-06-02T12:00:00.000Z'
+              },
+              {
+                id: 'assistant-1',
+                role: 'assistant',
+                content: 'Found results: vinsol/nectarcommerce README.md and spryker/spryker-docs llms.txt.',
+                createdAt: '2026-06-02T12:00:01.000Z'
+              }
+            ],
+            tools: []
           },
           {
             chunk: (chunk) => chunks.push(chunk),

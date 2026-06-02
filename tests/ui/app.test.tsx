@@ -117,7 +117,7 @@ describe('review UI', () => {
 
     await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'hello');
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith('sample-project', 'valid-record', 'hello'));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith('sample-project', 'valid-record', 'hello', []));
     act(() => {
       listeners.chunk.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1', content: 'Streamed ' }));
       listeners.chunk.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1', content: 'response' }));
@@ -162,7 +162,7 @@ describe('review UI', () => {
     await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'who is the persona?');
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith('sample-project', 'valid-record', 'who is the persona?'));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith('sample-project', 'valid-record', 'who is the persona?', []));
   });
 
   it('blocks browsing and shows configuration errors', async () => {
@@ -249,7 +249,7 @@ describe('review UI', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'general question'));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'general question', []));
   });
 
   it('renders assistant markdown tables and inline formatting', async () => {
@@ -281,6 +281,77 @@ describe('review UI', () => {
     expect(screen.getByText('readRecord', { selector: 'code' })).toBeInTheDocument();
   });
 
+  it('sends prior chat turns so follow-up save requests can reuse search context', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [{ id: 'valid-record', displayName: 'valid-record' }]
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'valid-record',
+      displayName: 'valid-record',
+      data: { question: 'How?' },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        children: [{ kind: 'value', label: 'question', value: 'How?', validationIssues: [] }],
+        validationIssues: []
+      }
+    });
+    vi.mocked(api.startChat)
+      .mockResolvedValueOnce({ requestId: 'request-1', messageId: 'assistant-1' })
+      .mockResolvedValueOnce({ requestId: 'request-2', messageId: 'assistant-2' });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+    await screen.findByText('How?');
+
+    await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'search for "configuration management"');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() =>
+      expect(api.startChat).toHaveBeenNthCalledWith(1, 'sample-project', 'valid-record', 'search for "configuration management"', [])
+    );
+    act(() => {
+      listeners.chunk.forEach((listener) =>
+        listener({
+          requestId: 'request-1',
+          messageId: 'assistant-1',
+          content: 'Found results: vinsol/nectarcommerce README.md and spryker/spryker-docs llms.txt.'
+        })
+      );
+      listeners.complete.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1' }));
+    });
+    expect(await screen.findByText(/vinsol\/nectarcommerce/)).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'put them in turn 1 evidence');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(screen.getByText(/vinsol\/nectarcommerce/).closest('article')).not.toHaveClass('pending');
+    expect((await screen.findByText('Working')).closest('article')).toHaveClass('pending');
+    await waitFor(() =>
+      expect(api.startChat).toHaveBeenNthCalledWith(
+        2,
+        'sample-project',
+        'valid-record',
+        'put them in turn 1 evidence',
+        expect.arrayContaining([
+          expect.objectContaining({ role: 'user', content: 'search for "configuration management"' }),
+          expect.objectContaining({ role: 'assistant', content: expect.stringContaining('vinsol/nectarcommerce') })
+        ])
+      )
+    );
+  });
+
   it('sends with Enter and preserves new lines with Shift+Enter', async () => {
     vi.mocked(api.getBootstrap).mockResolvedValue({
       backendKind: 'local',
@@ -296,7 +367,7 @@ describe('review UI', () => {
     expect(api.startChat).not.toHaveBeenCalled();
 
     await userEvent.type(input, '{Enter}');
-    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'line one\nline two'));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'line one\nline two', []));
     expect(input).toHaveValue('');
   });
 
@@ -323,12 +394,127 @@ describe('review UI', () => {
 
     const working = await screen.findByText('Working');
     expect(working.closest('article')).toHaveClass('pending');
+    expect(screen.getByRole('status')).toHaveTextContent('Agent is still running...');
     await waitFor(() => expect(messages.scrollTop).toBe(500));
 
     act(() => {
       resolveStart({ requestId: 'request-1', messageId: 'assistant-1' });
     });
-    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'slow answer'));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'slow answer', []));
+    act(() => {
+      listeners.chunk.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1', content: 'Partial answer' }));
+    });
+    expect(await screen.findByText('Partial answer')).toBeInTheDocument();
+    expect(screen.getByText('Partial answer').closest('article')).toHaveClass('pending');
+    expect(screen.getByRole('status')).toHaveTextContent('Agent is still running...');
+    act(() => {
+      listeners.complete.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1' }));
+    });
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+  });
+
+  it('refreshes the selected record after an agent run completes', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [{ id: 'valid-record', displayName: 'valid-record' }]
+    });
+    vi.mocked(api.getRecord)
+      .mockResolvedValueOnce({
+        projectId: 'sample-project',
+        recordId: 'valid-record',
+        displayName: 'valid-record',
+        data: { answer: 'Before agent save' },
+        schema: {},
+        validationIssues: [],
+        renderTree: {
+          kind: 'object',
+          label: 'record',
+          children: [{ kind: 'value', label: 'answer', value: 'Before agent save', validationIssues: [] }],
+          validationIssues: []
+        }
+      })
+      .mockResolvedValueOnce({
+        projectId: 'sample-project',
+        recordId: 'valid-record',
+        displayName: 'valid-record',
+        data: { answer: 'After agent save' },
+        schema: {},
+        validationIssues: [],
+        renderTree: {
+          kind: 'object',
+          label: 'record',
+          children: [{ kind: 'value', label: 'answer', value: 'After agent save', validationIssues: [] }],
+          validationIssues: []
+        }
+      });
+    vi.mocked(api.startChat).mockResolvedValue({ requestId: 'request-1', messageId: 'assistant-1' });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+    expect(await screen.findByText('Before agent save')).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'put search results in evidence');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled());
+
+    act(() => {
+      listeners.complete.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1' }));
+    });
+
+    await waitFor(() => expect(api.getRecord).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('After agent save')).toBeInTheDocument();
+  });
+
+  it('renders URL string fields as links in record details', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [{ id: 'valid-record', displayName: 'valid-record' }]
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'valid-record',
+      displayName: 'valid-record',
+      data: { uri: 'https://github.com/n0xa/m5stick-nemo/blob/main/PLAN.md' },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        children: [
+          {
+            kind: 'value',
+            label: 'uri',
+            path: '/uri',
+            value: 'https://github.com/n0xa/m5stick-nemo/blob/main/PLAN.md',
+            validationIssues: []
+          }
+        ],
+        validationIssues: []
+      }
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+
+    expect(await screen.findByRole('link', { name: 'https://github.com/n0xa/m5stick-nemo/blob/main/PLAN.md' })).toHaveAttribute(
+      'href',
+      'https://github.com/n0xa/m5stick-nemo/blob/main/PLAN.md'
+    );
   });
 
   it('preserves chat history across project changes and clears it only on request', async () => {

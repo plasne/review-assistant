@@ -261,6 +261,11 @@ export type Api = {
   getProjectUser: (projectId: string) => Promise<ProjectUser>;
   submitFeedback: (projectId: string, recordId: string, input: FeedbackSubmissionInput) => Promise<FeedbackSubmissionResult>;
   getAgentStatus: () => Promise<AgentStatusSnapshot>;
-  startChat: (projectId: string | undefined, recordId: string | undefined, message: string) => Promise<ChatStreamStartResult>;
+  startChat: (
+    projectId: string | undefined,
+    recordId: string | undefined,
+    message: string,
+    history?: ChatMessage[]
+  ) => Promise<ChatStreamStartResult>;
   cancelChat: (requestId: string) => Promise<ChatCancelResult>;
 } & ChatStreamEventHandlers;

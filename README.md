@@ -20,6 +20,12 @@ npm run check
 
 Individual gates are `lint`, `typecheck`, `test:unit`, `test:integration`, `test:ui`, `test:e2e`, and `smoke`.
 
+## Agent prompts
+
+Place `_prompt.md` next to the app `.env` to define the default agent instructions. A project can provide its own `_prompt.md`; when present, the project prompt fully overrides the app prompt for chat requests in that project.
+
+The generated request still appends the current project, selected record, local Review Assistant tools, plugins, and external MCP server metadata after the selected prompt.
+
 ## External MCP connectors
 
 Drop an `_mcp.json` file next to the app `.env` to define MCP sources shared by all projects, or into a project to define project-specific sources. The file uses the standard `mcpServers` shape and can contain as many servers as needed:

@@ -46,10 +46,20 @@ const App = () => {
   const columnsRef = useRef<HTMLElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const activeRequestIdRef = useRef<string | undefined>(undefined);
+  const selectedProjectIdRef = useRef('');
+  const selectedRecordIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     activeRequestIdRef.current = activeRequestId;
   }, [activeRequestId]);
+
+  useEffect(() => {
+    selectedProjectIdRef.current = selectedProjectId;
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    selectedRecordIdRef.current = record?.recordId;
+  }, [record?.recordId]);
 
   useEffect(() => {
     const messagesElement = messagesRef.current;
@@ -85,6 +95,7 @@ const App = () => {
         }
         setChatState('ready');
         setActiveRequestId(undefined);
+        void refreshSelectedRecord();
       }),
       window.reviewAssistant.onChatError((event) => {
         if (activeRequestIdRef.current !== event.requestId) {
@@ -179,6 +190,20 @@ const App = () => {
     try {
       setRecord(await window.reviewAssistant.getRecord(selectedProjectId, recordId));
       setStatus('idle');
+    } catch (caught) {
+      setStatus('error');
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const refreshSelectedRecord = async () => {
+    const projectId = selectedProjectIdRef.current;
+    const recordId = selectedRecordIdRef.current;
+    if (!projectId || !recordId) {
+      return;
+    }
+    try {
+      setRecord(await window.reviewAssistant.getRecord(projectId, recordId));
     } catch (caught) {
       setStatus('error');
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -288,6 +313,7 @@ const App = () => {
     if (!content || chatState === 'streaming' || agentStatus?.availability === 'unavailable' || status === 'loading') {
       return;
     }
+    const chatHistory = messages.filter((message) => (message.role === 'user' || message.role === 'assistant') && message.content.trim() !== '');
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -306,7 +332,7 @@ const App = () => {
     try {
       const chatProjectId = record?.projectId ?? (selectedProjectId || undefined);
       const chatRecordId = record?.recordId;
-      const response = await window.reviewAssistant.startChat(chatProjectId, chatRecordId, content);
+      const response = await window.reviewAssistant.startChat(chatProjectId, chatRecordId, content, chatHistory);
       setActiveRequestId(response.requestId);
       setMessages((current) => current.map((message) => (message.id === assistantMessage.id ? { ...message, id: response.messageId } : message)));
     } catch (caught) {
@@ -355,6 +381,8 @@ const App = () => {
   const agentUnavailable = agentStatus?.availability === 'unavailable';
   const canSendChat = Boolean(chatInput.trim() && chatState !== 'streaming' && !agentUnavailable && status !== 'loading');
   const agentErrorText = agentStatus?.error?.remediation ? `${agentStatus.error.message} ${agentStatus.error.remediation}` : agentStatus?.error?.message;
+  const pendingAssistantMessageId =
+    chatState === 'streaming' ? [...messages].reverse().find((message) => message.role === 'assistant')?.id : undefined;
 
   const resizeColumns = (left: ColumnKey, right: ColumnKey, delta: number) => {
     setColumns((current) => {
@@ -562,11 +590,16 @@ const App = () => {
               </button>
             </div>
           ) : null}
+          {chatState === 'streaming' ? (
+            <div className="agent-running" role="status" aria-live="polite">
+              Agent is still running...
+            </div>
+          ) : null}
           <div ref={messagesRef} className="messages" role="region" aria-label="Chat messages" aria-live="polite" tabIndex={0}>
             {messages.map((message) => (
               <article
                 key={message.id}
-                className={`message ${message.role}${message.role === 'assistant' && !message.content && chatState === 'streaming' ? ' pending' : ''}`}
+                className={`message ${message.role}${message.id === pendingAssistantMessageId ? ' pending' : ''}${message.id === pendingAssistantMessageId && !message.content ? ' waiting' : ''}`}
               >
                 <strong>{message.role}</strong>
                 <ChatMessageContent
@@ -1024,7 +1057,7 @@ const RenderTree = ({
     <section className="field">
       <FieldHeading label={node.label} description={node.description} />
       {issues}
-      {node.enumValues ? <EnumValue node={node} /> : <output>{formatValue(node.value)}</output>}
+      {node.enumValues ? <EnumValue node={node} /> : <ValueOutput value={node.value} />}
       <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
     </section>
   );
@@ -1037,6 +1070,29 @@ const FieldHeading = ({ label, description, meta }: { label: string; description
     {meta ? <span className="field-meta">{meta}</span> : null}
   </h3>
 );
+
+const ValueOutput = ({ value }: { value: unknown }) => {
+  const formatted = formatValue(value);
+  if (typeof value === 'string' && isHttpUrl(value)) {
+    return (
+      <output>
+        <a href={value} target="_blank" rel="noreferrer">
+          {formatted}
+        </a>
+      </output>
+    );
+  }
+  return <output>{formatted}</output>;
+};
+
+const isHttpUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
 
 const FeedbackPanel = ({
   node,

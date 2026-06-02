@@ -33,6 +33,10 @@ describe('local storage adapter', () => {
     expect(detail.renderTree.kind).toBe('object');
   });
 
+  it('loads project-level markdown prompts', async () => {
+    await expect(adapter.getProjectPrompt('sample-project')).resolves.toBe('You are a concise review assistant.\n');
+  });
+
   it('rejects path traversal through IPC-facing identifiers', async () => {
     await expect(adapter.openProject('../sample-project')).rejects.toThrow('Invalid project identifier');
     await expect(adapter.getRecord('sample-project', '../valid-record')).rejects.toThrow('Invalid record identifier');

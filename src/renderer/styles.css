@@ -239,6 +239,16 @@ section:focus-visible,
   overflow: hidden;
 }
 
+.agent-running {
+  background: #27344d;
+  border: 1px solid #8bd3ff;
+  border-radius: 0.5rem;
+  color: #e8f6ff;
+  flex-shrink: 0;
+  margin-bottom: 0.75rem;
+  padding: 0.6rem 0.75rem;
+}
+
 .column-resizer {
   align-self: stretch;
   background: #30415f;
@@ -412,6 +422,14 @@ pre {
   white-space: pre-wrap;
 }
 
+.field output a,
+.message-content a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.15em;
+}
+
 .feedback-panel {
   background: #13243a;
   border: 1px solid #30415f;
@@ -546,7 +564,7 @@ pre {
   color: #fff4d6;
 }
 
-.message.assistant.pending .message-content p::after {
+.message.assistant.waiting .message-content p::after {
   content: "";
   animation: pending-dots 1.4s steps(3, end) infinite;
 }
