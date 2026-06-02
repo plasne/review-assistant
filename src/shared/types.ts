@@ -103,6 +103,7 @@ export type RecordDetail = {
 };
 
 export type FeedbackMode = 'none' | 'good_fair_bad' | 'thumbs' | 'stars_5';
+export type FeedbackEditMode = 'none' | 'logged' | 'inline';
 
 export type FeedbackTarget = {
   path: string;
@@ -114,7 +115,7 @@ export type FeedbackTarget = {
 export type FeedbackConfigEntry = FeedbackTarget & {
   feedback: FeedbackMode;
   comments: boolean;
-  editable: boolean;
+  editMode: FeedbackEditMode;
 };
 
 export type FeedbackConfig = {

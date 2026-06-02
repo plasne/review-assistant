@@ -8,6 +8,7 @@ import type {
   ContinueWithGitHubResult,
   FeedbackConfig,
   FeedbackConfigEntry,
+  FeedbackEditMode,
   FeedbackEntry,
   FeedbackHistory,
   FeedbackMode,
@@ -17,7 +18,7 @@ import type {
   RecordDetail,
   RenderNode
 } from '../shared/types';
-import { feedbackConfigEntryForPath, FEEDBACK_MODES } from '../shared/feedback';
+import { feedbackConfigEntryForPath, FEEDBACK_EDIT_MODES, FEEDBACK_MODES } from '../shared/feedback';
 import './styles.css';
 
 type Status = 'idle' | 'loading' | 'error';
@@ -44,6 +45,7 @@ const App = () => {
   const [newProjectId, setNewProjectId] = useState('');
   const [isCreateProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [isFeedbackConfigOpen, setFeedbackConfigOpen] = useState(false);
+  const [showExtraSchemaFields, setShowExtraSchemaFields] = useState(false);
   const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState<string | undefined>();
   const [columns, setColumns] = useState({ records: 22, details: 48, chat: 30 });
@@ -415,7 +417,7 @@ const App = () => {
 
   const selectedRecordId = record?.recordId;
   const records = project?.records ?? [];
-  const title = useMemo(() => (project ? `${project.project.name} records` : 'Select a project'), [project]);
+  const title = useMemo(() => (project ? 'records' : 'Select a project'), [project]);
   const agentUnavailable = agentStatus?.availability === 'unavailable';
   const agentAuthRequired = agentUnavailable && agentStatus?.error?.code === 'AUTH_REQUIRED';
   const canSendChat = Boolean(chatInput.trim() && chatState !== 'streaming' && !agentUnavailable && status !== 'loading');
@@ -605,10 +607,26 @@ const App = () => {
         />
 
         <section className="column details" aria-labelledby="details-heading" tabIndex={0}>
-          <h2 id="details-heading">Record details</h2>
+          <div className="details-header">
+            <h2 id="details-heading">Record details</h2>
+            <label className="details-toggle">
+              <input
+                type="checkbox"
+                checked={showExtraSchemaFields}
+                onChange={(event) => setShowExtraSchemaFields(event.target.checked)}
+              />
+              Show fields not in schema
+            </label>
+          </div>
           {status === 'loading' ? <p aria-live="polite">Loading...</p> : null}
           {record ? (
-            <RecordDetails record={record} feedbackConfig={feedbackConfig} projectUser={projectUser} onSubmitFeedback={submitFeedback} />
+            <RecordDetails
+              record={record}
+              feedbackConfig={feedbackConfig}
+              projectUser={projectUser}
+              showExtraSchemaFields={showExtraSchemaFields}
+              onSubmitFeedback={submitFeedback}
+            />
           ) : (
             <p className="empty">Choose a record to inspect read-only details.</p>
           )}
@@ -963,14 +981,19 @@ const FeedbackConfigTable = ({ config, onChange }: { config: FeedbackConfig; onC
                   onChange={(event) => updateEntry(entry.path, { comments: event.target.checked })}
                 />
               </td>
-              <td className="checkbox-cell">
-                <input
+              <td>
+                <select
                   aria-label={`${entry.target} editable`}
-                  type="checkbox"
                   disabled={!entry.supportsEdit}
-                  checked={entry.editable}
-                  onChange={(event) => updateEntry(entry.path, { editable: entry.supportsEdit && event.target.checked })}
-                />
+                  value={entry.editMode}
+                  onChange={(event) => updateEntry(entry.path, { editMode: entry.supportsEdit ? (event.target.value as FeedbackEditMode) : 'none' })}
+                >
+                  {FEEDBACK_EDIT_MODES.map((mode) => (
+                    <option key={mode} value={mode}>
+                      {mode}
+                    </option>
+                  ))}
+                </select>
               </td>
             </tr>
           ))}
@@ -984,11 +1007,13 @@ const RecordDetails = ({
   record,
   feedbackConfig,
   projectUser,
+  showExtraSchemaFields,
   onSubmitFeedback
 }: {
   record: RecordDetail;
   feedbackConfig: FeedbackConfig | undefined;
   projectUser: ProjectUser | undefined;
+  showExtraSchemaFields: boolean;
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
 }) => (
   <div>
@@ -1011,6 +1036,7 @@ const RecordDetails = ({
       feedbackConfig={feedbackConfig}
       history={record.feedbackHistory ?? {}}
       projectUser={projectUser}
+      showExtraSchemaFields={showExtraSchemaFields}
       onSubmitFeedback={onSubmitFeedback}
     />
   </div>
@@ -1021,32 +1047,44 @@ const RenderTreeRoot = ({
   feedbackConfig,
   history,
   projectUser,
+  showExtraSchemaFields,
   onSubmitFeedback
 }: {
   node: RenderNode;
   feedbackConfig?: FeedbackConfig;
   history: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
+  showExtraSchemaFields: boolean;
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
 }) => {
   if (node.kind === 'object') {
     return (
       <>
         {node.description ? <p>{node.description}</p> : null}
-        {node.children.map((child) => (
+        {visibleRenderNodes(node.children, showExtraSchemaFields).map((child) => (
           <RenderTree
             key={child.path ?? child.label}
             node={child}
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
+            showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
           />
         ))}
       </>
     );
   }
-  return <RenderTree node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />;
+  return (
+    <RenderTree
+      node={node}
+      feedbackConfig={feedbackConfig}
+      history={history}
+      projectUser={projectUser}
+      showExtraSchemaFields={showExtraSchemaFields}
+      onSubmitFeedback={onSubmitFeedback}
+    />
+  );
 };
 
 const RenderTree = ({
@@ -1055,6 +1093,7 @@ const RenderTree = ({
   feedbackConfig,
   history,
   projectUser,
+  showExtraSchemaFields = true,
   onSubmitFeedback
 }: {
   node: RenderNode;
@@ -1062,6 +1101,7 @@ const RenderTree = ({
   feedbackConfig?: FeedbackConfig;
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
+  showExtraSchemaFields?: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
 }) => {
   const issues = node.validationIssues.length > 0 ? (
@@ -1075,6 +1115,8 @@ const RenderTree = ({
   if (node.kind === 'object') {
     if (collapseObject) {
       const identifier = getObjectIdentifier(node);
+      const feedbackNode = { ...node, label: identifier ?? node.label };
+      const historyFeedbackRatings = feedbackRatingsForHistory(node.path ? history?.[node.path] : undefined);
       return (
         <details className="node collapsible-node">
           <summary>
@@ -1082,15 +1124,18 @@ const RenderTree = ({
               {node.description ? <span className="field-description">{node.description}</span> : null}
               <span className="array-item-identifier">{identifier ?? node.label}</span>
             </span>
+            <RatingSummary ratings={historyFeedbackRatings} />
           </summary>
           {issues}
-          {node.children.map((child) => (
+          <FeedbackPanel node={feedbackNode} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+          {visibleRenderNodes(node.children, showExtraSchemaFields).map((child) => (
             <RenderTree
               key={child.path ?? child.label}
               node={child}
               feedbackConfig={feedbackConfig}
               history={history}
               projectUser={projectUser}
+              showExtraSchemaFields={showExtraSchemaFields}
               onSubmitFeedback={onSubmitFeedback}
             />
           ))}
@@ -1102,13 +1147,14 @@ const RenderTree = ({
         <FieldHeading label={node.label} description={node.description} />
         {issues}
         <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
-        {node.children.map((child) => (
+        {visibleRenderNodes(node.children, showExtraSchemaFields).map((child) => (
           <RenderTree
             key={child.path ?? child.label}
             node={child}
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
+            showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
           />
         ))}
@@ -1124,6 +1170,7 @@ const RenderTree = ({
           feedbackConfig={feedbackConfig}
           history={history}
           projectUser={projectUser}
+          showExtraSchemaFields={showExtraSchemaFields}
           onSubmitFeedback={onSubmitFeedback}
         />
       );
@@ -1133,7 +1180,7 @@ const RenderTree = ({
         <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
         {issues}
         <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
-        {node.items.map((child) => (
+        {visibleRenderNodes(node.items, showExtraSchemaFields).map((child) => (
           <RenderTree
             key={child.path ?? child.label}
             node={child}
@@ -1141,6 +1188,7 @@ const RenderTree = ({
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
+            showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
           />
         ))}
@@ -1149,20 +1197,31 @@ const RenderTree = ({
   }
   if (node.kind === 'raw') {
     if (isCollapsiblePresentation(node.presentation)) {
+      const extraSchemaField = isExtraSchemaField(node);
       return (
-        <CollapsiblePresentationField node={node}>
-          <p className="raw-reason">{node.reason}</p>
-          <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
+        <CollapsiblePresentationField node={node} meta={extraSchemaField ? '(not in schema)' : undefined}>
+          {extraSchemaField ? null : <p className="raw-reason">{node.reason}</p>}
+          {editModeForNode(node, feedbackConfig) === 'inline' ? (
+            <InlineEditableValue node={node} className={presentationOutputClassName(node.presentation)} />
+          ) : (
+            <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
+          )}
           <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
         </CollapsiblePresentationField>
       );
     }
+    const extraSchemaField = isExtraSchemaField(node);
+    const editMode = editModeForNode(node, feedbackConfig);
     return (
       <section className={fieldClassName(node.presentation)}>
-        <FieldHeading label={node.label} description={node.description} />
+        <FieldHeading label={node.label} description={node.description} meta={extraSchemaField ? '(not in schema)' : undefined} />
         {issues}
-        <p className="raw-reason">{node.reason}</p>
-        <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
+        {extraSchemaField ? null : <p className="raw-reason">{node.reason}</p>}
+        {editMode === 'inline' ? (
+          <InlineEditableValue node={node} className={presentationOutputClassName(node.presentation)} />
+        ) : (
+          <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
+        )}
         <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
       </section>
     );
@@ -1171,16 +1230,29 @@ const RenderTree = ({
     return (
       <CollapsiblePresentationField node={node}>
         {issues}
-        {node.enumValues ? <EnumValue node={node} /> : <output className={presentationOutputClassName(node.presentation)}>{formatValue(node.value)}</output>}
+        {editModeForNode(node, feedbackConfig) === 'inline' ? (
+          <InlineEditableValue node={node} className={presentationOutputClassName(node.presentation)} />
+        ) : node.enumValues ? (
+          <EnumValue node={node} />
+        ) : (
+          <output className={presentationOutputClassName(node.presentation)}>{formatValue(node.value)}</output>
+        )}
         <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
       </CollapsiblePresentationField>
     );
   }
+  const editMode = editModeForNode(node, feedbackConfig);
   return (
     <section className={fieldClassName(node.presentation)}>
       <FieldHeading label={node.label} description={node.description} />
       {issues}
-      {node.enumValues ? <EnumValue node={node} /> : <ValueOutput value={node.value} className={presentationOutputClassName(node.presentation)} />}
+      {editMode === 'inline' ? (
+        <InlineEditableValue node={node} className={presentationOutputClassName(node.presentation)} />
+      ) : node.enumValues ? (
+        <EnumValue node={node} />
+      ) : (
+        <ValueOutput value={node.value} className={presentationOutputClassName(node.presentation)} />
+      )}
       <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
     </section>
   );
@@ -1193,10 +1265,10 @@ const presentationOutputClassName = (presentation: RenderNode['presentation']): 
 
 const isCollapsiblePresentation = (presentation: RenderNode['presentation']): boolean => presentation === 'chat-request' || presentation === 'chat-response';
 
-const CollapsiblePresentationField = ({ node, children }: { node: RenderNode; children: React.ReactNode }) => (
+const CollapsiblePresentationField = ({ node, children, meta }: { node: RenderNode; children: React.ReactNode; meta?: string }) => (
   <details className={fieldClassName(node.presentation)} open>
     <summary>
-      <FieldHeading label={node.label} description={node.description} />
+      <FieldHeading label={node.label} description={node.description} meta={meta} />
     </summary>
     {children}
   </details>
@@ -1208,6 +1280,7 @@ const EvidenceList = ({
   feedbackConfig,
   history,
   projectUser,
+  showExtraSchemaFields,
   onSubmitFeedback
 }: {
   node: Extract<RenderNode, { kind: 'array' }>;
@@ -1215,6 +1288,7 @@ const EvidenceList = ({
   feedbackConfig?: FeedbackConfig;
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
+  showExtraSchemaFields: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
 }) => (
   <section className="node array-node evidence-list">
@@ -1222,7 +1296,7 @@ const EvidenceList = ({
     {issues}
     <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
     <div className="evidence-items">
-      {node.items.map((item, index) =>
+      {visibleRenderNodes(node.items, showExtraSchemaFields).map((item, index) =>
         item.kind === 'object' ? (
           <EvidenceCard
             key={item.path ?? item.label}
@@ -1231,6 +1305,7 @@ const EvidenceList = ({
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
+            showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
           />
         ) : (
@@ -1240,6 +1315,7 @@ const EvidenceList = ({
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
+            showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
           />
         )
@@ -1254,6 +1330,7 @@ const EvidenceCard = ({
   feedbackConfig,
   history,
   projectUser,
+  showExtraSchemaFields,
   onSubmitFeedback
 }: {
   node: Extract<RenderNode, { kind: 'object' }>;
@@ -1261,28 +1338,37 @@ const EvidenceCard = ({
   feedbackConfig?: FeedbackConfig;
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
+  showExtraSchemaFields: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
 }) => {
   const source = evidenceChildText(node, 'source');
   const id = evidenceChildText(node, 'id');
-  const fields = node.children.map((child) => ({ node: child, editable: evidenceFieldIsEditable(child, feedbackConfig) }));
-  const readonlyFields = fields.filter((field) => !field.editable);
-  const editableFields = fields.filter((field) => field.editable);
+  const fields = visibleRenderNodes(node.children, showExtraSchemaFields).map((child) => ({ node: child, editMode: editModeForNode(child, feedbackConfig) }));
+  const readonlyFields = fields.filter((field) => field.editMode === 'none');
+  const editableFields = fields.filter((field) => field.editMode !== 'none');
+  const feedbackNode = { ...node, label: source ?? `Evidence ${index + 1}` };
+  const historyFeedbackRatings = feedbackRatingsForHistory(node.path ? history?.[node.path] : undefined);
   return (
     <details className="evidence-card" open>
       <summary className="evidence-card-header">
-        <h4>{source ?? `Evidence ${index + 1}`}</h4>
+        <span className="evidence-card-title">
+          <h4>{source ?? `Evidence ${index + 1}`}</h4>
+          <RatingSummary ratings={historyFeedbackRatings} />
+        </span>
         {id ? <span className="evidence-id">{id}</span> : null}
       </summary>
+      <FeedbackPanel node={feedbackNode} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
       {readonlyFields.length > 0 ? (
         <dl className="evidence-readonly-grid" aria-label="Read-only evidence fields">
-          {readonlyFields.map(({ node: child }) => (
+          {readonlyFields.map(({ node: child, editMode }) => (
            <EvidenceField
              key={child.path ?? child.label}
              node={child}
+             editMode={editMode}
              feedbackConfig={feedbackConfig}
              history={history}
              projectUser={projectUser}
+             showExtraSchemaFields={showExtraSchemaFields}
              onSubmitFeedback={onSubmitFeedback}
            />
           ))}
@@ -1290,13 +1376,15 @@ const EvidenceCard = ({
       ) : null}
       {editableFields.length > 0 ? (
         <dl className="evidence-editable-fields" aria-label="Editable evidence fields">
-          {editableFields.map(({ node: child }) => (
+          {editableFields.map(({ node: child, editMode }) => (
           <EvidenceField
             key={child.path ?? child.label}
             node={child}
+            editMode={editMode}
             feedbackConfig={feedbackConfig}
             history={history}
             projectUser={projectUser}
+            showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
           />
           ))}
@@ -1308,42 +1396,64 @@ const EvidenceCard = ({
 
 const EvidenceField = ({
   node,
+  editMode,
   feedbackConfig,
   history,
   projectUser,
+  showExtraSchemaFields,
   onSubmitFeedback
 }: {
   node: RenderNode;
+  editMode: FeedbackEditMode;
   feedbackConfig?: FeedbackConfig;
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
+  showExtraSchemaFields: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
 }) => {
-  const editable = evidenceFieldIsEditable(node, feedbackConfig);
   return (
-    <div className={`evidence-field ${editable ? 'editable' : 'readonly'}`}>
+    <div className={`evidence-field ${editMode !== 'none' ? 'editable' : 'readonly'}`}>
       <dt>
         <span>{node.label}</span>
-        <span className={`editability-badge ${editable ? 'editable' : 'readonly'}`}>{editable ? 'Editable' : 'Read-only'}</span>
+        <span className={`editability-badge ${editMode !== 'none' ? 'editable' : 'readonly'}`}>{editabilityLabel(editMode)}</span>
       </dt>
-      {editable ? null : (
+      {editMode === 'logged' ? null : (
         <dd>
-          {node.kind === 'value' || node.kind === 'raw' ? (
+          {editMode === 'inline' && (node.kind === 'value' || node.kind === 'raw') ? (
+            <InlineEditableValue node={node} />
+          ) : node.kind === 'value' || node.kind === 'raw' ? (
             formatValue(node.value)
           ) : (
-            <RenderTree node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+            <RenderTree
+              node={node}
+              feedbackConfig={feedbackConfig}
+              history={history}
+              projectUser={projectUser}
+              showExtraSchemaFields={showExtraSchemaFields}
+              onSubmitFeedback={onSubmitFeedback}
+            />
           )}
         </dd>
       )}
-      <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} showEditDiff={editable} />
+      <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} showEditDiff={editMode === 'logged'} />
     </div>
   );
 };
 
-const evidenceFieldIsEditable = (node: RenderNode, feedbackConfig?: FeedbackConfig): boolean => {
+const editModeForNode = (node: RenderNode, feedbackConfig?: FeedbackConfig): FeedbackEditMode => {
   const config = node.path && feedbackConfig ? feedbackConfigEntryForPath(feedbackConfig, node.path) : undefined;
-  return config?.editable === true;
+  return config?.editMode ?? 'none';
 };
+
+const editabilityLabel = (editMode: FeedbackEditMode): string =>
+  editMode === 'inline' ? 'Inline' : editMode === 'logged' ? 'Logged' : 'Read-only';
+
+const EXTRA_SCHEMA_FIELD_REASON = 'Field is present in data but not declared by schema.';
+
+const isExtraSchemaField = (node: RenderNode): boolean => node.kind === 'raw' && node.reason === EXTRA_SCHEMA_FIELD_REASON;
+
+const visibleRenderNodes = <Node extends RenderNode>(nodes: Node[], showExtraSchemaFields: boolean): Node[] =>
+  showExtraSchemaFields ? nodes : nodes.filter((node) => !isExtraSchemaField(node));
 
 const evidenceChildText = (node: Extract<RenderNode, { kind: 'object' }>, label: string): string | undefined => {
   const child = node.children.find((item) => item.label === label);
@@ -1370,6 +1480,34 @@ const ValueOutput = ({ value, className }: { value: unknown; className?: string 
     );
   }
   return <output className={className}>{formatted}</output>;
+};
+
+const InlineEditableValue = ({ node, className }: { node: Extract<RenderNode, { kind: 'value' | 'raw' }>; className?: string }) => {
+  const initialValue = editableValue(node);
+  const [value, setValue] = useState(initialValue);
+  useEffect(() => {
+    setValue(initialValue);
+  }, [initialValue, node.path]);
+  if (node.kind === 'value' && node.enumValues) {
+    return (
+      <select aria-label={node.label} className="enum-select" value={value} onChange={(event) => setValue(event.target.value)}>
+        {node.enumValues.map((option) => (
+          <option key={enumOptionValue(option)} value={formatValue(option)}>
+            {formatValue(option)}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  return (
+    <textarea
+      aria-label={node.label}
+      className={`inline-edit-value${className ? ` ${className}` : ''}`}
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+      rows={Math.max(2, Math.min(8, value.split(/\r?\n/).length))}
+    />
+  );
 };
 
 const isHttpUrl = (value: string): boolean => {
@@ -1410,7 +1548,7 @@ const FeedbackPanel = ({
     return null;
   }
   const allHistory = collectHistory(nodeHistory);
-  const hasFeedbackControls = config.feedback !== 'none' || config.comments || config.editable;
+  const hasFeedbackControls = config.feedback !== 'none' || config.comments || config.editMode === 'logged';
   const usernameValid = projectUser?.valid === true;
   const showFeedbackControls = hasFeedbackControls && usernameValid;
   if (!showFeedbackControls && allHistory.length === 0) {
@@ -1418,13 +1556,14 @@ const FeedbackPanel = ({
   }
   const editChanged = editValue.trim() !== initialEditValue.trim();
   const canSubmit = Boolean(feedbackValue.trim() || commentValue.trim() || editChanged);
+  const historyFeedbackRatings = feedbackRatingsForCollectedHistory(allHistory);
 
   return (
     <section className="feedback-panel" aria-label={`${node.label} feedback`}>
       {showFeedbackControls && config.feedback !== 'none' ? (
         <FeedbackValueInput mode={config.feedback} label={node.label} value={feedbackValue} onChange={setFeedbackValue} />
       ) : null}
-      {showFeedbackControls && config.editable ? (
+      {showFeedbackControls && config.editMode === 'logged' ? (
         <label className="feedback-input">
           Edit
           <EditInput node={node} value={editValue} onChange={setEditValue} />
@@ -1460,7 +1599,10 @@ const FeedbackPanel = ({
       ) : null}
       {allHistory.length > 0 ? (
         <details className="feedback-history">
-          <summary>History ({allHistory.length})</summary>
+          <summary>
+            <span>History ({allHistory.length})</span>
+            <RatingSummary ratings={historyFeedbackRatings} />
+          </summary>
           {allHistory.map((entry) => (
             <article key={`${entry.timestamp}-${entry.username}-${entry.feedback ?? ''}-${entry.comment ?? ''}-${entry.edit ?? ''}-${entry.original ?? ''}`} className="history-entry">
               {entry.original ? (
@@ -1498,6 +1640,51 @@ const FeedbackPanel = ({
       ) : null}
     </section>
   );
+};
+
+type RatingSummaryItem = { visual: string; accessible: string };
+
+const RatingSummary = ({ ratings }: { ratings: RatingSummaryItem[] }) => {
+  if (ratings.length === 0) {
+    return null;
+  }
+  return (
+    <span className="history-rating-summary" aria-label={`Feedback ratings: ${ratings.map((rating) => rating.accessible).join(', ')}`}>
+      {ratings.map((rating, index) => (
+        <React.Fragment key={`${rating.accessible}-${index}`}>
+          {index > 0 ? (
+            <span className="history-rating-separator" aria-hidden="true">
+              ,
+            </span>
+          ) : null}
+          <span className="history-rating" aria-hidden="true">
+            {rating.visual}
+          </span>
+        </React.Fragment>
+      ))}
+    </span>
+  );
+};
+
+const feedbackRatingsForHistory = (history: FeedbackHistory | undefined): RatingSummaryItem[] =>
+  feedbackRatingsForCollectedHistory(collectHistory(history));
+
+const feedbackRatingsForCollectedHistory = (
+  history: Array<{ username: string; timestamp: string; feedback?: string; comment?: string; edit?: string; original?: string }>
+): RatingSummaryItem[] => history.flatMap((entry) => (entry.feedback ? [feedbackRatingLabel(entry.feedback)] : []));
+
+const feedbackRatingLabel = (value: string): { visual: string; accessible: string } => {
+  if (value === 'thumbs_up' || value === 'up') {
+    return { visual: '👍', accessible: 'thumbs up' };
+  }
+  if (value === 'thumbs_down' || value === 'down') {
+    return { visual: '👎', accessible: 'thumbs down' };
+  }
+  if (/^[1-5]$/.test(value)) {
+    const rating = Number(value);
+    return { visual: '★'.repeat(rating), accessible: `${rating} star${rating === 1 ? '' : 's'}` };
+  }
+  return { visual: value, accessible: value.replace(/_/g, ' ') };
 };
 
 const EditDiff = ({ original, edited }: { original: string; edited: string }) => {
@@ -1602,7 +1789,7 @@ const EditInput = ({ node, value, onChange }: { node: RenderNode; value: string;
   return <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={2} />;
 };
 
-const editableValue = (node: RenderNode): string => (node.kind === 'value' ? formatValue(node.value) : '');
+const editableValue = (node: RenderNode): string => (node.kind === 'value' || node.kind === 'raw' ? formatValue(node.value) : '');
 
 const collectHistory = (
   history: FeedbackHistory | undefined

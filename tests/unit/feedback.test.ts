@@ -42,6 +42,7 @@ describe('feedback helpers', () => {
       { path: '/request', target: 'Request', tab: 'Main', supportsEdit: true },
       { path: '/request/original_query', target: 'Request > Original Query', tab: 'inherit', supportsEdit: true },
       { path: '/evidence', target: 'Evidence', tab: 'Main', supportsEdit: false },
+      { path: '/evidence/*', target: 'Evidence > *', tab: 'inherit', supportsEdit: true },
       { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true },
       { path: '/evidence/*/source', target: 'Evidence > Source', tab: 'inherit', supportsEdit: true }
     ]);
@@ -49,8 +50,8 @@ describe('feedback helpers', () => {
     expect(
       normalizeFeedbackConfig(schema, {
         properties: {
-          '/answer': { path: '/answer', target: 'Answer', tab: 'Review', feedback: 'good_fair_bad', comments: true, editable: true },
-          '/missing': { path: '/missing', target: 'Missing', tab: 'Main', feedback: 'stars_5', comments: true, editable: true }
+          '/answer': { path: '/answer', target: 'Answer', tab: 'Review', feedback: 'good_fair_bad', comments: true, editMode: 'logged' },
+          '/missing': { path: '/missing', target: 'Missing', tab: 'Main', feedback: 'stars_5', comments: true, editMode: 'logged' }
         }
       })
     ).toEqual({
@@ -61,7 +62,7 @@ describe('feedback helpers', () => {
           tab: 'Review',
           feedback: 'good_fair_bad',
           comments: true,
-          editable: true
+          editMode: 'logged'
         })
       })
     });
@@ -70,23 +71,27 @@ describe('feedback helpers', () => {
   it('matches configured array item targets against concrete record paths', () => {
     const config = normalizeFeedbackConfig(schema, {
       properties: {
-        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'Main', feedback: 'thumbs', comments: true, editable: false }
+        '/evidence/*': { path: '/evidence/*', target: 'Evidence > *', tab: 'Main', feedback: 'stars_5', comments: true, editMode: 'none' },
+        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'Main', feedback: 'thumbs', comments: true, editMode: 'none' }
       }
     });
 
+    expect(feedbackConfigEntryForPath(config, '/evidence/0')).toMatchObject({ path: '/evidence/*', feedback: 'stars_5', comments: true });
     expect(feedbackConfigEntryForPath(config, '/evidence/0/id')).toMatchObject({ path: '/evidence/*/id', feedback: 'thumbs', comments: true });
+    expect(feedbackConfigEntryForPath(config, '/evidence/not-a-number')).toBeUndefined();
     expect(feedbackConfigEntryForPath(config, '/evidence/not-a-number/id')).toBeUndefined();
   });
 
   it('does not allow array targets to be configured as editable', () => {
     const config = normalizeFeedbackConfig(schema, {
       properties: {
-        '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', feedback: 'none', comments: false, editable: true }
+        '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', feedback: 'none', comments: false, editMode: 'inline' },
+        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', feedback: 'none', comments: false, editMode: 'inline' }
       }
     });
 
-    expect(config.properties['/evidence']).toMatchObject({ supportsEdit: false, editable: false });
-    expect(config.properties['/evidence/*/id']).toMatchObject({ supportsEdit: true });
+    expect(config.properties['/evidence']).toMatchObject({ supportsEdit: false, editMode: 'none' });
+    expect(config.properties['/evidence/*/id']).toMatchObject({ supportsEdit: true, editMode: 'inline' });
   });
 
   it('validates USERNAME and creates attributed timestamped entries', () => {
@@ -142,10 +147,16 @@ describe('feedback helpers', () => {
   it('extracts feedback history for concrete array item paths from wildcard targets', () => {
     const record: Record<string, unknown> = {
       evidence: [{ id: 'doc-1' }],
+      evidence__0_feedback: [{ feedback: 'fair', comment: 'Partially relevant', username: 'alice@example.com', timestamp: '2026-06-01T14:00:00.000Z' }],
       evidence__0__id_feedback: [{ feedback: 'good', comment: 'Relevant', username: 'alice@example.com', timestamp: '2026-06-01T15:00:00.000Z' }]
     };
 
-    const history = extractFeedbackHistory(record, [{ path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true }]);
+    const history = extractFeedbackHistory(record, [
+      { path: '/evidence/*', target: 'Evidence > *', tab: 'inherit', supportsEdit: true },
+      { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true }
+    ]);
+    expect(history['/evidence/0'].feedback[0]).toMatchObject({ value: 'fair', username: 'alice@example.com' });
+    expect(history['/evidence/0'].comments[0]).toMatchObject({ value: 'Partially relevant', username: 'alice@example.com' });
     expect(history['/evidence/0/id'].feedback[0]).toMatchObject({ value: 'good', username: 'alice@example.com' });
     expect(history['/evidence/0/id'].comments[0]).toMatchObject({ value: 'Relevant', username: 'alice@example.com' });
   });

@@ -1,5 +1,6 @@
 import type {
   FeedbackConfig,
+  FeedbackEditMode,
   FeedbackConfigEntry,
   FeedbackEntry,
   FeedbackHistory,
@@ -10,6 +11,7 @@ import type {
 } from './types';
 
 export const FEEDBACK_MODES: FeedbackMode[] = ['none', 'good_fair_bad', 'thumbs', 'stars_5'];
+export const FEEDBACK_EDIT_MODES: FeedbackEditMode[] = ['none', 'logged', 'inline'];
 export const USERNAME_VALIDATION_MESSAGE = 'USERNAME environment variable not configured. Please set USERNAME in your .env file.';
 
 const FEEDBACK_SUFFIXES = ['_feedback', '_edits', '_comments'];
@@ -89,7 +91,7 @@ export const normalizeFeedbackConfig = (schema: unknown, config: unknown): Feedb
       feedback: current && FEEDBACK_MODES.includes(current.feedback) ? current.feedback : 'none',
       comments: current?.comments === true,
       supportsEdit: target.supportsEdit,
-      editable: target.supportsEdit && current?.editable === true
+      editMode: target.supportsEdit && current && FEEDBACK_EDIT_MODES.includes(current.editMode) ? current.editMode : 'none'
     };
   }
   return { properties };
@@ -201,13 +203,11 @@ const collectTarget = (label: string, schema: JsonSchema, segments: string[], ta
   const path = `/${segments.map((segment) => (segment === ARRAY_ITEM_PATH_SEGMENT ? segment : escapePointer(segment))).join('/')}`;
   const resolved = resolveSchema(schema);
   const type = inferSchemaType(resolved);
-  targets.push({ path, target: segments.filter((segment) => segment !== ARRAY_ITEM_PATH_SEGMENT).map(formatLabel).join(' > '), tab, supportsEdit: type !== 'array' });
+  targets.push({ path, target: formatTarget(segments), tab, supportsEdit: type !== 'array' });
   if (type === 'array') {
     const itemSchema = isSchema(resolved.items) ? resolveSchema(resolved.items) : undefined;
     if (itemSchema && inferSchemaType(itemSchema) === 'object' && isSchemaMap(itemSchema.properties)) {
-      for (const [childLabel, childSchema] of Object.entries(itemSchema.properties)) {
-        collectTarget(childLabel, childSchema, [...segments, ARRAY_ITEM_PATH_SEGMENT, childLabel], targets, 'inherit');
-      }
+      collectTarget(ARRAY_ITEM_PATH_SEGMENT, itemSchema, [...segments, ARRAY_ITEM_PATH_SEGMENT], targets, 'inherit');
     }
     return;
   }
@@ -233,7 +233,7 @@ const readConfigEntries = (config: unknown): Record<string, FeedbackConfigEntry>
           supportsEdit: entry.supportsEdit !== false,
           feedback: FEEDBACK_MODES.includes(entry.feedback as FeedbackMode) ? (entry.feedback as FeedbackMode) : 'none',
           comments: entry.comments === true,
-          editable: entry.editable === true
+          editMode: FEEDBACK_EDIT_MODES.includes(entry.editMode as FeedbackEditMode) ? (entry.editMode as FeedbackEditMode) : 'none'
         }
       ])
   );
@@ -409,6 +409,12 @@ const formatLabel = (value: string): string =>
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+
+const formatTarget = (segments: string[]): string =>
+  segments
+    .filter((segment, index) => segment !== ARRAY_ITEM_PATH_SEGMENT || index === segments.length - 1)
+    .map((segment) => (segment === ARRAY_ITEM_PATH_SEGMENT ? ARRAY_ITEM_PATH_SEGMENT : formatLabel(segment)))
+    .join(' > ');
 
 const sanitizeFeedbackSegment = (value: string): string => value.replace(/[^a-zA-Z0-9-]/g, '_');
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

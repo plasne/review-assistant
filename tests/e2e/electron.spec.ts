@@ -54,7 +54,7 @@ test('real Electron app opens a local project and reviews a record', async () =>
   await expect(page.getByRole('dialog', { name: 'Create project' })).toBeVisible();
   await page.getByLabel('Project name').fill('e2e-created-project');
   await page.getByRole('button', { name: 'Create', exact: true }).click();
-  await expect(page.getByText('e2e-created-project records')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'records' })).toBeVisible();
   expect(fs.existsSync(path.join(createdProjectPath, '_schema.json'))).toBe(true);
 
   await electronApp.close();
@@ -115,6 +115,74 @@ test('records list scroll area reaches the records column edge and keeps content
     expect(metrics.bodyScrollHeight).toBe(metrics.bodyClientHeight);
     expect(Math.abs(metrics.listRight - metrics.columnRight)).toBeLessThanOrEqual(1);
     expect(metrics.columnRight - metrics.buttonRight).toBeGreaterThanOrEqual(20);
+  } finally {
+    await electronApp.close();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('workspace keeps filling the window after collapsible sections are toggled', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-layout-'));
+  fs.cpSync(path.resolve('test-fixtures/local-projects/sample-project'), path.join(tempRoot, 'sample-project'), { recursive: true });
+  const appEnv = path.join(tempRoot, 'app.env');
+  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=layout@example.com\n`);
+  const electronApp = await electron.launch({
+    args: ['.'],
+    env: {
+      ...process.env,
+      REVIEW_ASSISTANT_APP_ENV: appEnv,
+      ...fakeProviderEnv
+    }
+  });
+  const page = await electronApp.firstWindow();
+  try {
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.getByLabel('Current project').selectOption('sample-project');
+    await page.getByRole('button', { name: 'valid-record', exact: true }).click();
+    await expect(page.getByText('How do I run the harness?')).toBeVisible();
+    await page.getByRole('button', { name: 'Configure' }).click();
+    await page.getByLabel('Evidence > Id feedback mode').selectOption('stars_5');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('dialog', { name: 'Feedback configuration' })).toBeHidden();
+
+    const toggledCount = await page.locator('.details details').evaluateAll((items) => {
+      for (const item of items) {
+        item.removeAttribute('open');
+      }
+      for (const item of items) {
+        item.setAttribute('open', '');
+      }
+      return items.length;
+    });
+    expect(toggledCount).toBeGreaterThan(0);
+    await page.locator('label.feedback-option').filter({ hasText: /^★★★★$/ }).click();
+
+    const metrics = await page.evaluate(() => {
+      const app = document.querySelector('.app');
+      const columns = document.querySelector('.columns');
+      const footer = document.querySelector('.app-footer');
+      if (!(app instanceof HTMLElement) || !(columns instanceof HTMLElement) || !(footer instanceof HTMLElement)) {
+        throw new Error('Workspace layout elements were not rendered.');
+      }
+      const appRect = app.getBoundingClientRect();
+      const columnsRect = columns.getBoundingClientRect();
+      const footerRect = footer.getBoundingClientRect();
+      return {
+        appBottom: appRect.bottom,
+        columnsBottom: columnsRect.bottom,
+        documentScrollY: window.scrollY,
+        footerBottom: footerRect.bottom,
+        footerTop: footerRect.top,
+        rootScrollTop: document.documentElement.scrollTop,
+        viewportHeight: window.innerHeight
+      };
+    });
+
+    expect(metrics.documentScrollY).toBe(0);
+    expect(metrics.rootScrollTop).toBe(0);
+    expect(Math.abs(metrics.appBottom - metrics.viewportHeight)).toBeLessThanOrEqual(1);
+    expect(Math.abs(metrics.footerBottom - metrics.viewportHeight)).toBeLessThanOrEqual(1);
+    expect(metrics.columnsBottom).toBeLessThanOrEqual(metrics.footerTop + 1);
   } finally {
     await electronApp.close();
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -198,7 +266,7 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   await expect(secondPage.getByText('Looks good to me')).toBeVisible();
 
   await secondPage.getByRole('button', { name: 'Configure' }).click();
-  await secondPage.getByLabel('Answer editable').check();
+  await secondPage.getByLabel('Answer editable').selectOption('logged');
   await secondPage.getByRole('button', { name: 'Save' }).click();
   await expect(secondPage.getByRole('dialog', { name: 'Feedback configuration' })).toBeHidden();
   await expect(secondPage.getByLabel('Edit')).toBeVisible();

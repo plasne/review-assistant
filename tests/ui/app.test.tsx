@@ -139,6 +139,15 @@ describe('review UI', () => {
         }}
         feedbackConfig={{
           properties: {
+            '/turns/*/evidence/*': {
+              path: '/turns/*/evidence/*',
+              target: 'Evidence > *',
+              tab: 'Evidence',
+              supportsEdit: true,
+              feedback: 'thumbs',
+              comments: false,
+              editMode: 'none'
+            },
             '/turns/*/evidence/*/id': {
               path: '/turns/*/evidence/*/id',
               target: 'Evidence > Id',
@@ -146,7 +155,7 @@ describe('review UI', () => {
               supportsEdit: true,
               feedback: 'none',
               comments: false,
-              editable: false
+              editMode: 'none'
             },
             '/turns/*/evidence/*/content': {
               path: '/turns/*/evidence/*/content',
@@ -155,11 +164,20 @@ describe('review UI', () => {
               supportsEdit: true,
               feedback: 'none',
               comments: true,
-              editable: true
+              editMode: 'logged'
             }
           }
         }}
-        history={{}}
+        history={{
+          '/turns/0/evidence/0': {
+            feedback: [
+              { value: 'thumbs_down', username: 'sme@example.com', timestamp: '2026-06-01T20:02:00.000Z' },
+              { value: 'thumbs_up', username: 'sme@example.com', timestamp: '2026-06-01T20:01:00.000Z' }
+            ],
+            comments: [],
+            edits: []
+          }
+        }}
         projectUser={{ username: 'sme@example.com', valid: true }}
         onSubmitFeedback={onSubmitFeedback}
       />
@@ -173,11 +191,122 @@ describe('review UI', () => {
     expect(screen.getByText('No edits yet.')).toBeInTheDocument();
     expect(screen.queryByText('The dial path enters through Dial Gateway.', { selector: 'dd' })).not.toBeInTheDocument();
     expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0);
-    expect(screen.getByText('Editable')).toBeInTheDocument();
+    expect(screen.getByText('Logged')).toBeInTheDocument();
+    expect(screen.getByLabelText('Architecture Notes feedback')).toBeInTheDocument();
+    expect(screen.getByLabelText('Architecture Notes feedback value')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Architecture Notes' }).closest('summary')).toHaveAccessibleName(
+      'Architecture Notes Feedback ratings: thumbs down, thumbs up doc-1'
+    );
+    expect(screen.getByRole('heading', { name: 'Architecture Notes' }).closest('summary')?.querySelector('.history-rating-summary')?.textContent).toBe('👎,👍');
     const contentFeedback = screen.getByLabelText('content feedback');
     expect(contentFeedback).toBeInTheDocument();
     expect(contentFeedback.textContent?.indexOf('Edit')).toBeLessThan(contentFeedback.textContent?.indexOf('Comment') ?? 0);
     expect(screen.queryByLabelText('id feedback')).not.toBeInTheDocument();
+  });
+
+  it('renders whole-item feedback controls for generic array object items', () => {
+    const onSubmitFeedback = vi.fn().mockResolvedValue(undefined);
+    render(
+      <RenderTree
+        node={{
+          kind: 'array',
+          label: 'evidence',
+          path: '/turns/0/evidence',
+          items: [
+            {
+              kind: 'object',
+              label: '0',
+              path: '/turns/0/evidence/0',
+              children: [
+                { kind: 'value', label: 'id', path: '/turns/0/evidence/0/id', value: 'arch-order-001', validationIssues: [] },
+                { kind: 'value', label: 'source', path: '/turns/0/evidence/0/source', value: 'Order Management Architecture', validationIssues: [] },
+                { kind: 'value', label: 'content', path: '/turns/0/evidence/0/content', value: 'The architecture separates request handling.', validationIssues: [] }
+              ],
+              validationIssues: []
+            }
+          ],
+          validationIssues: []
+        }}
+        feedbackConfig={{
+          properties: {
+            '/turns/*/evidence/*': {
+              path: '/turns/*/evidence/*',
+              target: 'Evidence > *',
+              tab: 'Evidence',
+              supportsEdit: true,
+              feedback: 'thumbs',
+              comments: false,
+              editMode: 'none'
+            }
+          }
+        }}
+        history={{
+          '/turns/0/evidence/0': {
+            feedback: [
+              { value: '5', username: 'sme@example.com', timestamp: '2026-06-01T20:02:00.000Z' },
+              { value: '2', username: 'sme@example.com', timestamp: '2026-06-01T20:01:00.000Z' }
+            ],
+            comments: [],
+            edits: []
+          }
+        }}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={onSubmitFeedback}
+      />
+    );
+
+    expect(screen.getByText('arch-order-001', { selector: '.array-item-identifier' })).toBeInTheDocument();
+    expect(screen.getByLabelText('arch-order-001 feedback')).toBeInTheDocument();
+    expect(screen.getByLabelText('arch-order-001 feedback value')).toBeInTheDocument();
+    const summary = screen.getByText('arch-order-001', { selector: '.array-item-identifier' }).closest('summary');
+    expect(summary).toHaveAccessibleName('arch-order-001 Feedback ratings: 5 stars, 2 stars');
+    expect(summary?.querySelector('.history-rating-summary')?.textContent).toBe('★★★★★,★★');
+  });
+
+  it('shows submitted ratings in the collapsed history summary', () => {
+    render(
+      <RenderTree
+        node={{
+          kind: 'value',
+          label: 'answer',
+          path: '/answer',
+          value: 'Use the documented harness.',
+          validationIssues: []
+        }}
+        feedbackConfig={{
+          properties: {
+            '/answer': {
+              path: '/answer',
+              target: 'Answer',
+              tab: 'Main',
+              supportsEdit: true,
+              feedback: 'thumbs',
+              comments: true,
+              editMode: 'none'
+            }
+          }
+        }}
+        history={{
+          '/answer': {
+            feedback: [
+              { value: '5', username: 'sme@example.com', timestamp: '2026-06-01T20:02:00.000Z' },
+              { value: '2', username: 'sme@example.com', timestamp: '2026-06-01T20:01:00.000Z' },
+              { value: '4', username: 'sme@example.com', timestamp: '2026-06-01T20:00:00.000Z' }
+            ],
+            comments: [],
+            edits: []
+          }
+        }}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    const summary = screen.getByText('History (3)').closest('summary');
+    expect(summary).toHaveAccessibleName('History (3) Feedback ratings: 5 stars, 2 stars, 4 stars');
+    const ratings = summary ? [...summary.querySelectorAll('.history-rating')].map((element) => element.textContent) : [];
+    expect(ratings).toEqual(['★★★★★', '★★', '★★★★']);
+    expect(summary?.querySelector('.history-rating-summary')?.textContent).toBe('★★★★★,★★,★★★★');
   });
 
   it('supports project selection, record detail rendering, and chat', async () => {
@@ -230,6 +359,60 @@ describe('review UI', () => {
       listeners.complete.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1' }));
     });
     expect(await screen.findByText('Streamed response')).toBeInTheDocument();
+  });
+
+  it('hides fields not in the schema by default and toggles them from record details', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: { type: 'object', properties: { answer: { type: 'string' } } },
+      records: [{ id: 'valid-record', displayName: 'valid-record' }]
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'valid-record',
+      displayName: 'valid-record',
+      data: { answer: 'Use the harness.', extra: 'Here is some extra stuff' },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        path: '',
+        children: [
+          { kind: 'value', label: 'answer', path: '/answer', value: 'Use the harness.', validationIssues: [] },
+          {
+            kind: 'raw',
+            label: 'extra',
+            path: '/extra',
+            value: 'Here is some extra stuff',
+            reason: 'Field is present in data but not declared by schema.',
+            validationIssues: []
+          }
+        ],
+        validationIssues: []
+      }
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+
+    expect(await screen.findByText('Use the harness.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Show fields not in schema')).not.toBeChecked();
+    expect(screen.queryByRole('heading', { name: 'extra (not in schema)' })).not.toBeInTheDocument();
+    expect(screen.queryByText('"Here is some extra stuff"')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText('Show fields not in schema'));
+
+    expect(screen.getByRole('heading', { name: 'extra (not in schema)' })).toBeInTheDocument();
+    expect(screen.getByText('"Here is some extra stuff"')).toBeInTheDocument();
+    expect(screen.queryByText('Field is present in data but not declared by schema.')).not.toBeInTheDocument();
   });
 
   it('uses the displayed record detail as the chat record context', async () => {
@@ -666,7 +849,7 @@ describe('review UI', () => {
     expect(await screen.findByText('Kept history')).toBeInTheDocument();
 
     await userEvent.selectOptions(screen.getByLabelText('Current project'), 'sample-project');
-    expect(await screen.findByText('sample-project records')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'records' })).toBeInTheDocument();
     expect(screen.getByText('remember this')).toBeInTheDocument();
     expect(screen.getByText('Kept history')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Chat messages' })).toBeInTheDocument();
@@ -765,7 +948,7 @@ describe('review UI', () => {
 
     await waitFor(() => expect(api.createProject).toHaveBeenCalledWith('new-project'));
     await waitFor(() => expect(screen.getByLabelText('Current project')).toHaveValue('new-project'));
-    expect(await screen.findByText('new-project records')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'records' })).toBeInTheDocument();
   });
 
   it('hides empty unconfigured feedback when USERNAME is missing', async () => {
@@ -781,7 +964,7 @@ describe('review UI', () => {
       records: [{ id: 'valid-record', displayName: 'valid-record' }],
       feedbackConfig: {
         properties: {
-          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none', comments: false, editable: false }
+          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none', comments: false, editMode: 'none' }
         }
       }
     });
@@ -809,7 +992,7 @@ describe('review UI', () => {
     render(<App />);
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
     await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
-    expect(await screen.findByText('Run npm run check.')).toBeInTheDocument();
+    expect(await screen.findByText('Run npm run check.', { selector: 'output' })).toBeInTheDocument();
     expect(screen.queryByLabelText('answer feedback')).not.toBeInTheDocument();
     expect(screen.queryByText('No feedback configured')).not.toBeInTheDocument();
     expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your .env file.')).not.toBeInTheDocument();
@@ -819,9 +1002,9 @@ describe('review UI', () => {
   it('configures feedback, submits, and toggles history', async () => {
     const feedbackConfig = {
       properties: {
-        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none' as const, comments: false, editable: false },
-        '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', supportsEdit: false, feedback: 'none' as const, comments: false, editable: false },
-        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true, feedback: 'none' as const, comments: false, editable: false }
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none' as const, comments: false, editMode: 'none' as const },
+        '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', supportsEdit: false, feedback: 'none' as const, comments: false, editMode: 'none' as const },
+        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true, feedback: 'none' as const, comments: false, editMode: 'none' as const }
       }
     };
     vi.mocked(api.getBootstrap).mockResolvedValue({
@@ -898,8 +1081,10 @@ describe('review UI', () => {
     expect(screen.getByLabelText('Evidence > Id feedback mode')).toBeInTheDocument();
     expect(screen.getByLabelText('Evidence editable')).toBeDisabled();
     expect(screen.getByLabelText('Evidence > Id editable')).not.toBeDisabled();
+    expect(screen.getByLabelText('Answer editable')).toHaveDisplayValue('none');
     expect(screen.queryByRole('option', { name: 'text_only' })).not.toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('Answer feedback mode'), 'good_fair_bad');
+    await userEvent.selectOptions(screen.getByLabelText('Answer editable'), 'logged');
     await userEvent.click(screen.getByLabelText('Answer comment'));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
@@ -907,14 +1092,14 @@ describe('review UI', () => {
         'sample-project',
         expect.objectContaining({
           properties: expect.objectContaining({
-            '/answer': expect.objectContaining({ feedback: 'good_fair_bad', comments: true })
+            '/answer': expect.objectContaining({ feedback: 'good_fair_bad', comments: true, editMode: 'logged' })
           })
         })
       )
     );
 
     await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
-    expect(await screen.findByText('Run npm run check.')).toBeInTheDocument();
+    expect(await screen.findByText('Run npm run check.', { selector: 'output' })).toBeInTheDocument();
     expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your .env file.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeDisabled();
     expect(screen.getByLabelText('Current feedback username')).toHaveTextContent('sme@example.com');
@@ -1015,7 +1200,7 @@ describe('review UI', () => {
               supportsEdit: true,
               feedback: 'none',
               comments: false,
-              editable: true
+              editMode: 'logged'
             }
           }
         }}
@@ -1030,6 +1215,58 @@ describe('review UI', () => {
     await userEvent.selectOptions(screen.getByLabelText('Edit'), 'SME');
     await userEvent.click(screen.getByRole('button', { name: 'Submit feedback' }));
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({ propertyPath: '/persona', editValue: 'SME' }));
+  });
+
+  it('renders inline editable values without feedback controls', async () => {
+    const submit = vi.fn().mockResolvedValue(undefined);
+    render(
+      <RenderTree
+        node={{
+          kind: 'object',
+          label: 'record',
+          children: [
+            { kind: 'value', label: 'answer', path: '/answer', value: 'Original answer', validationIssues: [] },
+            { kind: 'value', label: 'persona', path: '/persona', value: 'developer', enumValues: ['TPM', 'developer', 'SME'], validationIssues: [] }
+          ],
+          validationIssues: []
+        }}
+        feedbackConfig={{
+          properties: {
+            '/answer': {
+              path: '/answer',
+              target: 'Answer',
+              tab: 'Main',
+              supportsEdit: true,
+              feedback: 'none',
+              comments: false,
+              editMode: 'inline'
+            },
+            '/persona': {
+              path: '/persona',
+              target: 'Persona',
+              tab: 'Main',
+              supportsEdit: true,
+              feedback: 'none',
+              comments: false,
+              editMode: 'inline'
+            }
+          }
+        }}
+        projectUser={{ valid: false, validationMessage: 'USERNAME environment variable not configured. Please set USERNAME in your .env file.' }}
+        onSubmitFeedback={submit}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: 'Submit feedback' })).not.toBeInTheDocument();
+    const answer = screen.getByLabelText('answer');
+    expect(answer).toHaveValue('Original answer');
+    await userEvent.clear(answer);
+    await userEvent.type(answer, 'Inline draft');
+    expect(answer).toHaveValue('Inline draft');
+
+    await userEvent.selectOptions(screen.getByLabelText('persona'), 'SME');
+    expect(screen.getByLabelText('persona')).toHaveDisplayValue('SME');
+    expect(submit).not.toHaveBeenCalled();
   });
 
   it('uses the stored current value and shows the stored original value in history', async () => {
@@ -1054,7 +1291,7 @@ describe('review UI', () => {
               supportsEdit: true,
               feedback: 'none',
               comments: false,
-              editable: true
+              editMode: 'logged'
             }
           }
         }}

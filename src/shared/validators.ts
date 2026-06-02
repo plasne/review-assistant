@@ -20,7 +20,7 @@ import type {
   RecordDetail,
   RecordSummary
 } from './types';
-import { FEEDBACK_MODES } from './feedback';
+import { FEEDBACK_EDIT_MODES, FEEDBACK_MODES } from './feedback';
 
 export class ValidationError extends Error {
   constructor(message: string) {
@@ -153,7 +153,7 @@ export const assertFeedbackConfig = (value: unknown): FeedbackConfig => {
       if (entry.path !== path || !FEEDBACK_MODES.includes(entry.feedback as FeedbackConfig['properties'][string]['feedback'])) {
         throw new ValidationError('Invalid feedback mode.');
       }
-      if (typeof entry.comments !== 'boolean' || typeof entry.editable !== 'boolean') {
+      if (typeof entry.comments !== 'boolean' || !FEEDBACK_EDIT_MODES.includes(entry.editMode as FeedbackConfig['properties'][string]['editMode'])) {
         throw new ValidationError('Invalid feedback configuration flags.');
       }
       return [
@@ -165,7 +165,7 @@ export const assertFeedbackConfig = (value: unknown): FeedbackConfig => {
           supportsEdit: entry.supportsEdit !== false,
           feedback: entry.feedback,
           comments: entry.comments,
-          editable: entry.editable
+          editMode: entry.supportsEdit === false ? 'none' : entry.editMode
         }
       ];
     })
