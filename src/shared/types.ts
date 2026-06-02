@@ -218,6 +218,20 @@ export type ChatCancelResult = {
   canceled: boolean;
 };
 
+export type ContinueWithGitHubResult = {
+  copiedToClipboard?: boolean;
+  deviceCode?: string;
+  loginId: string;
+  opened: boolean;
+  verificationUri?: string;
+};
+
+export type GitHubLoginCompletion = {
+  errorMessage?: string;
+  loginId: string;
+  success: boolean;
+};
+
 export type ChatCanceled = {
   requestId: string;
   messageId?: string;
@@ -258,6 +272,10 @@ export type ChatStreamEventHandlers = {
   onChatCanceled: (listener: (canceled: ChatCanceled) => void) => Unsubscribe;
 };
 
+export type AuthEventHandlers = {
+  onGitHubLoginComplete: (listener: (completion: GitHubLoginCompletion) => void) => Unsubscribe;
+};
+
 export type AppBootstrap = {
   configError?: string;
   backendKind?: BackendKind;
@@ -276,6 +294,8 @@ export type Api = {
   getProjectUser: (projectId: string) => Promise<ProjectUser>;
   submitFeedback: (projectId: string, recordId: string, input: FeedbackSubmissionInput) => Promise<FeedbackSubmissionResult>;
   getAgentStatus: () => Promise<AgentStatusSnapshot>;
+  continueWithGitHub: () => Promise<ContinueWithGitHubResult>;
   startChat: (projectId: string | undefined, recordId: string | undefined, message: string) => Promise<ChatStreamStartResult>;
   cancelChat: (requestId: string) => Promise<ChatCancelResult>;
-} & ChatStreamEventHandlers;
+} & AuthEventHandlers &
+  ChatStreamEventHandlers;

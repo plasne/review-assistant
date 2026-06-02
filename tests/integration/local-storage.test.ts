@@ -300,7 +300,7 @@ describe('local project creation', () => {
     await tempAdapter.saveFeedbackConfig('feedback-project', {
       properties: {
         ...config.properties,
-        '/evidence/~2/id': { ...config.properties['/evidence/~2/id'], feedback: 'thumbs', comments: true }
+        '/evidence/*/id': { ...config.properties['/evidence/*/id'], feedback: 'thumbs', comments: true }
       }
     });
 

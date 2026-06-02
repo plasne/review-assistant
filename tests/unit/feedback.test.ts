@@ -42,8 +42,8 @@ describe('feedback helpers', () => {
       { path: '/request', target: 'Request', tab: 'Main', supportsEdit: true },
       { path: '/request/original_query', target: 'Request > Original Query', tab: 'inherit', supportsEdit: true },
       { path: '/evidence', target: 'Evidence', tab: 'Main', supportsEdit: false },
-      { path: '/evidence/~2/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true },
-      { path: '/evidence/~2/source', target: 'Evidence > Source', tab: 'inherit', supportsEdit: true }
+      { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true },
+      { path: '/evidence/*/source', target: 'Evidence > Source', tab: 'inherit', supportsEdit: true }
     ]);
 
     expect(
@@ -70,11 +70,11 @@ describe('feedback helpers', () => {
   it('matches configured array item targets against concrete record paths', () => {
     const config = normalizeFeedbackConfig(schema, {
       properties: {
-        '/evidence/~2/id': { path: '/evidence/~2/id', target: 'Evidence > Id', tab: 'Main', feedback: 'thumbs', comments: true, editable: false }
+        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'Main', feedback: 'thumbs', comments: true, editable: false }
       }
     });
 
-    expect(feedbackConfigEntryForPath(config, '/evidence/0/id')).toMatchObject({ path: '/evidence/~2/id', feedback: 'thumbs', comments: true });
+    expect(feedbackConfigEntryForPath(config, '/evidence/0/id')).toMatchObject({ path: '/evidence/*/id', feedback: 'thumbs', comments: true });
     expect(feedbackConfigEntryForPath(config, '/evidence/not-a-number/id')).toBeUndefined();
   });
 
@@ -86,7 +86,7 @@ describe('feedback helpers', () => {
     });
 
     expect(config.properties['/evidence']).toMatchObject({ supportsEdit: false, editable: false });
-    expect(config.properties['/evidence/~2/id']).toMatchObject({ supportsEdit: true });
+    expect(config.properties['/evidence/*/id']).toMatchObject({ supportsEdit: true });
   });
 
   it('validates USERNAME and creates attributed timestamped entries', () => {
@@ -145,7 +145,7 @@ describe('feedback helpers', () => {
       evidence__0__id_feedback: [{ feedback: 'good', comment: 'Relevant', username: 'alice@example.com', timestamp: '2026-06-01T15:00:00.000Z' }]
     };
 
-    const history = extractFeedbackHistory(record, [{ path: '/evidence/~2/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true }]);
+    const history = extractFeedbackHistory(record, [{ path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true }]);
     expect(history['/evidence/0/id'].feedback[0]).toMatchObject({ value: 'good', username: 'alice@example.com' });
     expect(history['/evidence/0/id'].comments[0]).toMatchObject({ value: 'Relevant', username: 'alice@example.com' });
   });
