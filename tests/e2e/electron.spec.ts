@@ -142,7 +142,7 @@ test('workspace keeps filling the window after collapsible sections are toggled'
     await expect(page.getByText('How do I run the harness?')).toBeVisible();
     await page.getByRole('button', { name: 'Configure' }).click();
     await page.getByLabel('Evidence > Id feedback mode').selectOption('stars_5');
-    await page.getByRole('button', { name: 'Save' }).click();
+    await page.getByRole('dialog', { name: 'Feedback configuration' }).getByRole('button', { name: 'Save' }).click();
     await expect(page.getByRole('dialog', { name: 'Feedback configuration' })).toBeHidden();
 
     const toggledCount = await page.locator('.details details').evaluateAll((items) => {
@@ -245,13 +245,16 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   await firstPage.getByRole('button', { name: 'Configure' }).click();
   await firstPage.getByLabel('Answer feedback mode').selectOption('good_fair_bad');
   await firstPage.getByLabel('Answer comment').check();
-  await firstPage.getByRole('button', { name: 'Save' }).click();
+  await firstPage.getByRole('dialog', { name: 'Feedback configuration' }).getByRole('button', { name: 'Save' }).click();
   await expect(firstPage.getByRole('dialog', { name: 'Feedback configuration' })).toBeHidden();
   await firstPage.getByRole('button', { name: 'record-1', exact: true }).click();
   await firstPage.locator('label.feedback-option').filter({ hasText: /^Good$/ }).click();
   await firstPage.getByLabel('Comment').fill('Looks good to me');
-  await firstPage.getByRole('button', { name: 'Submit feedback' }).click();
+  await firstPage.getByRole('button', { name: 'Stage feedback' }).click();
+  await expect(firstPage.getByText('Unsaved changes')).toBeVisible();
   await expect(firstPage.getByText('History (1)')).toBeVisible();
+  await firstPage.getByRole('button', { name: 'Save' }).click();
+  await expect(firstPage.getByText('All changes saved')).toBeVisible();
   await firstApp.close();
 
   fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=second@example.com\n`);
@@ -267,12 +270,15 @@ test('real Electron app configures feedback and shows subsequent users collapsed
 
   await secondPage.getByRole('button', { name: 'Configure' }).click();
   await secondPage.getByLabel('Answer editable').selectOption('logged');
-  await secondPage.getByRole('button', { name: 'Save' }).click();
+  await secondPage.getByRole('dialog', { name: 'Feedback configuration' }).getByRole('button', { name: 'Save' }).click();
   await expect(secondPage.getByRole('dialog', { name: 'Feedback configuration' })).toBeHidden();
   await expect(secondPage.getByLabel('Edit')).toBeVisible();
   await secondPage.getByLabel('Edit').fill('Second user edit');
-  await secondPage.getByRole('button', { name: 'Submit feedback' }).click();
+  await expect(secondPage.getByLabel('Edit')).toHaveValue('Second user edit');
+  await secondPage.getByRole('button', { name: 'Stage feedback' }).click();
   await expect(secondPage.getByText('History (3)')).toBeVisible();
+  await secondPage.getByRole('button', { name: 'Save' }).click();
+  await expect(secondPage.getByText('All changes saved')).toBeVisible();
 
   await secondApp.close();
   fs.rmSync(tempRoot, { recursive: true, force: true });

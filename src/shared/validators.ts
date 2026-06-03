@@ -17,6 +17,7 @@ import type {
   OpenProjectResult,
   ProjectUser,
   ProjectSummary,
+  RecordDraftStatus,
   RecordDetail,
   RecordSummary
 } from './types';
@@ -139,6 +140,13 @@ export const assertRecordDetail = (value: unknown): RecordDetail => {
     throw new ValidationError('Invalid record validation response.');
   }
   return value as RecordDetail;
+};
+
+export const assertRecordDraftStatus = (value: unknown): RecordDraftStatus => {
+  if (!isRecord(value) || typeof value.hasUnsavedChanges !== 'boolean') {
+    throw new ValidationError('Invalid record draft status response.');
+  }
+  return { hasUnsavedChanges: value.hasUnsavedChanges };
 };
 
 export const assertFeedbackConfig = (value: unknown): FeedbackConfig => {

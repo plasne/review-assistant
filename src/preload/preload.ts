@@ -10,6 +10,7 @@ import {
   assertProjectId,
   assertProjectSummary,
   assertProjectSummaries,
+  assertRecordDraftStatus,
   assertRecordDetail,
   assertRecordId,
   assertChatMessage,
@@ -43,6 +44,11 @@ const api: Api = {
   createProject: (projectId) => invoke('projects:create', assertProjectSummary, assertNewProjectId(projectId)),
   openProject: (projectId) => invoke('projects:open', assertOpenProjectResult, assertProjectId(projectId)),
   getRecord: (projectId, recordId) => invoke('records:get', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId)),
+  getRecordDraftStatus: (projectId, recordId) =>
+    invoke('records:getDraftStatus', assertRecordDraftStatus, assertProjectId(projectId), assertRecordId(recordId)),
+  saveRecordChanges: (projectId, recordId) => invoke('records:saveChanges', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId)),
+  discardRecordChanges: (projectId, recordId) =>
+    invoke('records:discardChanges', assertRecordDraftStatus, assertProjectId(projectId), assertRecordId(recordId)),
   getFeedbackConfig: (projectId) => invoke('feedback:getConfig', assertFeedbackConfig, assertProjectId(projectId)),
   saveFeedbackConfig: (projectId, config) => invoke('feedback:saveConfig', assertFeedbackConfig, assertProjectId(projectId), assertFeedbackConfig(config)),
   getProjectUser: (projectId) => invoke('feedback:getProjectUser', assertProjectUser, assertProjectId(projectId)),
@@ -56,6 +62,9 @@ const api: Api = {
     ),
   getAgentStatus: () => invoke('agent:getStatus', assertAgentStatus),
   continueWithGitHub: () => invoke('auth:continueWithGitHub', assertContinueWithGitHubResult),
+  closeWindow: async () => {
+    await ipcRenderer.invoke('app:closeWindow');
+  },
   startChat: (projectId, recordId, message, history) =>
     invoke(
       'chat:start',
@@ -70,7 +79,12 @@ const api: Api = {
   onChatComplete: (listener) => onEvent('chat:complete', assertChatStreamComplete, listener),
   onChatError: (listener) => onEvent('chat:error', assertChatStreamError, listener),
   onChatCanceled: (listener) => onEvent('chat:canceled', assertChatCanceled, listener),
-  onGitHubLoginComplete: (listener) => onEvent('auth:login-completed', assertGitHubLoginCompletion, listener)
+  onGitHubLoginComplete: (listener) => onEvent('auth:login-completed', assertGitHubLoginCompletion, listener),
+  onCloseRequested: (listener) => {
+    const wrapped = (): void => listener();
+    ipcRenderer.on('app:close-requested', wrapped);
+    return () => ipcRenderer.removeListener('app:close-requested', wrapped);
+  }
 };
 
 contextBridge.exposeInMainWorld('reviewAssistant', api);
