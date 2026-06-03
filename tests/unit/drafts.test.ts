@@ -104,7 +104,7 @@ const createStorage = (read: () => unknown, write: (value: unknown) => void): St
         supportsEdit: true,
         feedback: 'good_fair_bad',
         comments: false,
-        editable: true
+        editMode: 'logged'
       }
     }
   }),

@@ -546,7 +546,7 @@ export const assertSubmissionAllowed = (config: FeedbackConfig, input: FeedbackS
   if (input.commentValue?.trim() && !entry.comments) {
     throw new Error('SME comments are not enabled for this property.');
   }
-  if (input.editValue?.trim() && !entry.editable) {
+  if (input.editValue?.trim() && entry.editMode !== 'logged') {
     throw new Error('Edits are not enabled for this property.');
   }
 };

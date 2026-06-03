@@ -9,6 +9,7 @@ import {
   assertGitHubLoginCompletion,
   assertChatMessage,
   assertNewProjectId,
+  assertFeedbackConfig,
   assertOpenProjectResult,
   assertProjectId,
   assertRecordDetail,
@@ -95,6 +96,53 @@ describe('IPC boundary validators', () => {
     expect(() => assertBootstrap({ projects: [] })).toThrow(ValidationError);
     expect(() => assertOpenProjectResult({ projectConfig: {}, records: [] })).toThrow(ValidationError);
     expect(() => assertRecordDetail({ projectId: 'sample-project', recordId: 'valid-record' })).toThrow(ValidationError);
+  });
+
+  it('preserves feedback edit modes across IPC boundaries', () => {
+    expect(
+      assertFeedbackConfig({
+        properties: {
+          '/answer': {
+            path: '/answer',
+            target: 'Answer',
+            tab: 'Main',
+            supportsEdit: true,
+            feedback: 'none',
+            comments: false,
+            editMode: 'inline'
+          },
+          '/evidence': {
+            path: '/evidence',
+            target: 'Evidence',
+            tab: 'Main',
+            supportsEdit: false,
+            feedback: 'none',
+            comments: false,
+            editMode: 'logged'
+          }
+        }
+      })
+    ).toEqual({
+      properties: {
+        '/answer': expect.objectContaining({ editMode: 'inline' }),
+        '/evidence': expect.objectContaining({ supportsEdit: false, editMode: 'none' })
+      }
+    });
+    expect(() =>
+      assertFeedbackConfig({
+        properties: {
+          '/answer': {
+            path: '/answer',
+            target: 'Answer',
+            tab: 'Main',
+            supportsEdit: true,
+            feedback: 'none',
+            comments: false,
+            editMode: 'sideways'
+          }
+        }
+      })
+    ).toThrow(ValidationError);
   });
 
   it('validates streamed chat IPC payloads', () => {
