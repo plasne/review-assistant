@@ -1524,21 +1524,16 @@ const EvidenceCard = ({
   showExtraSchemaFields: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
 }) => {
-  const source = evidenceChildText(node, 'source');
-  const id = evidenceChildText(node, 'id');
+  const title = `Evidence ${index + 1}`;
   const fields = visibleRenderNodes(node.children, showExtraSchemaFields).map((child) => ({ node: child, editMode: editModeForNode(child, feedbackConfig) }));
   const readonlyFields = fields.filter((field) => field.editMode === 'none');
   const editableFields = fields.filter((field) => field.editMode !== 'none');
-  const feedbackNode = { ...node, label: source ?? `Evidence ${index + 1}` };
+  const feedbackNode = { ...node, label: title };
   const historyFeedbackRatings = feedbackRatingsForHistory(node.path ? history?.[node.path] : undefined);
   return (
     <details className="evidence-card" open={!collapsed}>
       <summary className="evidence-card-header">
-        <span className="evidence-card-title">
-          <h4>{source ?? `Evidence ${index + 1}`}</h4>
-          <RatingSummary ratings={historyFeedbackRatings} />
-        </span>
-        {id ? <span className="evidence-id">{id}</span> : null}
+        <RatingSummary ratings={historyFeedbackRatings} />
       </summary>
       <FeedbackPanel node={feedbackNode} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
       {readonlyFields.length > 0 ? (
@@ -1639,11 +1634,6 @@ const isExtraSchemaField = (node: RenderNode): boolean => node.kind === 'raw' &&
 
 const visibleRenderNodes = <Node extends RenderNode>(nodes: Node[], showExtraSchemaFields: boolean): Node[] =>
   showExtraSchemaFields ? nodes : nodes.filter((node) => !isExtraSchemaField(node));
-
-const evidenceChildText = (node: Extract<RenderNode, { kind: 'object' }>, label: string): string | undefined => {
-  const child = node.children.find((item) => item.label === label);
-  return child && (child.kind === 'value' || child.kind === 'raw') ? formatValue(child.value) : undefined;
-};
 
 const FieldHeading = ({ label, description, meta }: { label: string; description?: string; meta?: string }) => (
   <h3 className="field-heading">

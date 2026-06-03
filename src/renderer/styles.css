@@ -808,25 +808,6 @@ pre {
   gap: 0.5rem;
 }
 
-.evidence-card-header h4 {
-  display: inline;
-  color: #f7fafc;
-  font-size: 0.95rem;
-  margin: 0;
-}
-
-.evidence-card-title {
-  align-items: baseline;
-  display: inline-flex;
-  flex-wrap: wrap;
-}
-
-.evidence-id {
-  color: #aebbd0;
-  font-size: 0.75rem;
-  margin-left: auto;
-}
-
 .evidence-field {
   background: #0d1320;
   border: 1px solid #263a59;

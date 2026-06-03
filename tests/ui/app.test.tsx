@@ -183,8 +183,8 @@ describe('review UI', () => {
       />
     );
 
-    expect(screen.getByRole('heading', { name: 'Architecture Notes' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Architecture Notes' }).closest('details')).toHaveAttribute('open');
+    expect(screen.queryByRole('heading', { name: 'Architecture Notes' })).not.toBeInTheDocument();
+    expect(screen.getByText('Architecture Notes')).toBeInTheDocument();
     expect(screen.getByLabelText('Read-only evidence fields')).toBeInTheDocument();
     expect(screen.getByLabelText('Editable evidence fields')).toBeInTheDocument();
     expect(screen.getAllByText('doc-1').find((element) => element.closest('.evidence-field'))?.closest('.evidence-field')).toHaveClass('readonly');
@@ -192,12 +192,9 @@ describe('review UI', () => {
     expect(screen.queryByText('The dial path enters through Dial Gateway.', { selector: 'dd' })).not.toBeInTheDocument();
     expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0);
     expect(screen.getByText('Logged')).toBeInTheDocument();
-    expect(screen.getByLabelText('Architecture Notes feedback')).toBeInTheDocument();
-    expect(screen.getByLabelText('Architecture Notes feedback value')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Architecture Notes' }).closest('summary')).toHaveAccessibleName(
-      'Architecture Notes Feedback ratings: thumbs down, thumbs up doc-1'
-    );
-    expect(screen.getByRole('heading', { name: 'Architecture Notes' }).closest('summary')?.querySelector('.history-rating-summary')?.textContent).toBe('👎,👍');
+    expect(screen.getByLabelText('Evidence 1 feedback')).toBeInTheDocument();
+    expect(screen.getByLabelText('Evidence 1 feedback value')).toBeInTheDocument();
+    expect(screen.getByLabelText('Evidence 1 feedback').closest('details')?.querySelector('.history-rating-summary')?.textContent).toBe('👎,👍');
     const contentFeedback = screen.getByLabelText('content feedback');
     expect(contentFeedback).toBeInTheDocument();
     expect(contentFeedback.textContent?.indexOf('Edit')).toBeLessThan(contentFeedback.textContent?.indexOf('Comment') ?? 0);
@@ -441,8 +438,9 @@ describe('review UI', () => {
 
     await userEvent.click(screen.getByRole('tab', { name: 'evidence (/evidence)' }));
     expect(screen.getByRole('tabpanel')).toHaveTextContent('doc-1');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('README');
     expect(within(screen.getByRole('tabpanel')).queryByRole('heading', { name: 'answer' })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'README' }).closest('details')).toHaveAttribute('open');
+    expect(within(screen.getByRole('tabpanel')).queryByRole('heading', { name: 'README' })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Overview' }));
     expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
@@ -456,7 +454,7 @@ describe('review UI', () => {
     expect((evidenceGroup as HTMLElement).firstElementChild?.tagName).toBe('SUMMARY');
     expect(within(evidenceGroup as HTMLElement).getByRole('button', { name: 'Open in tab' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'evidence 1 item' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'README' }).closest('details')).not.toHaveAttribute('open');
+    expect(within(evidenceGroup as HTMLElement).getByText('README')).not.toBeVisible();
   });
 
   it('auto-opens the first project and first record when autoOpenFirst is enabled', async () => {
