@@ -21,6 +21,7 @@ import {
   assertProjectUser,
   assertProjectSummary,
   assertProjectSummaries,
+  assertRecordDraftStatus,
   assertRecordDetail,
   assertRecordId
 } from '../shared/validators';
@@ -30,6 +31,7 @@ import { AgentRuntime, AgentRuntimeError } from './agent';
 import { createLocalToolRuntime } from './tools';
 import { mergeExternalMcpServers, parseExternalMcpServers } from './mcp';
 import { startCopilotLogin } from './copilot-auth';
+import { RecordDraftStore } from './drafts';
 
 let mainWindow: BrowserWindow | undefined;
 let storage: StorageAdapter | undefined;
@@ -38,6 +40,7 @@ let backendKind: AppBootstrap['backendKind'];
 let appConfigValues: Record<string, string> = {};
 let appMcpConfigPath: string | undefined;
 let appPromptPath: string | undefined;
+let allowClose = false;
 const agent = new AgentRuntime({ workerPath: path.join(__dirname, '../agent/agent-process.js') });
 
 const initializeBackend = (): void => {
@@ -68,6 +71,14 @@ const createWindow = async (): Promise<void> => {
     }
   });
 
+  mainWindow.on('close', (event) => {
+    if (allowClose) {
+      return;
+    }
+    event.preventDefault();
+    mainWindow?.webContents.send('app:close-requested');
+  });
+
   const devServerUrl = process.env.ELECTRON_RENDERER_URL ?? process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
     await mainWindow.loadURL(devServerUrl);
@@ -82,6 +93,8 @@ const requireStorage = (): StorageAdapter => {
   }
   return storage;
 };
+
+const drafts = new RecordDraftStore(requireStorage);
 
 const readOptionalTextFile = async (filePath: string | undefined): Promise<string | undefined> => {
   if (!filePath) {
@@ -110,7 +123,16 @@ const registerIpc = (): void => {
     assertOpenProjectResult(await requireStorage().openProject(assertProjectId(projectId)))
   );
   ipcMain.handle('records:get', async (_event, projectId: unknown, recordId: unknown) =>
-    assertRecordDetail(await requireStorage().getRecord(assertProjectId(projectId), assertRecordId(recordId)))
+    assertRecordDetail(await drafts.getRecord(assertProjectId(projectId), assertRecordId(recordId)))
+  );
+  ipcMain.handle('records:getDraftStatus', async (_event, projectId: unknown, recordId: unknown) =>
+    assertRecordDraftStatus(drafts.getStatus(assertProjectId(projectId), assertRecordId(recordId)))
+  );
+  ipcMain.handle('records:saveChanges', async (_event, projectId: unknown, recordId: unknown) =>
+    assertRecordDetail(await drafts.saveDraft(assertProjectId(projectId), assertRecordId(recordId)))
+  );
+  ipcMain.handle('records:discardChanges', async (_event, projectId: unknown, recordId: unknown) =>
+    assertRecordDraftStatus(drafts.discardDraft(assertProjectId(projectId), assertRecordId(recordId)))
   );
   ipcMain.handle('feedback:getConfig', async (_event, projectId: unknown) =>
     assertFeedbackConfig(await requireStorage().getFeedbackConfig(assertProjectId(projectId)))
@@ -123,9 +145,13 @@ const registerIpc = (): void => {
   );
   ipcMain.handle('feedback:submit', async (_event, projectId: unknown, recordId: unknown, input: unknown) =>
     assertFeedbackSubmissionResult(
-      await requireStorage().submitFeedback(assertProjectId(projectId), assertRecordId(recordId), assertFeedbackSubmissionInput(input))
+      await drafts.submitFeedback(assertProjectId(projectId), assertRecordId(recordId), assertFeedbackSubmissionInput(input))
     )
   );
+  ipcMain.handle('app:closeWindow', () => {
+    allowClose = true;
+    mainWindow?.close();
+  });
   ipcMain.handle('agent:getStatus', async () => agent.getStatus());
   ipcMain.handle('auth:continueWithGitHub', async (event) => {
     logInfo('review-assistant.auth-login-started', { provider: 'github-copilot' });
@@ -172,7 +198,8 @@ const registerIpc = (): void => {
     const appMcpServers = parseExternalMcpServers(appMcpConfig, appConfigValues);
     const projectMcpServers = parseExternalMcpServers(projectMcpConfig, { ...appConfigValues, ...projectConfig });
     const mcpServers = mergeExternalMcpServers(appMcpServers, projectMcpServers);
-    const tools = createLocalToolRuntime({ storage: activeStorage, selectedProjectId: validProjectId, selectedRecordId: validRecordId });
+    const toolStorage = validProjectId ? drafts.createStorageAdapter() : activeStorage;
+    const tools = createLocalToolRuntime({ storage: toolStorage, selectedProjectId: validProjectId, selectedRecordId: validRecordId });
     const toolList = tools.listTools();
     logInfo('review-assistant.chat-start-context', {
       projectId: validProjectId ?? 'none',
