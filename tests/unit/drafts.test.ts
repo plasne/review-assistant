@@ -50,6 +50,25 @@ describe('record draft store', () => {
     });
   });
 
+  it('stages new records without writing them until save', async () => {
+    let stored: unknown;
+    const storage = createStorage(() => stored, (next) => {
+      stored = next;
+    });
+    const drafts = new RecordDraftStore(() => storage);
+
+    const created = await drafts.createRecord('sample-project', 'new-record');
+
+    expect(created).toMatchObject({ recordId: 'new-record', data: {} });
+    expect(stored).toBeUndefined();
+    expect(drafts.getStatus('sample-project', 'new-record')).toEqual({ hasUnsavedChanges: true });
+
+    await drafts.saveDraft('sample-project', 'new-record');
+
+    expect(stored).toEqual({});
+    expect(drafts.getStatus('sample-project', 'new-record')).toEqual({ hasUnsavedChanges: false });
+  });
+
   it('rejects saving a draft when the persisted record changed after staging', async () => {
     let stored: unknown = { answer: 'Original' };
     const storage = createStorage(() => stored, (next) => {
@@ -75,6 +94,30 @@ describe('record draft store', () => {
     });
     expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: true });
   });
+
+  it('passes project schema saves through without staging a record draft', async () => {
+    let savedSchema: unknown;
+    const storage = createStorage(
+      () => ({ answer: 'Original' }),
+      () => undefined
+    );
+    storage.saveProjectSchema = async (projectId, schema) => {
+      savedSchema = clone(schema);
+      return { projectId, schemaPath: '_schema.json', backupSchemaPath: '_schema_1.json', schema };
+    };
+    const drafts = new RecordDraftStore(() => storage);
+    const adapter = drafts.createStorageAdapter();
+    const schema = { type: 'object', properties: { answer: { type: 'string' } } };
+
+    await expect(adapter.saveProjectSchema('sample-project', schema)).resolves.toEqual({
+      projectId: 'sample-project',
+      schemaPath: '_schema.json',
+      backupSchemaPath: '_schema_1.json',
+      schema
+    });
+    expect(savedSchema).toEqual(schema);
+    expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: false });
+  });
 });
 
 const createStorage = (read: () => unknown, write: (value: unknown) => void): StorageAdapter => ({
@@ -82,13 +125,26 @@ const createStorage = (read: () => unknown, write: (value: unknown) => void): St
   createProject: async (projectId) => ({ id: projectId, name: projectId }),
   openProject: async (projectId) => ({ project: { id: projectId, name: projectId }, schema: {}, records: [], projectConfig: {} }),
   getRecord: async (projectId, recordId) => createRecordDetail(projectId, recordId, read()),
-  readRecordData: async () => clone(read()),
+  readRecordData: async (_projectId, recordId) => {
+    const value = read();
+    if (value === undefined) {
+      throw new Error(`Record not found: ${recordId}`);
+    }
+    return clone(value);
+  },
   renderRecordData: async (projectId, recordId, data) => createRecordDetail(projectId, recordId, data),
   writeRecordData: async (projectId, recordId, data) => {
     write(clone(data));
     return createRecordDetail(projectId, recordId, data);
   },
   writeRecordDataIfUnchanged: async (projectId, recordId, data, expectedData) => {
+    if (expectedData === undefined) {
+      if (read() !== undefined) {
+        throw new Error('Record changed after this draft was staged. Refresh the record, review the latest changes, and stage your edits again.');
+      }
+      write(clone(data));
+      return createRecordDetail(projectId, recordId, data);
+    }
     if (JSON.stringify(read()) !== JSON.stringify(expectedData)) {
       throw new Error('Record changed after this draft was staged. Refresh the record, review the latest changes, and stage your edits again.');
     }
@@ -109,6 +165,7 @@ const createStorage = (read: () => unknown, write: (value: unknown) => void): St
     }
   }),
   saveFeedbackConfig: async (_projectId, config) => config,
+  saveProjectSchema: async (projectId, schema) => ({ projectId, schemaPath: '_schema.json', schema }),
   getProjectUser: async () => ({ username: 'sme@example.com', valid: true }),
   submitFeedback: async (projectId, recordId) => ({ username: 'sme@example.com', record: createRecordDetail(projectId, recordId, read()) }),
   updateRecord: async (projectId, recordId, data) => {

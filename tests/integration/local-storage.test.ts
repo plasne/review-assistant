@@ -6,6 +6,8 @@ import { LocalStorageAdapter } from '../../src/main/storage';
 
 const fixtureRoot = path.resolve('test-fixtures/local-projects');
 
+const readJson = async (filePath: string): Promise<unknown> => JSON.parse(await fs.readFile(filePath, 'utf8')) as unknown;
+
 describe('local storage adapter', () => {
   let tempRoot: string | undefined;
   const adapter = new LocalStorageAdapter({
@@ -107,6 +109,102 @@ describe('local project creation', () => {
     if (tempRoot) {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it('saves generated project schemas while rotating existing schema backups', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: '.env',
+      values: { LOCAL_PATH: tempRoot }
+    });
+    await tempAdapter.createProject('schema-project');
+    const projectPath = path.join(tempRoot, 'schema-project');
+
+    const firstSchema = { type: 'object', properties: { answer: { type: 'string' } }, additionalProperties: false };
+    await expect(tempAdapter.saveProjectSchema('schema-project', firstSchema)).resolves.toEqual({
+      projectId: 'schema-project',
+      schemaPath: '_schema.json',
+      backupSchemaPath: '_schema_1.json',
+      schema: firstSchema
+    });
+    expect(await readJson(path.join(projectPath, '_schema.json'))).toEqual(firstSchema);
+    expect(await readJson(path.join(projectPath, '_schema_1.json'))).toEqual({ type: 'object', properties: {}, additionalProperties: true });
+
+    const secondSchema = { type: 'object', properties: { score: { type: 'number' } } };
+    await expect(tempAdapter.saveProjectSchema('schema-project', secondSchema)).resolves.toMatchObject({ backupSchemaPath: '_schema_2.json' });
+    expect(await readJson(path.join(projectPath, '_schema.json'))).toEqual(secondSchema);
+    expect(await readJson(path.join(projectPath, '_schema_2.json'))).toEqual(firstSchema);
+  });
+
+  it('fills gaps when selecting generated schema backup names', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: '.env',
+      values: { LOCAL_PATH: tempRoot }
+    });
+    await tempAdapter.createProject('schema-project');
+    const projectPath = path.join(tempRoot, 'schema-project');
+    await fs.writeFile(path.join(projectPath, '_schema_1.json'), '{"type":"object","properties":{"old":{"type":"string"}}}\n');
+    await fs.writeFile(path.join(projectPath, '_schema_3.json'), '{"type":"object","properties":{"older":{"type":"string"}}}\n');
+    const schema = { type: 'object', properties: { answer: { type: 'string' } } };
+
+    await expect(tempAdapter.saveProjectSchema('schema-project', schema)).resolves.toMatchObject({ backupSchemaPath: '_schema_2.json' });
+    expect(await readJson(path.join(projectPath, '_schema_2.json'))).toEqual({ type: 'object', properties: {}, additionalProperties: true });
+  });
+
+  it('rejects invalid generated schemas before replacing the existing project schema', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: '.env',
+      values: { LOCAL_PATH: tempRoot }
+    });
+    await tempAdapter.createProject('schema-project');
+    const projectPath = path.join(tempRoot, 'schema-project');
+    const original = await readJson(path.join(projectPath, '_schema.json'));
+
+    await expect(tempAdapter.saveProjectSchema('schema-project', { type: 123 })).rejects.toThrow();
+
+    expect(await readJson(path.join(projectPath, '_schema.json'))).toEqual(original);
+    await expect(fs.access(path.join(projectPath, '_schema_1.json'))).rejects.toThrow();
+  });
+
+  it('normalizes feedback configuration after a generated schema changes project fields', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    await fs.mkdir(path.join(tempRoot, 'feedback-schema-project'));
+    await fs.writeFile(
+      path.join(tempRoot, 'feedback-schema-project', '_schema.json'),
+      JSON.stringify({ type: 'object', properties: { answer: { type: 'string' }, stale: { type: 'string' } } })
+    );
+    await fs.writeFile(
+      path.join(tempRoot, 'feedback-schema-project', '_feedback.json'),
+      JSON.stringify({
+        properties: {
+          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'thumbs', comments: true, editMode: 'none' },
+          '/stale': { path: '/stale', target: 'Stale', tab: 'Main', feedback: 'stars_5', comments: true, editMode: 'logged' }
+        }
+      })
+    );
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: '.env',
+      values: { LOCAL_PATH: tempRoot }
+    });
+
+    await tempAdapter.saveProjectSchema('feedback-schema-project', {
+      type: 'object',
+      properties: {
+        answer: { type: 'string' },
+        confidence: { type: 'number' }
+      }
+    });
+
+    const config = await tempAdapter.getFeedbackConfig('feedback-schema-project');
+    expect(Object.keys(config.properties)).toEqual(['/answer', '/confidence']);
+    expect(config.properties['/answer']).toMatchObject({ feedback: 'thumbs', comments: true });
+    expect(config.properties['/confidence']).toMatchObject({ target: 'Confidence' });
   });
 
   it('creates a project folder initialized with a default schema', async () => {
@@ -271,6 +369,25 @@ describe('local project creation', () => {
     const updated = await tempAdapter.updateRecord('feedback-project', 'record-1', { answer: 'Core update' });
     expect(updated.data).toEqual({ answer: 'Core update' });
     expect(updated.feedbackHistory?.['/answer'].comments[0]).toMatchObject({ value: 'Clear', username: 'updated@example.com' });
+  });
+
+  it('creates a record only when saving a new-record draft against an empty slot', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    await fs.mkdir(path.join(tempRoot, 'draft-project'));
+    await fs.writeFile(path.join(tempRoot, 'draft-project', '_schema.json'), JSON.stringify({ type: 'object', properties: { answer: { type: 'string' } } }));
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: path.join(tempRoot, 'app.env'),
+      values: { LOCAL_PATH: tempRoot }
+    });
+
+    const saved = await tempAdapter.writeRecordDataIfUnchanged('draft-project', 'new-record', { answer: 'Draft answer' }, undefined);
+
+    expect(saved.data).toEqual({ answer: 'Draft answer' });
+    await expect(fs.readFile(path.join(tempRoot, 'draft-project', 'new-record.json'), 'utf8')).resolves.toContain('Draft answer');
+    await expect(
+      tempAdapter.writeRecordDataIfUnchanged('draft-project', 'new-record', { answer: 'Overwritten' }, undefined)
+    ).rejects.toThrow('Record changed after this draft was staged');
   });
 
   it('submits feedback to schema-derived array item properties', async () => {

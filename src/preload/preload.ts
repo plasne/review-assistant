@@ -14,6 +14,9 @@ import {
   assertRecordDetail,
   assertRecordId,
   assertChatMessage,
+  assertChatAttachmentId,
+  assertChatAttachments,
+  assertChatAttachmentSelectionResult,
   assertChatHistory,
   assertChatStreamChunk,
   assertChatStreamComplete,
@@ -43,7 +46,11 @@ const api: Api = {
   listProjects: () => invoke('projects:list', assertProjectSummaries),
   createProject: (projectId) => invoke('projects:create', assertProjectSummary, assertNewProjectId(projectId)),
   openProject: (projectId) => invoke('projects:open', assertOpenProjectResult, assertProjectId(projectId)),
+  createRecordDraft: (projectId, recordId) =>
+    invoke('records:createDraft', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId)),
   getRecord: (projectId, recordId) => invoke('records:get', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId)),
+  updateRecordData: (projectId, recordId, data) =>
+    invoke('records:updateData', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId), data),
   getRecordDraftStatus: (projectId, recordId) =>
     invoke('records:getDraftStatus', assertRecordDraftStatus, assertProjectId(projectId), assertRecordId(recordId)),
   saveRecordChanges: (projectId, recordId) => invoke('records:saveChanges', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId)),
@@ -65,15 +72,20 @@ const api: Api = {
   closeWindow: async () => {
     await ipcRenderer.invoke('app:closeWindow');
   },
-  startChat: (projectId, recordId, message, history) =>
+  startChat: (projectId, recordId, message, history, attachments) =>
     invoke(
       'chat:start',
       assertChatStreamStart,
       projectId ? assertProjectId(projectId) : undefined,
       recordId ? assertRecordId(recordId) : undefined,
       assertChatMessage(message),
-      assertChatHistory(history)
+      assertChatHistory(history),
+      assertChatAttachments(attachments)
     ),
+  selectChatAttachments: () => invoke('chat:selectAttachments', assertChatAttachmentSelectionResult),
+  discardChatAttachment: async (attachmentId) => {
+    await ipcRenderer.invoke('chat:discardAttachment', assertChatAttachmentId(attachmentId));
+  },
   cancelChat: (requestId) => invoke('chat:cancel', assertChatCancelResult, requestId),
   onChatChunk: (listener) => onEvent('chat:chunk', assertChatStreamChunk, listener),
   onChatComplete: (listener) => onEvent('chat:complete', assertChatStreamComplete, listener),

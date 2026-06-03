@@ -34,6 +34,7 @@ export class RecordDraftStore {
       writeRecordData: (projectId, recordId, data) => store.writeRecordData(projectId, recordId, data),
       getFeedbackConfig: (projectId) => storage.getFeedbackConfig(projectId),
       saveFeedbackConfig: (projectId, config) => storage.saveFeedbackConfig(projectId, config),
+      saveProjectSchema: (projectId, schema) => storage.saveProjectSchema(projectId, schema),
       getProjectUser: (projectId) => storage.getProjectUser(projectId),
       submitFeedback: (projectId, recordId, input) => store.submitFeedback(projectId, recordId, input),
       updateRecord: (projectId, recordId, data) => store.updateRecord(projectId, recordId, data),
@@ -49,6 +50,24 @@ export class RecordDraftStore {
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
     return this.renderRecordData(projectId, recordId, await this.readRecordData(projectId, recordId));
+  }
+
+  async createRecord(projectId: string, recordId: string): Promise<RecordDetail> {
+    const key = this.key(projectId, recordId);
+    if (this.drafts.has(key)) {
+      throw new Error(`Record draft already exists: ${recordId}`);
+    }
+    try {
+      await this.requireDraftCapableStorage().readRecordData(projectId, recordId);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Record not found:')) {
+        const data = {};
+        this.drafts.set(key, { baseData: undefined, data });
+        return this.renderRecordData(projectId, recordId, data);
+      }
+      throw error;
+    }
+    throw new Error(`Record already exists: ${recordId}`);
   }
 
   async readRecordData(projectId: string, recordId: string): Promise<unknown> {

@@ -139,9 +139,33 @@ const rawNode = (
 
 const toValidationIssue = (error: ErrorObject): ValidationIssue => ({
   path: error.instancePath || '/',
-  message: error.message ?? 'Invalid value',
+  message: formatValidationMessage(error),
   keyword: error.keyword
 });
+
+const formatValidationMessage = (error: ErrorObject): string => {
+  if (error.keyword === 'required' && 'missingProperty' in error.params) {
+    return `Missing required field: ${String(error.params.missingProperty)}`;
+  }
+  if (error.keyword === 'additionalProperties' && 'additionalProperty' in error.params) {
+    return `Field is not defined in the schema: ${String(error.params.additionalProperty)}`;
+  }
+  if (error.keyword === 'enum' && 'allowedValues' in error.params && Array.isArray(error.params.allowedValues)) {
+    return `Value must be one of: ${error.params.allowedValues.map(formatSchemaValue).join(', ')}`;
+  }
+  if (error.keyword === 'type' && 'type' in error.params) {
+    return `Value must be ${String(error.params.type)}`;
+  }
+  if (error.keyword === 'minItems' && 'limit' in error.params) {
+    return `Must include at least ${String(error.params.limit)} item${Number(error.params.limit) === 1 ? '' : 's'}`;
+  }
+  if (error.keyword === 'maxItems' && 'limit' in error.params) {
+    return `Must include at most ${String(error.params.limit)} item${Number(error.params.limit) === 1 ? '' : 's'}`;
+  }
+  return error.message ?? 'Invalid value';
+};
+
+const formatSchemaValue = (value: unknown): string => (typeof value === 'string' ? value : JSON.stringify(value));
 
 const issuesAt = (issues: ValidationIssue[], path: string): ValidationIssue[] => issues.filter((issue) => issue.path === path);
 

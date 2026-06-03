@@ -120,6 +120,43 @@ describe('agent runtime streaming pipeline', () => {
     await expect(complete).resolves.toBe('Streamed Copilot response');
   });
 
+  it('passes selected chat attachment content to the provider prompt', async () => {
+    const chunks: ChatStreamChunk[] = [];
+    const runtime = new AgentRuntime({
+      workerPath,
+      providerModule: fakeProviderModule,
+      commandEnv: { FAKE_COPILOT_REQUIRE_ATTACHMENTS: '1', FAKE_COPILOT_REQUIRE_AVAILABLE_TOOLS_NONE: '1' }
+    });
+    const complete = new Promise<string>((resolve, reject) => {
+      runtime
+        .start(
+          {
+            message: 'use the attached notes',
+            tools: [],
+            attachments: [
+              {
+                id: 'attachment-1',
+                name: 'notes.md',
+                path: '/Users/sme/notes.md',
+                sizeBytes: 30,
+                content: 'Important attachment guidance.'
+              }
+            ]
+          },
+          {
+            chunk: (chunk) => chunks.push(chunk),
+            complete: () => resolve(chunks.map((chunk) => chunk.content).join('')),
+            error: (event) => reject(new Error(event.error.message)),
+            canceled: () => reject(new Error('unexpected cancel'))
+          },
+          createFakeToolRuntime()
+        )
+        .catch(reject);
+    });
+
+    await expect(complete).resolves.toBe('Streamed Copilot response');
+  });
+
   it('passes configured external MCP servers to Copilot with allowlisted tools', async () => {
     const chunks: ChatStreamChunk[] = [];
     const runtime = new AgentRuntime({

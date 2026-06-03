@@ -4,6 +4,7 @@ import { PatchDiff } from '@pierre/diffs/react';
 import type {
   AgentStatusSnapshot,
   AppBootstrap,
+  ChatAttachment,
   ChatMessage,
   ContinueWithGitHubResult,
   FeedbackConfig,
@@ -16,7 +17,8 @@ import type {
   OpenProjectResult,
   ProjectUser,
   RecordDetail,
-  RenderNode
+  RenderNode,
+  ValidationIssue
 } from '../shared/types';
 import { feedbackConfigEntryForPath, FEEDBACK_EDIT_MODES, FEEDBACK_MODES } from '../shared/feedback';
 import './styles.css';
@@ -24,14 +26,78 @@ import './styles.css';
 type Status = 'idle' | 'loading' | 'error';
 type ChatState = 'ready' | 'streaming' | 'canceled' | 'error';
 type ColumnKey = 'records' | 'details' | 'chat';
+type FeedbackDraft = {
+  feedbackValue?: string;
+  commentValue?: string;
+  editValue?: string;
+};
+type FeedbackDrafts = Record<string, FeedbackDraft>;
 type PendingNavigation =
   | { kind: 'project'; projectId: string }
   | { kind: 'createProject'; projectId: string }
+  | { kind: 'createRecord' }
   | { kind: 'record'; recordId: string }
   | { kind: 'refreshRecords' }
   | { kind: 'close' };
 
 const MIN_COLUMN_PERCENT = 16;
+const NEW_RECORD_ID_BASE = 'new-record';
+const MAX_CHAT_ATTACHMENTS = 5;
+
+const nextNewRecordId = (existingIds: string[]): string => {
+  const existing = new Set(existingIds);
+  if (!existing.has(NEW_RECORD_ID_BASE)) {
+    return NEW_RECORD_ID_BASE;
+  }
+  for (let index = 2; ; index += 1) {
+    const candidate = `${NEW_RECORD_ID_BASE}-${index}`;
+    if (!existing.has(candidate)) {
+      return candidate;
+    }
+  }
+};
+
+const normalizeRecordFilename = (value: string): { ok: true; recordId: string } | { ok: false; message: string } => {
+  const trimmed = value.trim();
+  const withoutExtension = trimmed.toLowerCase().endsWith('.json') ? trimmed.slice(0, -'.json'.length) : trimmed;
+  if (!withoutExtension) {
+    return { ok: false, message: 'Filename is required.' };
+  }
+  if (withoutExtension.startsWith('_')) {
+    return { ok: false, message: 'Filename cannot start with an underscore.' };
+  }
+  if (withoutExtension.includes('/') || withoutExtension.includes('\\') || withoutExtension.includes('..')) {
+    return { ok: false, message: 'Filename cannot include path separators or "..".' };
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(withoutExtension)) {
+    return { ok: false, message: 'Filename can only use letters, numbers, dots, underscores, and hyphens.' };
+  }
+  return { ok: true, recordId: withoutExtension };
+};
+
+const formatBytes = (sizeBytes: number): string => {
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} B`;
+  }
+  return `${Math.ceil(sizeBytes / 1024)} KB`;
+};
+
+const formatChatMessageWithAttachments = (content: string, attachments: ChatAttachment[]): string => {
+  if (attachments.length === 0) {
+    return content;
+  }
+  const summary = attachments.map((attachment) => `- ${attachment.name} (${formatBytes(attachment.sizeBytes)})`).join('\n');
+  return `${content}\n\nAttached files:\n${summary}`;
+};
+
+const recordDraftErrorMessage = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+  const recordAlreadyExists = message.match(/Record already exists:\s*([^\s]+)/);
+  if (recordAlreadyExists?.[1]) {
+    return `Record already exists: ${recordAlreadyExists[1]}.json`;
+  }
+  return message.replace(/^Error invoking remote method '[^']+': Error:\s*/, '');
+};
 
 const App = () => {
   const [bootstrap, setBootstrap] = useState<AppBootstrap | undefined>();
@@ -43,15 +109,21 @@ const App = () => {
   const [projectUser, setProjectUser] = useState<ProjectUser | undefined>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
+  const [chatAttachments, setChatAttachments] = useState<ChatAttachment[]>([]);
+  const [chatAttachmentError, setChatAttachmentError] = useState<string | undefined>();
   const [agentStatus, setAgentStatus] = useState<AgentStatusSnapshot | undefined>();
   const [loginDialog, setLoginDialog] = useState<ContinueWithGitHubResult | undefined>();
   const [loginInProgress, setLoginInProgress] = useState(false);
   const [chatState, setChatState] = useState<ChatState>('ready');
   const [activeRequestId, setActiveRequestId] = useState<string | undefined>();
   const [newProjectId, setNewProjectId] = useState('');
+  const [newRecordFilename, setNewRecordFilename] = useState('');
+  const [newRecordFilenameError, setNewRecordFilenameError] = useState<string | undefined>();
   const [isCreateProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
+  const [isCreateRecordDialogOpen, setCreateRecordDialogOpen] = useState(false);
   const [isFeedbackConfigOpen, setFeedbackConfigOpen] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [feedbackDrafts, setFeedbackDrafts] = useState<FeedbackDrafts>({});
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | undefined>();
   const [showExtraSchemaFields, setShowExtraSchemaFields] = useState(false);
   const [status, setStatus] = useState<Status>('loading');
@@ -60,9 +132,17 @@ const App = () => {
   const columnsRef = useRef<HTMLElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const activeRequestIdRef = useRef<string | undefined>(undefined);
+  const projectRef = useRef<OpenProjectResult | undefined>(undefined);
+  const recordRef = useRef<RecordDetail | undefined>(undefined);
+  const inlineEditVersionRef = useRef(0);
+  const inlineEditQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const inlineDraftDataRef = useRef<unknown>(undefined);
   const selectedProjectIdRef = useRef('');
   const selectedRecordIdRef = useRef<string | undefined>(undefined);
   const hasUnsavedChangesRef = useRef(false);
+  const hasStagedChangesRef = useRef(false);
+  const feedbackDraftsRef = useRef<FeedbackDrafts>({});
+  const draftRecordIdsRef = useRef<Set<string>>(new Set());
   const chatStateRef = useRef<ChatState>('ready');
   const activeLoginIdRef = useRef<string | undefined>(undefined);
   const loginDialogTitleId = useId();
@@ -80,8 +160,23 @@ const App = () => {
   }, [selectedProjectId]);
 
   useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
+  useEffect(() => {
     selectedRecordIdRef.current = record?.recordId;
+    recordRef.current = record;
   }, [record?.recordId]);
+
+  useEffect(() => {
+    recordRef.current = record;
+  }, [record]);
+
+  const selectRecordDetail = (nextRecord: RecordDetail | undefined) => {
+    inlineEditVersionRef.current += 1;
+    inlineDraftDataRef.current = nextRecord?.data;
+    setRecord(nextRecord);
+  };
 
   useEffect(() => {
     const messagesElement = messagesRef.current;
@@ -117,7 +212,7 @@ const App = () => {
         }
         setChatState('ready');
         setActiveRequestId(undefined);
-        void refreshSelectedRecord();
+        void refreshProjectAndSelectedRecord();
       }),
       window.reviewAssistant.onChatError((event) => {
         if (activeRequestIdRef.current !== event.requestId) {
@@ -135,7 +230,7 @@ const App = () => {
           }
           return [...current, { id: `error-${Date.now()}`, role: 'system', content, createdAt: new Date().toISOString() }];
         });
-        void refreshSelectedRecord();
+        void refreshProjectAndSelectedRecord();
       }),
       window.reviewAssistant.onChatCanceled((event) => {
         if (activeRequestIdRef.current !== event.requestId) {
@@ -148,7 +243,7 @@ const App = () => {
             current.map((message) => (message.id === event.messageId && !message.content ? { ...message, content: 'Response canceled.' } : message))
           );
         }
-        void refreshSelectedRecord();
+        void refreshProjectAndSelectedRecord();
       }),
       window.reviewAssistant.onGitHubLoginComplete((completion) => {
         if (completion.success) {
@@ -237,8 +332,10 @@ const App = () => {
   const openProject = async (projectId: string) => {
     setSelectedProjectId(projectId);
     setProject(undefined);
-    setRecord(undefined);
+    selectRecordDetail(undefined);
     updateUnsavedChanges(false);
+    updateFeedbackDrafts({});
+    draftRecordIdsRef.current = new Set();
     setFeedbackConfig(undefined);
     setDraftFeedbackConfig(undefined);
     if (!projectId) {
@@ -266,9 +363,53 @@ const App = () => {
     setStatus('loading');
     setError(undefined);
     try {
-      setRecord(await window.reviewAssistant.getRecord(selectedProjectId, recordId));
+      selectRecordDetail(await window.reviewAssistant.getRecord(selectedProjectId, recordId));
+      updateFeedbackDrafts({});
       await refreshUnsavedStatus(selectedProjectId, recordId);
       setStatus('idle');
+    } catch (caught) {
+      setStatus('error');
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const refreshProjectState = async () => {
+    const projectId = selectedProjectIdRef.current;
+    if (!projectId) {
+      return undefined;
+    }
+    const result = await window.reviewAssistant.openProject(projectId);
+    const draftRecords = (projectRef.current?.records ?? []).filter((item) => draftRecordIdsRef.current.has(item.id));
+    const refreshedProject = {
+      ...result,
+      records: [...result.records, ...draftRecords.filter((draftRecord) => !result.records.some((item) => item.id === draftRecord.id))].sort((left, right) =>
+        left.displayName.localeCompare(right.displayName)
+      )
+    };
+    setProject(refreshedProject);
+    setFeedbackConfig(result.feedbackConfig);
+    setDraftFeedbackConfig(result.feedbackConfig);
+    const currentRecordId = selectedRecordIdRef.current;
+    if (currentRecordId && !refreshedProject.records.some((item) => item.id === currentRecordId)) {
+      selectRecordDetail(undefined);
+    }
+    return refreshedProject;
+  };
+
+  const refreshProjectAndSelectedRecord = async () => {
+    const projectId = selectedProjectIdRef.current;
+    const recordId = selectedRecordIdRef.current;
+    if (!projectId) {
+      return;
+    }
+    try {
+      const result = await refreshProjectState();
+      if (recordId && result?.records.some((item) => item.id === recordId)) {
+        selectRecordDetail(await window.reviewAssistant.getRecord(projectId, recordId));
+        await refreshUnsavedStatus(projectId, recordId);
+      } else {
+        updateUnsavedChanges(false);
+      }
     } catch (caught) {
       setStatus('error');
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -282,7 +423,7 @@ const App = () => {
       return;
     }
     try {
-      setRecord(await window.reviewAssistant.getRecord(projectId, recordId));
+      selectRecordDetail(await window.reviewAssistant.getRecord(projectId, recordId));
       await refreshUnsavedStatus(projectId, recordId);
     } catch (caught) {
       setStatus('error');
@@ -297,12 +438,26 @@ const App = () => {
     }
     const draftStatus = await window.reviewAssistant.getRecordDraftStatus(projectId, recordId);
     updateUnsavedChanges(draftStatus.hasUnsavedChanges);
-    return draftStatus.hasUnsavedChanges;
+    return draftStatus.hasUnsavedChanges || hasPendingFeedbackDrafts(feedbackDraftsRef.current);
   };
 
   const updateUnsavedChanges = (value: boolean) => {
-    hasUnsavedChangesRef.current = value;
-    setHasUnsavedChanges(value);
+    hasStagedChangesRef.current = value;
+    const combinedValue = value || hasPendingFeedbackDrafts(feedbackDraftsRef.current);
+    hasUnsavedChangesRef.current = combinedValue;
+    setHasUnsavedChanges(combinedValue);
+  };
+
+  const updateFeedbackDrafts = (drafts: FeedbackDrafts) => {
+    feedbackDraftsRef.current = drafts;
+    setFeedbackDrafts(drafts);
+    const combinedValue = hasStagedChangesRef.current || hasPendingFeedbackDrafts(drafts);
+    hasUnsavedChangesRef.current = combinedValue;
+    setHasUnsavedChanges(combinedValue);
+  };
+
+  const changeFeedbackDraft = (path: string, draft: FeedbackDraft) => {
+    updateFeedbackDrafts(removeEmptyFeedbackDrafts({ ...feedbackDraftsRef.current, [path]: draft }));
   };
 
   const refreshProjectUser = async (projectId: string) => {
@@ -325,7 +480,7 @@ const App = () => {
       setFeedbackConfig(result.feedbackConfig);
       setDraftFeedbackConfig(result.feedbackConfig);
       if (record && !result.records.some((item) => item.id === record.recordId)) {
-        setRecord(undefined);
+        selectRecordDetail(undefined);
       }
       setStatus('idle');
     } catch (caught) {
@@ -361,13 +516,63 @@ const App = () => {
     setError(undefined);
     try {
       const result = await window.reviewAssistant.submitFeedback(selectedProjectId, record.recordId, input);
-      setRecord(result.record);
+      selectRecordDetail(result.record);
+      inlineDraftDataRef.current = result.record.data;
       updateUnsavedChanges(true);
       await refreshProjectUser(selectedProjectId);
       setStatus('idle');
     } catch (caught) {
       setStatus('error');
       setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const updateInlineRecordValue = async (node: Extract<RenderNode, { kind: 'value' | 'raw' }>, value: string) => {
+    const currentRecord = recordRef.current;
+    const projectId = selectedProjectIdRef.current;
+    if (!projectId || !currentRecord || !node.path) {
+      return;
+    }
+    const nextData = writeJsonPointer(inlineDraftDataRef.current ?? currentRecord.data, node.path, coerceInlineEditValue(node, value));
+    inlineDraftDataRef.current = nextData;
+    const version = ++inlineEditVersionRef.current;
+    const updateRequest = inlineEditQueueRef.current.then(() => window.reviewAssistant.updateRecordData(projectId, currentRecord.recordId, nextData));
+    inlineEditQueueRef.current = updateRequest.then(
+      () => undefined,
+      () => undefined
+    );
+    try {
+      const updated = await updateRequest;
+      if (version !== inlineEditVersionRef.current || selectedRecordIdRef.current !== currentRecord.recordId) {
+        return;
+      }
+      inlineDraftDataRef.current = updated.data;
+      setRecord(updated);
+      updateUnsavedChanges(true);
+    } catch (caught) {
+      setStatus('error');
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const submitPendingFeedbackDrafts = async () => {
+    if (!selectedProjectId || !record) {
+      return;
+    }
+    const drafts = Object.entries(feedbackDraftsRef.current);
+    for (const [propertyPath, draft] of drafts) {
+      const result = await window.reviewAssistant.submitFeedback(selectedProjectId, record.recordId, {
+        propertyPath,
+        feedbackValue: draft.feedbackValue,
+        commentValue: draft.commentValue,
+        editValue: draft.editValue
+      });
+      selectRecordDetail(result.record);
+      updateUnsavedChanges(true);
+    }
+    if (drafts.length > 0) {
+      updateFeedbackDrafts({});
+      await refreshProjectUser(selectedProjectId);
     }
   };
 
@@ -378,7 +583,10 @@ const App = () => {
     setStatus('loading');
     setError(undefined);
     try {
-      setRecord(await window.reviewAssistant.saveRecordChanges(selectedProjectId, record.recordId));
+      await submitPendingFeedbackDrafts();
+      selectRecordDetail(await window.reviewAssistant.saveRecordChanges(selectedProjectId, record.recordId));
+      draftRecordIdsRef.current.delete(record.recordId);
+      updateFeedbackDrafts({});
       updateUnsavedChanges(false);
       await refreshProjectUser(selectedProjectId);
       setStatus('idle');
@@ -395,8 +603,90 @@ const App = () => {
       updateUnsavedChanges(false);
       return;
     }
-    await window.reviewAssistant.discardRecordChanges(selectedProjectId, record.recordId);
+    const discardedRecordId = record.recordId;
+    await window.reviewAssistant.discardRecordChanges(selectedProjectId, discardedRecordId);
+    if (draftRecordIdsRef.current.has(discardedRecordId)) {
+      setProject((current) =>
+        current
+          ? {
+              ...current,
+              records: current.records.filter((item) => item.id !== discardedRecordId)
+            }
+          : current
+      );
+    }
+    updateFeedbackDrafts({});
     updateUnsavedChanges(false);
+  };
+
+  const createNewRecordDraft = async (recordId: string) => {
+    if (!selectedProjectId || !project) {
+      return;
+    }
+    setStatus('loading');
+    setError(undefined);
+    try {
+      const created = await window.reviewAssistant.createRecordDraft(selectedProjectId, recordId);
+      draftRecordIdsRef.current.add(created.recordId);
+      selectRecordDetail(created);
+      setProject((current) =>
+        current
+          ? {
+              ...current,
+              records: [...current.records.filter((item) => item.id !== created.recordId), { id: created.recordId, displayName: created.displayName }].sort((a, b) =>
+                a.displayName.localeCompare(b.displayName)
+              )
+            }
+          : current
+      );
+      updateFeedbackDrafts({});
+      updateUnsavedChanges(true);
+      setNewRecordFilename('');
+      setNewRecordFilenameError(undefined);
+      setCreateRecordDialogOpen(false);
+      setStatus('idle');
+    } catch (caught) {
+      setStatus('idle');
+      setNewRecordFilenameError(recordDraftErrorMessage(caught));
+    }
+  };
+
+  const openCreateRecordDialog = () => {
+    if (!project) {
+      return;
+    }
+    setNewRecordFilename('');
+    setNewRecordFilenameError(undefined);
+    setCreateRecordDialogOpen(true);
+  };
+
+  const requestCreateRecord = async () => {
+    if (!selectedProjectId || !project) {
+      return;
+    }
+    if (chatState === 'streaming') {
+      setPendingNavigation({ kind: 'createRecord' });
+      return;
+    }
+    if (await refreshUnsavedStatus()) {
+      setPendingNavigation({ kind: 'createRecord' });
+      return;
+    }
+    openCreateRecordDialog();
+  };
+
+  const createRecord = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const normalized = normalizeRecordFilename(newRecordFilename);
+    if (!normalized.ok) {
+      setNewRecordFilenameError(normalized.message);
+      return;
+    }
+    if (project?.records.some((item) => item.id === normalized.recordId && !draftRecordIdsRef.current.has(item.id))) {
+      setNewRecordFilenameError(`Record already exists: ${normalized.recordId}.json`);
+      return;
+    }
+    await createNewRecordDraft(normalized.recordId);
   };
 
   const requestProjectOpen = async (projectId: string) => {
@@ -461,6 +751,10 @@ const App = () => {
       await createAndOpenProject(pending.projectId);
       return;
     }
+    if (pending.kind === 'createRecord') {
+      openCreateRecordDialog();
+      return;
+    }
     if (pending.kind === 'record') {
       await openRecord(pending.recordId);
       return;
@@ -491,6 +785,10 @@ const App = () => {
     }
     if (pending.kind === 'createProject') {
       await createAndOpenProject(pending.projectId);
+      return;
+    }
+    if (pending.kind === 'createRecord') {
+      openCreateRecordDialog();
       return;
     }
     if (pending.kind === 'record') {
@@ -553,15 +851,17 @@ const App = () => {
   };
 
   const submitChat = async () => {
-    const content = chatInput.trim();
+    const attachments = chatAttachments;
+    const content = chatInput.trim() || (attachments.length > 0 ? 'Please review the attached file(s).' : '');
     if (!content || chatState === 'streaming' || agentStatus?.availability === 'unavailable' || status === 'loading') {
       return;
     }
     const chatHistory = messages.filter((message) => (message.role === 'user' || message.role === 'assistant') && message.content.trim() !== '');
+    const displayedContent = formatChatMessageWithAttachments(content, attachments);
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
-      content,
+      content: displayedContent,
       createdAt: new Date().toISOString()
     };
     const assistantMessage: ChatMessage = {
@@ -572,11 +872,13 @@ const App = () => {
     };
     setMessages((current) => [...current, userMessage, assistantMessage]);
     setChatInput('');
+    setChatAttachments([]);
+    setChatAttachmentError(undefined);
     setChatState('streaming');
     try {
       const chatProjectId = record?.projectId ?? (selectedProjectId || undefined);
       const chatRecordId = record?.recordId;
-      const response = await window.reviewAssistant.startChat(chatProjectId, chatRecordId, content, chatHistory);
+      const response = await window.reviewAssistant.startChat(chatProjectId, chatRecordId, content, chatHistory, attachments);
       setActiveRequestId(response.requestId);
       setMessages((current) => current.map((message) => (message.id === assistantMessage.id ? { ...message, id: response.messageId } : message)));
     } catch (caught) {
@@ -594,6 +896,39 @@ const App = () => {
         )
       );
     }
+  };
+
+  const selectChatAttachments = async () => {
+    if (chatState === 'streaming') {
+      return;
+    }
+    try {
+      const result = await window.reviewAssistant.selectChatAttachments();
+      if (result.attachments.length === 0) {
+        return;
+      }
+      setChatAttachmentError(undefined);
+      setChatAttachments((current) => {
+        const byPath = new Map(current.map((attachment) => [attachment.path, attachment]));
+        for (const attachment of result.attachments) {
+          byPath.set(attachment.path, attachment);
+        }
+        const next = [...byPath.values()];
+        if (next.length > MAX_CHAT_ATTACHMENTS) {
+          setChatAttachmentError(`Attach at most ${MAX_CHAT_ATTACHMENTS} files.`);
+          return current;
+        }
+        return next;
+      });
+    } catch (caught) {
+      setChatAttachmentError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const removeChatAttachment = (attachmentId: string) => {
+    setChatAttachmentError(undefined);
+    setChatAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));
+    void window.reviewAssistant.discardChatAttachment(attachmentId);
   };
 
   const handleChatInputKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -624,7 +959,7 @@ const App = () => {
   const title = useMemo(() => (project ? 'records' : 'Select a project'), [project]);
   const agentUnavailable = agentStatus?.availability === 'unavailable';
   const agentAuthRequired = agentUnavailable && agentStatus?.error?.code === 'AUTH_REQUIRED';
-  const canSendChat = Boolean(chatInput.trim() && chatState !== 'streaming' && !agentUnavailable && status !== 'loading');
+  const canSendChat = Boolean((chatInput.trim() || chatAttachments.length > 0) && chatState !== 'streaming' && !agentUnavailable && status !== 'loading');
   const agentErrorText = agentStatus?.error?.remediation ? `${agentStatus.error.message} ${agentStatus.error.remediation}` : agentStatus?.error?.message;
   const pendingAssistantMessageId =
     chatState === 'streaming' ? [...messages].reverse().find((message) => message.role === 'assistant')?.id : undefined;
@@ -680,23 +1015,29 @@ const App = () => {
         </label>
         <button
           type="button"
-          className="create-project-button"
+          className="create-project-button header-action-button action-icon-button"
+          aria-label="Create project"
+          data-tooltip="Create project"
           disabled={Boolean(bootstrap?.configError)}
           onClick={() => setCreateProjectDialogOpen(true)}
         >
-          Create project
+          <span aria-hidden="true">+</span>
         </button>
-        <button
-          type="button"
-          className="secondary-button"
-          disabled={!selectedProjectId || !project || !draftFeedbackConfig}
-          onClick={() => {
-            setDraftFeedbackConfig(feedbackConfig);
-            setFeedbackConfigOpen(true);
-          }}
-        >
-          Configure
-        </button>
+        {selectedProjectId && project ? (
+          <button
+            type="button"
+            className="secondary-button header-action-button action-icon-button"
+            aria-label="Configure"
+            data-tooltip="Configure feedback"
+            disabled={!draftFeedbackConfig}
+            onClick={() => {
+              setDraftFeedbackConfig(feedbackConfig);
+              setFeedbackConfigOpen(true);
+            }}
+          >
+            <span aria-hidden="true">⚙</span>
+          </button>
+        ) : null}
         <div className="header-spacer" aria-hidden="true" />
         {selectedProjectId ? (
           <span className={projectUser?.valid === false ? 'username-badge invalid' : 'username-badge'} aria-label="Current feedback username">
@@ -745,6 +1086,48 @@ const App = () => {
         </div>
       ) : null}
 
+      {isCreateRecordDialogOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="create-record-title">
+            <h2 id="create-record-title">Create record</h2>
+            <form className="new-record-form" onSubmit={(event) => void createRecord(event)}>
+              <label htmlFor="new-record-filename">Filename</label>
+              <input
+                id="new-record-filename"
+                autoFocus
+                value={newRecordFilename}
+                onChange={(event) => {
+                  setNewRecordFilename(event.target.value);
+                  setNewRecordFilenameError(undefined);
+                }}
+                placeholder="new-record.json"
+              />
+              {newRecordFilenameError ? (
+                <p className="form-error" role="alert">
+                  {newRecordFilenameError}
+                </p>
+              ) : null}
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    setNewRecordFilename('');
+                    setNewRecordFilenameError(undefined);
+                    setCreateRecordDialogOpen(false);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="create-project-button" disabled={!newRecordFilename.trim()}>
+                  Create
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+
       {isFeedbackConfigOpen && draftFeedbackConfig ? (
         <div className="modal-backdrop" role="presentation">
           <section className="modal feedback-config-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-config-title">
@@ -779,16 +1162,30 @@ const App = () => {
         <section className="column records" aria-labelledby="record-list-heading" tabIndex={0}>
           <div className="records-header">
             <h2 id="record-list-heading">{title}</h2>
-            <button
-              type="button"
-              className="refresh-records-button"
-              aria-label="Refresh records"
-              title="Refresh records"
-              disabled={!selectedProjectId || status === 'loading'}
-              onClick={() => void requestRefreshRecords()}
-            >
-              Refresh
-            </button>
+            {selectedProjectId && project ? (
+              <div className="records-header-actions">
+                <button
+                  type="button"
+                  className="create-record-button action-icon-button"
+                  aria-label="Create record"
+                  data-tooltip="Create record"
+                  disabled={status === 'loading'}
+                  onClick={() => void requestCreateRecord()}
+                >
+                  <span aria-hidden="true">+</span>
+                </button>
+                <button
+                  type="button"
+                  className="refresh-records-button action-icon-button"
+                  aria-label="Refresh records"
+                  data-tooltip="Refresh records"
+                  disabled={status === 'loading'}
+                  onClick={() => void requestRefreshRecords()}
+                >
+                  <span aria-hidden="true">↻</span>
+                </button>
+              </div>
+            ) : null}
           </div>
           <div className="records-list-container" role="region" aria-label="Records list" tabIndex={0}>
             {records.length === 0 ? <p className="empty">No records loaded.</p> : null}
@@ -828,16 +1225,15 @@ const App = () => {
               </label>
               {record ? (
                 <div className="save-controls">
-                  <span className={hasUnsavedChanges ? 'unsaved-status' : 'saved-status'} aria-live="polite">
-                    {hasUnsavedChanges ? 'Unsaved changes' : 'All changes saved'}
-                  </span>
                   <button
                     type="button"
-                    className="create-project-button"
+                    className="create-record-button action-icon-button"
+                    aria-label="Save"
+                    data-tooltip="Save record"
                     disabled={!hasUnsavedChanges || status === 'loading'}
                     onClick={() => void saveSelectedRecordChanges()}
                   >
-                    Save
+                    <SaveIcon />
                   </button>
                 </div>
               ) : null}
@@ -851,6 +1247,9 @@ const App = () => {
               projectUser={projectUser}
               showExtraSchemaFields={showExtraSchemaFields}
               onSubmitFeedback={submitFeedback}
+              onInlineEdit={updateInlineRecordValue}
+              feedbackDrafts={feedbackDrafts}
+              onChangeFeedbackDraft={changeFeedbackDraft}
             />
           ) : (
             <p className="empty">Choose a record to inspect read-only details.</p>
@@ -915,25 +1314,85 @@ const App = () => {
               disabled={agentUnavailable || chatState === 'streaming'}
               rows={4}
             />
-            <div className="chat-actions">
-              <button
-                type="button"
-                className="github-login-button"
-                onClick={() => void continueWithGitHub()}
-                disabled={chatState === 'streaming' || loginInProgress}
-              >
-                <GitHubLogo />
-                {loginInProgress ? 'Waiting...' : 'Login'}
-              </button>
-              <button type="submit" disabled={!canSendChat}>
-                Send
-              </button>
-              <button type="button" className="secondary-button" onClick={clearChat} disabled={messages.length === 0 || chatState === 'streaming'}>
-                Clear
-              </button>
-              <button type="button" className="secondary-button" disabled={chatState !== 'streaming'} onClick={() => void cancelChat()}>
-                Cancel
-              </button>
+            {chatAttachments.length > 0 || chatAttachmentError ? (
+              <div className="chat-attachments" aria-label="Selected chat attachments">
+                {chatAttachmentError ? (
+                  <p className="attachment-error" role="alert">
+                    {chatAttachmentError}
+                  </p>
+                ) : null}
+                {chatAttachments.map((attachment) => (
+                  <span className="attachment-chip" key={attachment.id}>
+                    <span>{attachment.name}</span>
+                    <small>{formatBytes(attachment.sizeBytes)}</small>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${attachment.name}`}
+                      onClick={() => removeChatAttachment(attachment.id)}
+                      disabled={chatState === 'streaming'}
+                    >
+                      x
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <div className="chat-action-row">
+              <div className="chat-login-actions" aria-label="Login actions">
+                <button
+                  type="button"
+                  className="github-login-button chat-login-button action-icon-button"
+                  aria-label={loginInProgress ? 'Waiting for GitHub login' : 'Login to GitHub'}
+                  data-tooltip={loginInProgress ? 'Waiting for GitHub login' : 'Login to GitHub'}
+                  data-tooltip-align="left"
+                  onClick={() => void continueWithGitHub()}
+                  disabled={chatState === 'streaming' || loginInProgress}
+                >
+                  <GitHubLogo />
+                </button>
+              </div>
+              <div className="chat-actions" aria-label="Chat actions">
+                <button
+                  type="button"
+                  className="secondary-button action-icon-button"
+                  aria-label="Attach"
+                  data-tooltip="Attach files"
+                  onClick={() => void selectChatAttachments()}
+                  disabled={chatState === 'streaming' || agentUnavailable}
+                >
+                  <span aria-hidden="true">📎</span>
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button action-icon-button"
+                  aria-label="Clear"
+                  data-tooltip="Clear chat"
+                  onClick={clearChat}
+                  disabled={messages.length === 0 || chatState === 'streaming'}
+                >
+                  <span aria-hidden="true" className="clear-icon-text">CLR</span>
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button action-icon-button"
+                  aria-label="Cancel"
+                  data-tooltip="Cancel response"
+                  disabled={chatState !== 'streaming'}
+                  onClick={() => void cancelChat()}
+                >
+                  <span aria-hidden="true">■</span>
+                </button>
+                <button
+                  type="submit"
+                  className="action-icon-button"
+                  aria-label="Send"
+                  data-tooltip="Send message"
+                  data-tooltip-align="right"
+                  disabled={!canSendChat}
+                >
+                  <span aria-hidden="true">↵</span>
+                </button>
+              </div>
             </div>
           </form>
         </section>
@@ -1040,6 +1499,15 @@ const GitHubLogo = () => (
     <path
       fill="currentColor"
       d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.65 7.65 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+    />
+  </svg>
+);
+
+const SaveIcon = () => (
+  <svg className="action-svg-icon" aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+    <path
+      fill="currentColor"
+      d="M2 1.5A1.5 1.5 0 0 1 3.5 0h7.38c.4 0 .78.16 1.06.44l1.62 1.62c.28.28.44.66.44 1.06V14.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 14.5v-13ZM4 1.5V6h7V1.62L10.88 1.5H10V4H8V1.5H4Zm0 8V15h8V9.5H4Z"
     />
   </svg>
 );
@@ -1267,23 +1735,27 @@ const RecordDetails = ({
   feedbackConfig,
   projectUser,
   showExtraSchemaFields,
-  onSubmitFeedback
+  onSubmitFeedback,
+  onInlineEdit,
+  feedbackDrafts,
+  onChangeFeedbackDraft
 }: {
   record: RecordDetail;
   feedbackConfig: FeedbackConfig | undefined;
   projectUser: ProjectUser | undefined;
   showExtraSchemaFields: boolean;
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
+  onInlineEdit: (node: Extract<RenderNode, { kind: 'value' | 'raw' }>, value: string) => Promise<void>;
+  feedbackDrafts: FeedbackDrafts;
+  onChangeFeedbackDraft: (path: string, draft: FeedbackDraft) => void;
 }) => (
-  <div>
+  <InlineEditContext.Provider value={onInlineEdit}>
     {record.validationIssues.length > 0 ? (
       <section className="validation" aria-label="Validation errors">
         <h3>Validation errors</h3>
         <ul>
           {record.validationIssues.map((issue, index) => (
-            <li key={`${issue.path}-${issue.keyword}-${index}`}>
-              <code>{issue.path}</code> {issue.message}
-            </li>
+            <li key={`${issue.path}-${issue.keyword}-${index}`}>{formatValidationIssue(issue)}</li>
           ))}
         </ul>
       </section>
@@ -1297,8 +1769,14 @@ const RecordDetails = ({
       projectUser={projectUser}
       showExtraSchemaFields={showExtraSchemaFields}
       onSubmitFeedback={onSubmitFeedback}
+      feedbackDrafts={feedbackDrafts}
+      onChangeFeedbackDraft={onChangeFeedbackDraft}
     />
-  </div>
+  </InlineEditContext.Provider>
+);
+
+const InlineEditContext = React.createContext<((node: Extract<RenderNode, { kind: 'value' | 'raw' }>, value: string) => Promise<void>) | undefined>(
+  undefined
 );
 
 const RenderTreeRoot = ({
@@ -1307,7 +1785,9 @@ const RenderTreeRoot = ({
   history,
   projectUser,
   showExtraSchemaFields,
-  onSubmitFeedback
+  onSubmitFeedback,
+  feedbackDrafts,
+  onChangeFeedbackDraft
 }: {
   node: RenderNode;
   feedbackConfig?: FeedbackConfig;
@@ -1315,6 +1795,8 @@ const RenderTreeRoot = ({
   projectUser?: ProjectUser;
   showExtraSchemaFields: boolean;
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
+  feedbackDrafts?: FeedbackDrafts;
+  onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
 }) => {
   if (node.kind === 'object') {
     return (
@@ -1329,6 +1811,8 @@ const RenderTreeRoot = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            feedbackDrafts={feedbackDrafts}
+            onChangeFeedbackDraft={onChangeFeedbackDraft}
           />
         ))}
       </>
@@ -1342,6 +1826,8 @@ const RenderTreeRoot = ({
       projectUser={projectUser}
       showExtraSchemaFields={showExtraSchemaFields}
       onSubmitFeedback={onSubmitFeedback}
+      feedbackDrafts={feedbackDrafts}
+      onChangeFeedbackDraft={onChangeFeedbackDraft}
     />
   );
 };
@@ -1353,7 +1839,9 @@ const RenderTree = ({
   history,
   projectUser,
   showExtraSchemaFields = true,
-  onSubmitFeedback
+  onSubmitFeedback,
+  feedbackDrafts,
+  onChangeFeedbackDraft
 }: {
   node: RenderNode;
   collapseObject?: boolean;
@@ -1362,6 +1850,8 @@ const RenderTree = ({
   projectUser?: ProjectUser;
   showExtraSchemaFields?: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+  feedbackDrafts?: FeedbackDrafts;
+  onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
 }) => {
   const issues = node.validationIssues.length > 0 ? (
     <ul className="field-errors">
@@ -1375,7 +1865,7 @@ const RenderTree = ({
     if (collapseObject) {
       const identifier = getObjectIdentifier(node);
       const feedbackNode = { ...node, label: identifier ?? node.label };
-      const historyFeedbackRatings = feedbackRatingsForHistory(node.path ? history?.[node.path] : undefined);
+      const summaryFeedbackRatings = feedbackRatingsForNodeSummary(node.path, history, feedbackDrafts);
       return (
         <details className="node collapsible-node">
           <summary>
@@ -1383,10 +1873,18 @@ const RenderTree = ({
               {node.description ? <span className="field-description">{node.description}</span> : null}
               <span className="array-item-identifier">{identifier ?? node.label}</span>
             </span>
-            <RatingSummary ratings={historyFeedbackRatings} />
+            <RatingSummary ratings={summaryFeedbackRatings} />
           </summary>
           {issues}
-          <FeedbackPanel node={feedbackNode} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+          <FeedbackPanel
+            node={feedbackNode}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+            draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+            onChangeDraft={onChangeFeedbackDraft}
+          />
           {visibleRenderNodes(node.children, showExtraSchemaFields).map((child) => (
             <RenderTree
               key={child.path ?? child.label}
@@ -1396,6 +1894,8 @@ const RenderTree = ({
               projectUser={projectUser}
               showExtraSchemaFields={showExtraSchemaFields}
               onSubmitFeedback={onSubmitFeedback}
+              feedbackDrafts={feedbackDrafts}
+              onChangeFeedbackDraft={onChangeFeedbackDraft}
             />
           ))}
         </details>
@@ -1405,7 +1905,15 @@ const RenderTree = ({
       <section className="node">
         <FieldHeading label={node.label} description={node.description} />
         {issues}
-        <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+        <FeedbackPanel
+          node={node}
+          feedbackConfig={feedbackConfig}
+          history={history}
+          projectUser={projectUser}
+          onSubmitFeedback={onSubmitFeedback}
+          draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+          onChangeDraft={onChangeFeedbackDraft}
+        />
         {visibleRenderNodes(node.children, showExtraSchemaFields).map((child) => (
           <RenderTree
             key={child.path ?? child.label}
@@ -1415,6 +1923,8 @@ const RenderTree = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            feedbackDrafts={feedbackDrafts}
+            onChangeFeedbackDraft={onChangeFeedbackDraft}
           />
         ))}
       </section>
@@ -1431,6 +1941,8 @@ const RenderTree = ({
           projectUser={projectUser}
           showExtraSchemaFields={showExtraSchemaFields}
           onSubmitFeedback={onSubmitFeedback}
+          feedbackDrafts={feedbackDrafts}
+          onChangeFeedbackDraft={onChangeFeedbackDraft}
         />
       );
     }
@@ -1438,7 +1950,15 @@ const RenderTree = ({
       <section className="node array-node">
         <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
         {issues}
-        <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+        <FeedbackPanel
+          node={node}
+          feedbackConfig={feedbackConfig}
+          history={history}
+          projectUser={projectUser}
+          onSubmitFeedback={onSubmitFeedback}
+          draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+          onChangeDraft={onChangeFeedbackDraft}
+        />
         {visibleRenderNodes(node.items, showExtraSchemaFields).map((child) => (
           <RenderTree
             key={child.path ?? child.label}
@@ -1449,6 +1969,8 @@ const RenderTree = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            feedbackDrafts={feedbackDrafts}
+            onChangeFeedbackDraft={onChangeFeedbackDraft}
           />
         ))}
       </section>
@@ -1465,7 +1987,15 @@ const RenderTree = ({
           ) : (
             <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
           )}
-          <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+          <FeedbackPanel
+            node={node}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            onSubmitFeedback={onSubmitFeedback}
+            draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+            onChangeDraft={onChangeFeedbackDraft}
+          />
         </CollapsiblePresentationField>
       );
     }
@@ -1481,7 +2011,15 @@ const RenderTree = ({
         ) : (
           <pre className={presentationOutputClassName(node.presentation)}>{JSON.stringify(node.value, null, 2)}</pre>
         )}
-        <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+        <FeedbackPanel
+          node={node}
+          feedbackConfig={feedbackConfig}
+          history={history}
+          projectUser={projectUser}
+          onSubmitFeedback={onSubmitFeedback}
+          draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+          onChangeDraft={onChangeFeedbackDraft}
+        />
       </section>
     );
   }
@@ -1496,7 +2034,15 @@ const RenderTree = ({
         ) : (
           <output className={presentationOutputClassName(node.presentation)}>{formatValue(node.value)}</output>
         )}
-        <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+        <FeedbackPanel
+          node={node}
+          feedbackConfig={feedbackConfig}
+          history={history}
+          projectUser={projectUser}
+          onSubmitFeedback={onSubmitFeedback}
+          draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+          onChangeDraft={onChangeFeedbackDraft}
+        />
       </CollapsiblePresentationField>
     );
   }
@@ -1512,7 +2058,15 @@ const RenderTree = ({
       ) : (
         <ValueOutput value={node.value} className={presentationOutputClassName(node.presentation)} />
       )}
-      <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+      <FeedbackPanel
+        node={node}
+        feedbackConfig={feedbackConfig}
+        history={history}
+        projectUser={projectUser}
+        onSubmitFeedback={onSubmitFeedback}
+        draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+        onChangeDraft={onChangeFeedbackDraft}
+      />
     </section>
   );
 };
@@ -1540,7 +2094,9 @@ const EvidenceList = ({
   history,
   projectUser,
   showExtraSchemaFields,
-  onSubmitFeedback
+  onSubmitFeedback,
+  feedbackDrafts,
+  onChangeFeedbackDraft
 }: {
   node: Extract<RenderNode, { kind: 'array' }>;
   issues: React.ReactNode;
@@ -1549,11 +2105,21 @@ const EvidenceList = ({
   projectUser?: ProjectUser;
   showExtraSchemaFields: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+  feedbackDrafts?: FeedbackDrafts;
+  onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
 }) => (
   <section className="node array-node evidence-list">
     <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
     {issues}
-    <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+    <FeedbackPanel
+      node={node}
+      feedbackConfig={feedbackConfig}
+      history={history}
+      projectUser={projectUser}
+      onSubmitFeedback={onSubmitFeedback}
+      draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+      onChangeDraft={onChangeFeedbackDraft}
+    />
     <div className="evidence-items">
       {visibleRenderNodes(node.items, showExtraSchemaFields).map((item, index) =>
         item.kind === 'object' ? (
@@ -1566,6 +2132,8 @@ const EvidenceList = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            feedbackDrafts={feedbackDrafts}
+            onChangeFeedbackDraft={onChangeFeedbackDraft}
           />
         ) : (
           <RenderTree
@@ -1576,6 +2144,8 @@ const EvidenceList = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            feedbackDrafts={feedbackDrafts}
+            onChangeFeedbackDraft={onChangeFeedbackDraft}
           />
         )
       )}
@@ -1590,7 +2160,9 @@ const EvidenceCard = ({
   history,
   projectUser,
   showExtraSchemaFields,
-  onSubmitFeedback
+  onSubmitFeedback,
+  feedbackDrafts,
+  onChangeFeedbackDraft
 }: {
   node: Extract<RenderNode, { kind: 'object' }>;
   index: number;
@@ -1599,6 +2171,8 @@ const EvidenceCard = ({
   projectUser?: ProjectUser;
   showExtraSchemaFields: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+  feedbackDrafts?: FeedbackDrafts;
+  onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
 }) => {
   const source = evidenceChildText(node, 'source');
   const id = evidenceChildText(node, 'id');
@@ -1606,17 +2180,25 @@ const EvidenceCard = ({
   const readonlyFields = fields.filter((field) => field.editMode === 'none');
   const editableFields = fields.filter((field) => field.editMode !== 'none');
   const feedbackNode = { ...node, label: source ?? `Evidence ${index + 1}` };
-  const historyFeedbackRatings = feedbackRatingsForHistory(node.path ? history?.[node.path] : undefined);
+  const summaryFeedbackRatings = feedbackRatingsForNodeSummary(node.path, history, feedbackDrafts);
   return (
     <details className="evidence-card" open>
       <summary className="evidence-card-header">
         <span className="evidence-card-title">
           <h4>{source ?? `Evidence ${index + 1}`}</h4>
-          <RatingSummary ratings={historyFeedbackRatings} />
+          <RatingSummary ratings={summaryFeedbackRatings} />
         </span>
         {id ? <span className="evidence-id">{id}</span> : null}
       </summary>
-      <FeedbackPanel node={feedbackNode} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} />
+      <FeedbackPanel
+        node={feedbackNode}
+        feedbackConfig={feedbackConfig}
+        history={history}
+        projectUser={projectUser}
+        onSubmitFeedback={onSubmitFeedback}
+        draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+        onChangeDraft={onChangeFeedbackDraft}
+      />
       {readonlyFields.length > 0 ? (
         <dl className="evidence-readonly-grid" aria-label="Read-only evidence fields">
           {readonlyFields.map(({ node: child, editMode }) => (
@@ -1629,6 +2211,8 @@ const EvidenceCard = ({
              projectUser={projectUser}
              showExtraSchemaFields={showExtraSchemaFields}
              onSubmitFeedback={onSubmitFeedback}
+             feedbackDrafts={feedbackDrafts}
+             onChangeFeedbackDraft={onChangeFeedbackDraft}
            />
           ))}
         </dl>
@@ -1645,6 +2229,8 @@ const EvidenceCard = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            feedbackDrafts={feedbackDrafts}
+            onChangeFeedbackDraft={onChangeFeedbackDraft}
           />
           ))}
         </dl>
@@ -1660,7 +2246,9 @@ const EvidenceField = ({
   history,
   projectUser,
   showExtraSchemaFields,
-  onSubmitFeedback
+  onSubmitFeedback,
+  feedbackDrafts,
+  onChangeFeedbackDraft
 }: {
   node: RenderNode;
   editMode: FeedbackEditMode;
@@ -1669,6 +2257,8 @@ const EvidenceField = ({
   projectUser?: ProjectUser;
   showExtraSchemaFields: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+  feedbackDrafts?: FeedbackDrafts;
+  onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
 }) => {
   return (
     <div className={`evidence-field ${editMode !== 'none' ? 'editable' : 'readonly'}`}>
@@ -1690,11 +2280,22 @@ const EvidenceField = ({
               projectUser={projectUser}
               showExtraSchemaFields={showExtraSchemaFields}
               onSubmitFeedback={onSubmitFeedback}
+              feedbackDrafts={feedbackDrafts}
+              onChangeFeedbackDraft={onChangeFeedbackDraft}
             />
           )}
         </dd>
       )}
-      <FeedbackPanel node={node} feedbackConfig={feedbackConfig} history={history} projectUser={projectUser} onSubmitFeedback={onSubmitFeedback} showEditDiff={editMode === 'logged'} />
+      <FeedbackPanel
+        node={node}
+        feedbackConfig={feedbackConfig}
+        history={history}
+        projectUser={projectUser}
+        onSubmitFeedback={onSubmitFeedback}
+        draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+        onChangeDraft={onChangeFeedbackDraft}
+        showEditDiff={editMode === 'logged'}
+      />
     </div>
   );
 };
@@ -1727,6 +2328,19 @@ const FieldHeading = ({ label, description, meta }: { label: string; description
   </h3>
 );
 
+const formatValidationIssue = (issue: ValidationIssue): string => `${formatValidationPath(issue.path)}: ${issue.message}`;
+
+const formatValidationPath = (path: string): string => {
+  if (!path || path === '/') {
+    return 'Record';
+  }
+  return path
+    .slice(1)
+    .split('/')
+    .map((part) => part.replace(/~1/g, '/').replace(/~0/g, '~'))
+    .join(' > ');
+};
+
 const ValueOutput = ({ value, className }: { value: unknown; className?: string }) => {
   const formatted = formatValue(value);
   if (typeof value === 'string' && isHttpUrl(value)) {
@@ -1744,12 +2358,39 @@ const ValueOutput = ({ value, className }: { value: unknown; className?: string 
 const InlineEditableValue = ({ node, className }: { node: Extract<RenderNode, { kind: 'value' | 'raw' }>; className?: string }) => {
   const initialValue = editableValue(node);
   const [value, setValue] = useState(initialValue);
+  const focusedRef = useRef(false);
+  const onInlineEdit = React.useContext(InlineEditContext);
   useEffect(() => {
-    setValue(initialValue);
+    if (!focusedRef.current) {
+      setValue(initialValue);
+    }
   }, [initialValue, node.path]);
+  const changeValue = (nextValue: string) => {
+    setValue(nextValue);
+    if (onInlineEdit) {
+      void onInlineEdit(node, nextValue);
+    }
+  };
   if (node.kind === 'value' && node.enumValues) {
+    const hasSelectedOption = node.enumValues.some((option) => formatValue(option) === value);
     return (
-      <select aria-label={node.label} className="enum-select" value={value} onChange={(event) => setValue(event.target.value)}>
+      <select
+        aria-label={node.label}
+        className="enum-select"
+        value={value}
+        onChange={(event) => changeValue(event.target.value)}
+        onFocus={() => {
+          focusedRef.current = true;
+        }}
+        onBlur={() => {
+          focusedRef.current = false;
+        }}
+      >
+        {hasSelectedOption ? null : (
+          <option value="" disabled>
+            (not set)
+          </option>
+        )}
         {node.enumValues.map((option) => (
           <option key={enumOptionValue(option)} value={formatValue(option)}>
             {formatValue(option)}
@@ -1763,8 +2404,14 @@ const InlineEditableValue = ({ node, className }: { node: Extract<RenderNode, { 
       aria-label={node.label}
       className={`inline-edit-value${className ? ` ${className}` : ''}`}
       value={value}
-      onChange={(event) => setValue(event.target.value)}
-      rows={Math.max(2, Math.min(8, value.split(/\r?\n/).length))}
+      onChange={(event) => changeValue(event.target.value)}
+      onFocus={() => {
+        focusedRef.current = true;
+      }}
+      onBlur={() => {
+        focusedRef.current = false;
+      }}
+      rows={Math.max(1, Math.min(8, value.split(/\r?\n/).length))}
     />
   );
 };
@@ -1784,6 +2431,8 @@ const FeedbackPanel = ({
   history,
   projectUser,
   onSubmitFeedback,
+  draft,
+  onChangeDraft,
   showEditDiff = false
 }: {
   node: RenderNode;
@@ -1791,18 +2440,18 @@ const FeedbackPanel = ({
   history?: Record<string, FeedbackHistory>;
   projectUser?: ProjectUser;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+  draft?: FeedbackDraft;
+  onChangeDraft?: (path: string, draft: FeedbackDraft) => void;
   showEditDiff?: boolean;
 }) => {
   const path = node.path;
   const config = path && feedbackConfig ? feedbackConfigEntryForPath(feedbackConfig, path) : undefined;
   const nodeHistory = path ? history?.[path] : undefined;
   const initialEditValue = editableValue(node);
-  const [feedbackValue, setFeedbackValue] = useState('');
-  const [commentValue, setCommentValue] = useState('');
-  const [editValue, setEditValue] = useState(initialEditValue);
+  const [localDraft, setLocalDraft] = useState<FeedbackDraft>({});
   const editInputId = useId();
   useEffect(() => {
-    setEditValue(initialEditValue);
+    setLocalDraft({});
   }, [initialEditValue, path]);
   if (!path || !config || !onSubmitFeedback) {
     return null;
@@ -1814,48 +2463,37 @@ const FeedbackPanel = ({
   if (!showFeedbackControls && allHistory.length === 0) {
     return null;
   }
-  const editChanged = editValue.trim() !== initialEditValue.trim();
-  const canSubmit = Boolean(feedbackValue.trim() || commentValue.trim() || editChanged);
+  const activeDraft = draft ?? localDraft;
+  const feedbackValue = activeDraft.feedbackValue ?? '';
+  const commentValue = activeDraft.commentValue ?? '';
+  const editValue = activeDraft.editValue ?? initialEditValue;
   const historyFeedbackRatings = feedbackRatingsForCollectedHistory(allHistory);
+  const changeDraft = (patch: FeedbackDraft) => {
+    const nextDraft = normalizeFeedbackDraft({ ...activeDraft, ...patch }, initialEditValue);
+    if (onChangeDraft) {
+      onChangeDraft(path, nextDraft);
+      return;
+    }
+    setLocalDraft(nextDraft);
+  };
 
   return (
     <section className="feedback-panel" aria-label={`${node.label} feedback`}>
       {showFeedbackControls && config.feedback !== 'none' ? (
-        <FeedbackValueInput mode={config.feedback} label={node.label} value={feedbackValue} onChange={setFeedbackValue} />
+        <FeedbackValueInput mode={config.feedback} label={node.label} value={feedbackValue} onChange={(value) => changeDraft({ feedbackValue: value })} />
       ) : null}
       {showFeedbackControls && config.editMode === 'logged' ? (
         <div className="feedback-input">
           <label htmlFor={editInputId}>Edit</label>
-          <EditInput id={editInputId} node={node} value={editValue} onChange={setEditValue} />
+          <EditInput id={editInputId} node={node} value={editValue} onChange={(value) => changeDraft({ editValue: value })} />
           {showEditDiff ? <EditDiff original={initialEditValue} edited={editValue} /> : null}
         </div>
       ) : null}
       {showFeedbackControls && config.comments ? (
         <label className="feedback-input">
           Comment
-          <textarea value={commentValue} onChange={(event) => setCommentValue(event.target.value)} rows={2} />
+          <textarea value={commentValue} onChange={(event) => changeDraft({ commentValue: event.target.value })} rows={2} />
         </label>
-      ) : null}
-      {showFeedbackControls ? (
-        <button
-          type="button"
-          className="secondary-button"
-          disabled={!canSubmit}
-          onClick={() => {
-            void onSubmitFeedback({
-              propertyPath: path,
-              feedbackValue: feedbackValue || undefined,
-              commentValue: commentValue || undefined,
-              editValue: editChanged ? editValue : undefined
-            }).then(() => {
-              setFeedbackValue('');
-              setCommentValue('');
-              setEditValue(initialEditValue);
-            });
-          }}
-        >
-          Stage feedback
-        </button>
       ) : null}
       {allHistory.length > 0 ? (
         <details className="feedback-history">
@@ -1928,6 +2566,15 @@ const RatingSummary = ({ ratings }: { ratings: RatingSummaryItem[] }) => {
 
 const feedbackRatingsForHistory = (history: FeedbackHistory | undefined): RatingSummaryItem[] =>
   feedbackRatingsForCollectedHistory(collectHistory(history));
+
+const feedbackRatingsForNodeSummary = (
+  path: string | undefined,
+  history: Record<string, FeedbackHistory> | undefined,
+  drafts: FeedbackDrafts | undefined
+): RatingSummaryItem[] => [
+  ...(path && drafts?.[path]?.feedbackValue ? [feedbackRatingLabel(drafts[path].feedbackValue)] : []),
+  ...feedbackRatingsForHistory(path ? history?.[path] : undefined)
+];
 
 const feedbackRatingsForCollectedHistory = (
   history: Array<{ username: string; timestamp: string; feedback?: string; comment?: string; edit?: string; original?: string }>
@@ -2024,6 +2671,11 @@ const FeedbackValueInput = ({
               name={groupName}
               value={option.value}
               checked={value === option.value}
+              onClick={() => {
+                if (value === option.value) {
+                  onChange('');
+                }
+              }}
               onChange={(event) => onChange(event.target.value)}
             />
             <span>{option.label}</span>
@@ -2036,8 +2688,14 @@ const FeedbackValueInput = ({
 
 const EditInput = ({ id, node, value, onChange }: { id: string; node: RenderNode; value: string; onChange: (value: string) => void }) => {
   if (node.kind === 'value' && node.enumValues) {
+    const hasSelectedOption = node.enumValues.some((option) => formatValue(option) === value);
     return (
       <select id={id} value={value} onChange={(event) => onChange(event.target.value)}>
+        {hasSelectedOption ? null : (
+          <option value="" disabled>
+            (not set)
+          </option>
+        )}
         {node.enumValues.map((option) => (
           <option key={enumOptionValue(option)} value={formatValue(option)}>
             {formatValue(option)}
@@ -2050,6 +2708,92 @@ const EditInput = ({ id, node, value, onChange }: { id: string; node: RenderNode
 };
 
 const editableValue = (node: RenderNode): string => (node.kind === 'value' || node.kind === 'raw' ? formatValue(node.value) : '');
+
+const coerceInlineEditValue = (node: Extract<RenderNode, { kind: 'value' | 'raw' }>, value: string): unknown => {
+  if (node.kind === 'value' && node.enumValues) {
+    const option = node.enumValues.find((item) => enumOptionValue(item) === value || formatValue(item) === value);
+    return option === undefined ? value : option;
+  }
+  if (node.kind === 'raw') {
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      return value;
+    }
+  }
+  if (node.type === 'number' || node.type === 'integer') {
+    const numericValue = Number(value);
+    return value.trim() !== '' && Number.isFinite(numericValue) ? numericValue : value;
+  }
+  if (node.type === 'boolean') {
+    if (value === 'true') {
+      return true;
+    }
+    if (value === 'false') {
+      return false;
+    }
+  }
+  return value;
+};
+
+const writeJsonPointer = (data: unknown, path: string, value: unknown): unknown => {
+  if (!path.startsWith('/')) {
+    return value;
+  }
+  const root = cloneJson(data);
+  const segments = path
+    .slice(1)
+    .split('/')
+    .map((part) => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+  if (segments.length === 0) {
+    return value;
+  }
+  const writableRoot = isWritableRecord(root) ? root : {};
+  let current: Record<string, unknown> | unknown[] = writableRoot;
+  for (const [index, segment] of segments.entries()) {
+    const isLast = index === segments.length - 1;
+    if (Array.isArray(current)) {
+      const arrayIndex = Number(segment);
+      if (!Number.isInteger(arrayIndex) || arrayIndex < 0) {
+        throw new Error(`Invalid array path segment: ${segment}`);
+      }
+      if (isLast) {
+        current[arrayIndex] = value;
+      } else {
+        current[arrayIndex] = isWritableContainer(current[arrayIndex]) ? current[arrayIndex] : nextContainer(segments[index + 1]);
+        current = current[arrayIndex] as Record<string, unknown> | unknown[];
+      }
+    } else {
+      if (isLast) {
+        current[segment] = value;
+      } else {
+        current[segment] = isWritableContainer(current[segment]) ? current[segment] : nextContainer(segments[index + 1]);
+        current = current[segment] as Record<string, unknown> | unknown[];
+      }
+    }
+  }
+  return writableRoot;
+};
+
+const cloneJson = <T,>(value: T): T => (value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T));
+
+const isWritableRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isWritableContainer = (value: unknown): value is Record<string, unknown> | unknown[] => isWritableRecord(value) || Array.isArray(value);
+
+const nextContainer = (nextSegment: string): Record<string, unknown> | unknown[] => (/^(0|[1-9]\d*)$/.test(nextSegment) ? [] : {});
+
+const normalizeFeedbackDraft = (draft: FeedbackDraft, initialEditValue: string): FeedbackDraft => ({
+  feedbackValue: draft.feedbackValue?.trim() ? draft.feedbackValue : undefined,
+  commentValue: draft.commentValue?.trim() ? draft.commentValue : undefined,
+  editValue: draft.editValue !== undefined && draft.editValue.trim() !== initialEditValue.trim() ? draft.editValue : undefined
+});
+
+const hasPendingFeedbackDrafts = (drafts: FeedbackDrafts): boolean =>
+  Object.values(drafts).some((draft) => Boolean(draft.feedbackValue?.trim() || draft.commentValue?.trim() || draft.editValue !== undefined));
+
+const removeEmptyFeedbackDrafts = (drafts: FeedbackDrafts): FeedbackDrafts =>
+  Object.fromEntries(Object.entries(drafts).filter(([, draft]) => hasPendingFeedbackDrafts({ draft })));
 
 const collectHistory = (
   history: FeedbackHistory | undefined
@@ -2116,7 +2860,7 @@ const EnumValue = ({ node }: { node: Extract<RenderNode, { kind: 'value' }> }) =
         event.currentTarget.value = selectedValue;
       }}
     >
-      {hasSelectedOption ? null : <option value={selectedValue}>{value} (not allowed)</option>}
+      {hasSelectedOption ? null : <option value={selectedValue}>{value}</option>}
       {enumOptions.map((value) => (
         <option key={enumOptionValue(value)} value={enumOptionValue(value)}>
           {formatValue(value)}
@@ -2135,7 +2879,7 @@ const formatItemCount = (count: number): string => `${count} ${count === 1 ? 'it
 
 const formatValue = (value: unknown): string => {
   if (value === undefined) {
-    return '(missing)';
+    return '';
   }
   if (typeof value === 'string') {
     return value;

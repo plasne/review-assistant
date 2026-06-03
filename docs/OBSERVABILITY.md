@@ -16,10 +16,13 @@ Long-running chat and tool workflows should also include:
 - `provider`: active agent provider identifier when provider work is involved.
 - `projectId`: selected project identifier or `none`.
 - `recordId`: selected record identifier or `none`.
-- `systemPromptSource`: `app`, `project`, or `none` for the prompt selected for a chat request.
+- `systemPromptSource`: `app`, `project`, `app+project`, or `none` for the prompt selected for a chat request.
 - `systemPromptChars`: character count of the selected prompt.
+- `attachmentCount`: number of selected chat attachments included in a request.
+- `attachmentChars`: total character count of selected chat attachment content; file content is never logged.
 - `externalMcpServers`: comma-separated external MCP server identifiers configured for a chat request, or `none`.
 - `elapsedMs`: elapsed duration for completed work.
+- `contextMs`: elapsed duration for main-process chat context assembly before the agent starts.
 - `code`: stable error code for failed work.
 
 ## Event Taxonomy

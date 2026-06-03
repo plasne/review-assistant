@@ -7,6 +7,7 @@ import type {
   AgentProviderMetadata,
   AgentStatusSnapshot,
   ChatCanceled,
+  ChatAttachmentContent,
   ChatMessage,
   ChatStreamChunk,
   ChatStreamComplete,
@@ -22,6 +23,7 @@ import type { LocalToolRuntime } from './tools';
 export type ChatContext = {
   message: string;
   history?: ChatMessage[];
+  attachments?: ChatAttachmentContent[];
   projectId?: string;
   recordId?: string;
   systemPrompt?: string;
@@ -143,6 +145,8 @@ export class AgentRuntime {
       requestId,
       projectId: context.projectId ?? 'none',
       recordId: context.recordId ?? 'none',
+      attachmentCount: context.attachments?.length ?? 0,
+      attachmentChars: context.attachments?.reduce((total, attachment) => total + attachment.content.length, 0) ?? 0,
       toolCount: context.tools.length,
       tools: context.tools.map((tool) => tool.name).join(',') || 'none',
       externalMcpServers: context.mcpServers?.map((server) => server.id).join(',') || 'none',

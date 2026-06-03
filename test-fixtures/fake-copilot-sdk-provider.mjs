@@ -91,6 +91,15 @@ const assertPromptBoundary = (prompt) => {
   ) {
     throw new Error('Expected chat history in provider prompt.');
   }
+  if (
+    process.env.FAKE_COPILOT_REQUIRE_ATTACHMENTS === '1' &&
+    (!prompt.includes('Attached files:') ||
+    !prompt.includes('File: notes.md') ||
+    !prompt.includes('--- BEGIN ATTACHMENT notes.md ---') ||
+    !prompt.includes('Important attachment guidance.'))
+  ) {
+    throw new Error('Expected chat attachment content in provider prompt.');
+  }
 };
 
 const assertToolConfiguration = (context) => {

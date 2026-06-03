@@ -7,6 +7,11 @@ const fakeProviderEnv = {
   REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE: path.resolve('test-fixtures/fake-copilot-sdk-provider.mjs')
 };
 
+const expectRecordSaved = async (page: import('@playwright/test').Page) => {
+  await expect(page.getByText('Loading...')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
+};
+
 test('real Electron app opens a local project and reviews a record', async () => {
   const createdProjectPath = path.resolve('test-fixtures/local-projects/e2e-created-project');
   fs.rmSync(createdProjectPath, { recursive: true, force: true });
@@ -51,11 +56,12 @@ test('real Electron app opens a local project and reviews a record', async () =>
   await expect(page.getByText('Record question: How do I run the harness?')).toBeVisible();
 
   await page.getByRole('button', { name: 'Create project' }).click();
-  await expect(page.getByRole('dialog', { name: 'Create project' })).toBeVisible();
+  const createProjectDialog = page.getByRole('dialog', { name: 'Create project' });
+  await expect(createProjectDialog).toBeVisible();
   await page.getByLabel('Project name').fill('e2e-created-project');
-  await page.getByRole('button', { name: 'Create', exact: true }).click();
+  await createProjectDialog.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'records' })).toBeVisible();
-  expect(fs.existsSync(path.join(createdProjectPath, '_schema.json'))).toBe(true);
+  await expect.poll(() => fs.existsSync(path.join(createdProjectPath, '_schema.json'))).toBe(true);
 
   await electronApp.close();
   fs.rmSync(createdProjectPath, { recursive: true, force: true });
@@ -183,6 +189,9 @@ test('workspace keeps filling the window after collapsible sections are toggled'
     expect(Math.abs(metrics.appBottom - metrics.viewportHeight)).toBeLessThanOrEqual(1);
     expect(Math.abs(metrics.footerBottom - metrics.viewportHeight)).toBeLessThanOrEqual(1);
     expect(metrics.columnsBottom).toBeLessThanOrEqual(metrics.footerTop + 1);
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expectRecordSaved(page);
   } finally {
     await electronApp.close();
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -250,11 +259,10 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   await firstPage.getByRole('button', { name: 'record-1', exact: true }).click();
   await firstPage.locator('label.feedback-option').filter({ hasText: /^Good$/ }).click();
   await firstPage.getByLabel('Comment').fill('Looks good to me');
-  await firstPage.getByRole('button', { name: 'Stage feedback' }).click();
-  await expect(firstPage.getByText('Unsaved changes')).toBeVisible();
-  await expect(firstPage.getByText('History (1)')).toBeVisible();
+  await expect(firstPage.getByRole('button', { name: 'Save' })).toBeEnabled();
+  await expect(firstPage.getByText('History (1)')).toBeHidden();
   await firstPage.getByRole('button', { name: 'Save' }).click();
-  await expect(firstPage.getByText('All changes saved')).toBeVisible();
+  await expectRecordSaved(firstPage);
   await firstApp.close();
 
   fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=second@example.com\n`);
@@ -275,10 +283,10 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   await expect(secondPage.getByLabel('Edit')).toBeVisible();
   await secondPage.getByLabel('Edit').fill('Second user edit');
   await expect(secondPage.getByLabel('Edit')).toHaveValue('Second user edit');
-  await secondPage.getByRole('button', { name: 'Stage feedback' }).click();
-  await expect(secondPage.getByText('History (3)')).toBeVisible();
+  await expect(secondPage.getByRole('button', { name: 'Save' })).toBeEnabled();
+  await expect(secondPage.getByText('History (3)')).toBeHidden();
   await secondPage.getByRole('button', { name: 'Save' }).click();
-  await expect(secondPage.getByText('All changes saved')).toBeVisible();
+  await expectRecordSaved(secondPage);
 
   await secondApp.close();
   fs.rmSync(tempRoot, { recursive: true, force: true });

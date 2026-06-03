@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   assertAgentStatus,
   assertBootstrap,
+  assertChatAttachmentContents,
+  assertChatAttachments,
+  assertChatAttachmentSelectionResult,
   assertChatStreamChunk,
   assertChatStreamStart,
   assertChatHistory,
@@ -61,6 +64,26 @@ describe('IPC boundary validators', () => {
     expect(() =>
       assertChatHistory([{ id: 'system-1', role: 'system', content: 'Provider error', createdAt: '2026-06-02T12:00:02.000Z' }])
     ).toThrow('Chat history can only include user and assistant messages');
+  });
+
+  it('validates chat attachments at IPC and main-process boundaries', () => {
+    const attachment = {
+      id: 'attachment-1',
+      name: 'notes.md',
+      path: '/Users/sme/notes.md',
+      sizeBytes: 128
+    };
+    expect(assertChatAttachments([attachment])).toEqual([attachment]);
+    expect(assertChatAttachmentSelectionResult({ attachments: [attachment] })).toEqual({ attachments: [attachment] });
+    expect(assertChatAttachmentSelectionResult({ attachments: [] })).toEqual({ attachments: [] });
+    expect(assertChatAttachmentContents([{ ...attachment, content: 'Important context.' }])).toEqual([{ ...attachment, content: 'Important context.' }]);
+    expect(() => assertChatAttachments(Array.from({ length: 6 }, (_, index) => ({ ...attachment, id: `attachment-${index}` })))).toThrow(
+      'Chat attachments must include at most 5 files'
+    );
+    expect(() => assertChatAttachments([{ ...attachment, sizeBytes: -1 }])).toThrow('Chat attachment size must be a non-negative number');
+    expect(() => assertChatAttachmentContents([{ ...attachment, content: 'x'.repeat(60_001) }])).toThrow(
+      'Chat attachment content must be text under 60,000 characters'
+    );
   });
 
   it('validates response shapes that cross preload and IPC boundaries', () => {

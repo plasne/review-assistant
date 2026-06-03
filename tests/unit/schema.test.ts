@@ -65,6 +65,60 @@ const releaseReadinessSchema = {
   required: ['service', 'rolloutStage']
 };
 
+const supportTriageSchema = {
+  type: 'object',
+  properties: {
+    ticketId: { type: 'string' },
+    severity: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+    customer: {
+      type: 'object',
+      properties: {
+        accountId: { type: 'string' },
+        segment: { type: 'string' }
+      },
+      required: ['accountId']
+    },
+    timeline: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          at: { type: 'string', format: 'date-time' },
+          event: { type: 'string' },
+          actor: { type: 'string' }
+        },
+        required: ['at', 'event']
+      }
+    }
+  },
+  required: ['ticketId', 'severity', 'customer', 'timeline']
+};
+
+const documentExtractionSchema = {
+  allOf: [
+    {
+      type: 'object',
+      properties: {
+        documentId: { type: 'string' },
+        classification: { type: 'string' }
+      },
+      required: ['documentId']
+    },
+    {
+      type: 'object',
+      properties: {
+        extractedFields: {
+          type: 'object',
+          properties: {
+            vendor: { type: 'string' },
+            invoiceTotal: { type: ['number', 'null'] }
+          }
+        }
+      }
+    }
+  ]
+};
+
 const evidenceExamples = [
   { id: '1', source: 'docs', uri: 'https://example.com/docs', content: 'primary supporting content' },
   { id: '2', source: 'runbook', uri: 'https://example.com/runbook', content: 'secondary supporting content' }
@@ -94,6 +148,30 @@ const projectSchemaExamples = [
       ]
     },
     expectedContent: 'Runbook updated'
+  },
+  {
+    name: 'support-triage project',
+    schema: supportTriageSchema,
+    data: {
+      ticketId: 'SUP-101',
+      severity: 'high',
+      customer: { accountId: 'contoso', segment: 'enterprise' },
+      timeline: [
+        { at: '2026-06-03T13:00:00.000Z', event: 'Case opened', actor: 'customer' },
+        { at: '2026-06-03T13:15:00.000Z', event: 'Mitigation suggested', actor: 'support' }
+      ]
+    },
+    expectedContent: 'Mitigation suggested'
+  },
+  {
+    name: 'document-extraction project',
+    schema: documentExtractionSchema,
+    data: {
+      documentId: 'invoice-42',
+      classification: 'invoice',
+      extractedFields: { vendor: 'Northwind', invoiceTotal: 123.45 }
+    },
+    expectedContent: 'Northwind'
   }
 ];
 
@@ -145,6 +223,13 @@ describe('schema validation and rendering', () => {
     const issues = validateRecord(qaSchema, { persona: 'analyst' });
     expect(issues.map((issue) => issue.keyword)).toContain('required');
     expect(issues.map((issue) => issue.keyword)).toContain('enum');
+    expect(issues.map((issue) => issue.message)).toEqual(
+      expect.arrayContaining([
+        'Missing required field: question',
+        'Missing required field: evidence',
+        'Value must be one of: TPM, developer, SME'
+      ])
+    );
   });
 
   it('falls back to raw read-only rendering for complex constructs while preserving validation', () => {

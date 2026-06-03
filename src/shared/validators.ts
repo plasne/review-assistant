@@ -2,6 +2,9 @@ import type {
   AgentErrorEnvelope,
   AgentStatusSnapshot,
   AppBootstrap,
+  ChatAttachment,
+  ChatAttachmentContent,
+  ChatAttachmentSelectionResult,
   ChatCanceled,
   ChatCancelResult,
   ChatMessage,
@@ -34,6 +37,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isString = (value: unknown): value is string => typeof value === 'string';
+const MAX_CHAT_ATTACHMENTS = 5;
+const MAX_CHAT_ATTACHMENT_CONTENT_CHARS = 60_000;
+const MAX_CHAT_ATTACHMENT_TOTAL_CHARS = 60_000;
 
 export const assertProjectId = (value: unknown): string => {
   if (!isString(value) || value.trim() === '' || value.includes('/') || value.includes('\\') || value.includes('..')) {
@@ -96,6 +102,69 @@ export const assertChatHistory = (value: unknown): ChatMessage[] => {
       createdAt: message.createdAt
     };
   });
+};
+
+const assertChatAttachmentMetadata = (value: unknown): ChatAttachment => {
+  if (!isRecord(value) || !isString(value.id) || !isString(value.name) || !isString(value.path)) {
+    throw new ValidationError('Invalid chat attachment.');
+  }
+  if (value.id.trim() === '' || value.name.trim() === '' || value.path.trim() === '') {
+    throw new ValidationError('Chat attachment metadata must be non-empty.');
+  }
+  if (typeof value.sizeBytes !== 'number' || !Number.isFinite(value.sizeBytes) || value.sizeBytes < 0) {
+    throw new ValidationError('Chat attachment size must be a non-negative number.');
+  }
+  return {
+    id: value.id,
+    name: value.name,
+    path: value.path,
+    sizeBytes: value.sizeBytes
+  };
+};
+
+export const assertChatAttachments = (value: unknown): ChatAttachment[] => {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > MAX_CHAT_ATTACHMENTS) {
+    throw new ValidationError(`Chat attachments must include at most ${MAX_CHAT_ATTACHMENTS} files.`);
+  }
+  return value.map(assertChatAttachmentMetadata);
+};
+
+export const assertChatAttachmentContents = (value: unknown): ChatAttachmentContent[] => {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > MAX_CHAT_ATTACHMENTS) {
+    throw new ValidationError(`Chat attachments must include at most ${MAX_CHAT_ATTACHMENTS} files.`);
+  }
+  let totalChars = 0;
+  return value.map((attachment) => {
+    const metadata = assertChatAttachmentMetadata(attachment);
+    if (!isRecord(attachment) || !isString(attachment.content) || attachment.content.length > MAX_CHAT_ATTACHMENT_CONTENT_CHARS) {
+      throw new ValidationError('Chat attachment content must be text under 60,000 characters.');
+    }
+    totalChars += attachment.content.length;
+    if (totalChars > MAX_CHAT_ATTACHMENT_TOTAL_CHARS) {
+      throw new ValidationError('Chat attachment content must be under 60,000 total characters.');
+    }
+    return { ...metadata, content: attachment.content };
+  });
+};
+
+export const assertChatAttachmentSelectionResult = (value: unknown): ChatAttachmentSelectionResult => {
+  if (!isRecord(value)) {
+    throw new ValidationError('Invalid chat attachment selection response.');
+  }
+  return { attachments: assertChatAttachments(value.attachments) };
+};
+
+export const assertChatAttachmentId = (value: unknown): string => {
+  if (!isString(value) || value.trim() === '') {
+    throw new ValidationError('Invalid chat attachment identifier.');
+  }
+  return value;
 };
 
 export const assertProjectSummary = (value: unknown): ProjectSummary => {

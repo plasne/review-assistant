@@ -2,6 +2,7 @@ import type {
   AgentErrorEnvelope,
   AgentProviderMetadata,
   AgentStatusSnapshot,
+  ChatAttachmentContent,
   ChatMessage,
   ExternalMcpServerConfig,
   LocalToolMetadata,
@@ -12,6 +13,7 @@ import type {
 export type ChatContext = {
   message: string;
   history?: ChatMessage[];
+  attachments?: ChatAttachmentContent[];
   projectId?: string;
   recordId?: string;
   systemPrompt?: string;

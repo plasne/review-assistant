@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { DefaultAzureCredential } from '@azure/identity';
@@ -40,6 +41,7 @@ export interface StorageAdapter {
   writeRecordDataIfUnchanged?(projectId: string, recordId: string, data: unknown, expectedData: unknown): Promise<RecordDetail>;
   getFeedbackConfig(projectId: string): Promise<FeedbackConfig>;
   saveFeedbackConfig(projectId: string, config: FeedbackConfig): Promise<FeedbackConfig>;
+  saveProjectSchema(projectId: string, schema: unknown): Promise<ProjectSchemaSaveResult>;
   getProjectUser(projectId: string): Promise<ProjectUser>;
   submitFeedback(projectId: string, recordId: string, input: FeedbackSubmissionInput): Promise<FeedbackSubmissionResult>;
   updateRecord(projectId: string, recordId: string, data: unknown): Promise<RecordDetail>;
@@ -47,6 +49,13 @@ export interface StorageAdapter {
   getProjectConfig(projectId: string): Promise<Record<string, string>>;
   getProjectMcpConfig(projectId: string): Promise<string | undefined>;
 }
+
+export type ProjectSchemaSaveResult = {
+  projectId: string;
+  schemaPath: '_schema.json';
+  backupSchemaPath?: string;
+  schema: unknown;
+};
 
 const NEW_PROJECT_SCHEMA = {
   type: 'object',
@@ -136,6 +145,17 @@ export class LocalStorageAdapter implements StorageAdapter {
     const project = this.projectPath(assertProjectId(projectId));
     const id = assertRecordId(recordId);
     const recordPath = containedPath(project, `${id}.json`);
+    if (expectedData === undefined) {
+      try {
+        await fs.writeFile(recordPath, `${JSON.stringify(data, null, 2)}\n`, { flag: 'wx' });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+          throw new Error(RECORD_DRAFT_CONFLICT_MESSAGE);
+        }
+        throw error;
+      }
+      return this.renderRecordData(projectId, id, data);
+    }
     const current = await readJsonFile(recordPath, `Record not found: ${id}`);
     if (!jsonEqual(current, expectedData)) {
       throw new Error(RECORD_DRAFT_CONFLICT_MESSAGE);
@@ -156,6 +176,29 @@ export class LocalStorageAdapter implements StorageAdapter {
     const normalized = normalizeFeedbackConfig(schema, config);
     await writeJsonFile(path.join(project, '_feedback.json'), normalized);
     return normalized;
+  }
+
+  async saveProjectSchema(projectId: string, schema: unknown): Promise<ProjectSchemaSaveResult> {
+    validateRecord(schema, {});
+    const id = assertProjectId(projectId);
+    const project = this.projectPath(id);
+    const schemaPath = path.join(project, '_schema.json');
+    const tempPath = path.join(project, `._schema.${process.pid}.${Date.now()}.json`);
+    const body = `${JSON.stringify(schema, null, 2)}\n`;
+    await fs.writeFile(tempPath, body, { flag: 'wx' });
+    let backupSchemaPath: string | undefined;
+    try {
+      if (await fileExists(schemaPath)) {
+        backupSchemaPath = await nextSchemaBackupName(project);
+        await fs.copyFile(schemaPath, path.join(project, backupSchemaPath), fsConstants.COPYFILE_EXCL);
+        await fs.unlink(schemaPath);
+      }
+      await fs.rename(tempPath, schemaPath);
+      return { projectId: id, schemaPath: '_schema.json', backupSchemaPath, schema };
+    } catch (error) {
+      await fs.rm(tempPath, { force: true });
+      throw error;
+    }
   }
 
   async getProjectUser(projectId: string): Promise<ProjectUser> {
@@ -315,6 +358,21 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const record = assertRecordId(recordId);
     const container = this.client.getContainerClient(id);
     const blob = container.getBlockBlobClient(`${record}.json`);
+    if (expectedData === undefined) {
+      const body = `${JSON.stringify(data, null, 2)}\n`;
+      try {
+        await blob.upload(body, Buffer.byteLength(body), {
+          blobHTTPHeaders: { blobContentType: 'application/json' },
+          conditions: { ifNoneMatch: '*' }
+        });
+      } catch (error) {
+        if (typeof error === 'object' && error !== null && 'statusCode' in error && (error as { statusCode?: number }).statusCode === 412) {
+          throw new Error(RECORD_DRAFT_CONFLICT_MESSAGE);
+        }
+        throw error;
+      }
+      return this.renderRecordData(id, record, data);
+    }
     const response = await blob.download();
     const current = JSON.parse(await streamToString(response.readableStreamBody)) as unknown;
     if (!jsonEqual(current, expectedData) || !response.etag) {
@@ -350,6 +408,24 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const body = `${JSON.stringify(normalized, null, 2)}\n`;
     await container.getBlockBlobClient('_feedback.json').upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
     return normalized;
+  }
+
+  async saveProjectSchema(projectId: string, schema: unknown): Promise<ProjectSchemaSaveResult> {
+    validateRecord(schema, {});
+    const id = assertProjectId(projectId);
+    const container = this.client.getContainerClient(id);
+    const schemaBlob = container.getBlockBlobClient('_schema.json');
+    const body = `${JSON.stringify(schema, null, 2)}\n`;
+    let backupSchemaPath: string | undefined;
+    if (await schemaBlob.exists()) {
+      const existing = await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.');
+      backupSchemaPath = await this.nextSchemaBackupName(container);
+      await container.getBlockBlobClient(backupSchemaPath).upload(existing, Buffer.byteLength(existing), {
+        blobHTTPHeaders: { blobContentType: 'application/json' }
+      });
+    }
+    await schemaBlob.upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
+    return { projectId: id, schemaPath: '_schema.json', backupSchemaPath, schema };
   }
 
   async getProjectUser(projectId: string): Promise<ProjectUser> {
@@ -434,6 +510,15 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     return content ? (JSON.parse(content) as unknown) : undefined;
   }
 
+  private async nextSchemaBackupName(container: ReturnType<BlobServiceClient['getContainerClient']>): Promise<string> {
+    for (let index = 1; ; index += 1) {
+      const name = `_schema_${index}.json`;
+      if (!(await container.getBlobClient(name).exists())) {
+        return name;
+      }
+    }
+  }
+
   private mergeAzureProjectConfig(projectEnv: string | undefined): Record<string, string> {
     return projectEnv
       ? { ...this.config.values, ...readRuntimeEnvValues(this.config.appEnvPath), ...parseAzureProjectEnv(projectEnv) }
@@ -476,6 +561,27 @@ const readOptionalJsonFile = async (filePath: string): Promise<unknown> => {
 
 const writeJsonFile = async (filePath: string, value: unknown): Promise<void> => {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+};
+
+const fileExists = async (filePath: string): Promise<boolean> => {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+};
+
+const nextSchemaBackupName = async (projectPath: string): Promise<string> => {
+  for (let index = 1; ; index += 1) {
+    const name = `_schema_${index}.json`;
+    if (!(await fileExists(path.join(projectPath, name)))) {
+      return name;
+    }
+  }
 };
 
 const jsonEqual = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);

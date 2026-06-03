@@ -1,12 +1,16 @@
-import { app, BrowserWindow, clipboard, ipcMain } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain } from 'electron';
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { APP_VERSION } from '../generated/version';
 import { logError, logInfo } from '../shared/logging';
-import type { AppBootstrap } from '../shared/types';
+import type { AppBootstrap, ChatAttachmentContent } from '../shared/types';
 import {
   assertChatCancelResult,
+  assertChatAttachmentContents,
+  assertChatAttachments,
+  assertChatAttachmentSelectionResult,
   assertBootstrap,
   assertChatMessage,
   assertChatHistory,
@@ -23,7 +27,8 @@ import {
   assertProjectSummaries,
   assertRecordDraftStatus,
   assertRecordDetail,
-  assertRecordId
+  assertRecordId,
+  assertChatAttachmentId
 } from '../shared/validators';
 import { ConfigError, loadAppConfig } from './env';
 import { createStorageAdapter, type StorageAdapter } from './storage';
@@ -42,6 +47,14 @@ let appMcpConfigPath: string | undefined;
 let appPromptPath: string | undefined;
 let allowClose = false;
 const agent = new AgentRuntime({ workerPath: path.join(__dirname, '../agent/agent-process.js') });
+const attachmentCache = new Map<string, ChatAttachmentContent>();
+const MAX_ATTACHMENT_BYTES = 64 * 1024;
+const TEXT_ATTACHMENT_FILTERS = [
+  {
+    name: 'Text files',
+    extensions: ['txt', 'md', 'markdown', 'json', 'jsonl', 'yaml', 'yml', 'csv', 'tsv', 'log', 'xml', 'html', 'css', 'js', 'jsx', 'ts', 'tsx', 'py', 'java', 'cs', 'go', 'rs', 'rb', 'php', 'sh', 'sql']
+  }
+];
 
 const initializeBackend = (): void => {
   try {
@@ -110,6 +123,47 @@ const readOptionalTextFile = async (filePath: string | undefined): Promise<strin
   }
 };
 
+const readChatAttachment = async (filePath: string): Promise<ChatAttachmentContent> => {
+  const stat = await fs.stat(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`Chat attachments must be files: ${filePath}`);
+  }
+  if (stat.size > MAX_ATTACHMENT_BYTES) {
+    throw new Error(`Chat attachment is too large: ${path.basename(filePath)}. Select a text file under 64 KB.`);
+  }
+  const buffer = await fs.readFile(filePath);
+  if (buffer.includes(0)) {
+    throw new Error(`Chat attachment must be a text file: ${path.basename(filePath)}`);
+  }
+  const content = buffer.toString('utf8');
+  if (content.includes('\uFFFD')) {
+    throw new Error(`Chat attachment must be valid UTF-8 text: ${path.basename(filePath)}`);
+  }
+  return assertChatAttachmentContents([
+    {
+      id: randomUUID(),
+      name: path.basename(filePath),
+      path: filePath,
+      sizeBytes: stat.size,
+      content
+    }
+  ])[0];
+};
+
+const resolveCachedAttachments = (attachments: unknown): ChatAttachmentContent[] => {
+  const requested = assertChatAttachments(attachments);
+  const resolved = requested.map((attachment) => {
+    const cached = attachmentCache.get(attachment.id);
+    if (!cached) {
+      throw new Error(`Chat attachment is no longer available: ${attachment.name}`);
+    }
+    return cached;
+  });
+  const validAttachments = assertChatAttachmentContents(resolved);
+  attachmentCache.clear();
+  return validAttachments;
+};
+
 const registerIpc = (): void => {
   ipcMain.handle('app:getBootstrap', async () => {
     const projects = storage ? await storage.listProjects() : [];
@@ -122,8 +176,14 @@ const registerIpc = (): void => {
   ipcMain.handle('projects:open', async (_event, projectId: unknown) =>
     assertOpenProjectResult(await requireStorage().openProject(assertProjectId(projectId)))
   );
+  ipcMain.handle('records:createDraft', async (_event, projectId: unknown, recordId: unknown) =>
+    assertRecordDetail(await drafts.createRecord(assertProjectId(projectId), assertRecordId(recordId)))
+  );
   ipcMain.handle('records:get', async (_event, projectId: unknown, recordId: unknown) =>
     assertRecordDetail(await drafts.getRecord(assertProjectId(projectId), assertRecordId(recordId)))
+  );
+  ipcMain.handle('records:updateData', async (_event, projectId: unknown, recordId: unknown, data: unknown) =>
+    assertRecordDetail(await drafts.updateRecord(assertProjectId(projectId), assertRecordId(recordId), data))
   );
   ipcMain.handle('records:getDraftStatus', async (_event, projectId: unknown, recordId: unknown) =>
     assertRecordDraftStatus(drafts.getStatus(assertProjectId(projectId), assertRecordId(recordId)))
@@ -153,6 +213,27 @@ const registerIpc = (): void => {
     mainWindow?.close();
   });
   ipcMain.handle('agent:getStatus', async () => agent.getStatus());
+  ipcMain.handle('chat:selectAttachments', async (event) => {
+    const parent = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    const options = {
+      title: 'Attach text files to chat',
+      properties: ['openFile', 'multiSelections'],
+      filters: TEXT_ATTACHMENT_FILTERS
+    } satisfies Electron.OpenDialogOptions;
+    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) {
+      return assertChatAttachmentSelectionResult({ attachments: [] });
+    }
+    attachmentCache.clear();
+    const attachments = assertChatAttachmentContents(await Promise.all(result.filePaths.map(readChatAttachment)));
+    for (const attachment of attachments) {
+      attachmentCache.set(attachment.id, attachment);
+    }
+    return assertChatAttachmentSelectionResult({ attachments });
+  });
+  ipcMain.handle('chat:discardAttachment', async (_event, attachmentId: unknown) => {
+    attachmentCache.delete(assertChatAttachmentId(attachmentId));
+  });
   ipcMain.handle('auth:continueWithGitHub', async (event) => {
     logInfo('review-assistant.auth-login-started', { provider: 'github-copilot' });
     const sender = event.sender;
@@ -179,12 +260,13 @@ const registerIpc = (): void => {
     }
     return assertContinueWithGitHubResult(result);
   });
-  ipcMain.handle('chat:start', async (event, projectId: unknown, recordId: unknown, message: unknown, history: unknown) => {
+  ipcMain.handle('chat:start', async (event, projectId: unknown, recordId: unknown, message: unknown, history: unknown, attachments: unknown) => {
     const startedAt = Date.now();
     const validProjectId = projectId === undefined ? undefined : assertProjectId(projectId);
     const validRecordId = recordId === undefined ? undefined : assertRecordId(recordId);
     const validMessage = assertChatMessage(message);
     const validHistory = assertChatHistory(history);
+    const validAttachments = resolveCachedAttachments(attachments);
     if (validRecordId && !validProjectId) {
       throw new Error('A project must be selected before sending selected record context.');
     }
@@ -207,6 +289,8 @@ const registerIpc = (): void => {
       messageChars: validMessage.length,
       historyMessageCount: validHistory.length,
       historyChars: validHistory.reduce((total, item) => total + item.content.length, 0),
+      attachmentCount: validAttachments.length,
+      attachmentChars: validAttachments.reduce((total, attachment) => total + attachment.content.length, 0),
       systemPromptSource: appPrompt && projectPrompt ? 'app+project' : projectPrompt ? 'project' : appPrompt ? 'app' : 'none',
       systemPromptChars: systemPrompt?.length ?? 0,
       toolCount: toolList.length,
@@ -219,6 +303,7 @@ const registerIpc = (): void => {
         {
           message: validMessage,
           history: validHistory,
+          attachments: validAttachments,
           projectId: validProjectId,
           recordId: validRecordId,
           systemPrompt,

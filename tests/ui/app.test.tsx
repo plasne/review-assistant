@@ -28,7 +28,9 @@ const api: Api = {
   listProjects: vi.fn(),
   createProject: vi.fn(),
   openProject: vi.fn(),
+  createRecordDraft: vi.fn(),
   getRecord: vi.fn(),
+  updateRecordData: vi.fn(),
   getRecordDraftStatus: vi.fn(),
   saveRecordChanges: vi.fn(),
   discardRecordChanges: vi.fn(),
@@ -39,6 +41,8 @@ const api: Api = {
   getAgentStatus: vi.fn(),
   continueWithGitHub: vi.fn(),
   startChat: vi.fn(),
+  selectChatAttachments: vi.fn(),
+  discardChatAttachment: vi.fn(),
   closeWindow: vi.fn(),
   cancelChat: vi.fn(),
   onCloseRequested: vi.fn((listener) => {
@@ -93,6 +97,15 @@ beforeEach(() => {
   });
   vi.mocked(api.getProjectUser).mockResolvedValue({ username: 'sme@example.com', valid: true });
   vi.mocked(api.getRecordDraftStatus).mockResolvedValue({ hasUnsavedChanges: false });
+  vi.mocked(api.updateRecordData).mockImplementation(async (projectId, recordId, data) => ({
+    projectId,
+    recordId,
+    displayName: recordId,
+    data,
+    schema: {},
+    validationIssues: [],
+    renderTree: { kind: 'object', label: 'record', path: '', children: [], validationIssues: [] }
+  }));
   vi.mocked(api.saveRecordChanges).mockImplementation(async (projectId, recordId) => api.getRecord(projectId, recordId));
   vi.mocked(api.discardRecordChanges).mockResolvedValue({ hasUnsavedChanges: false });
   vi.mocked(api.saveFeedbackConfig).mockImplementation(async (_projectId, config) => config);
@@ -104,8 +117,23 @@ beforeEach(() => {
     verificationUri: 'https://github.com/login/device',
     copiedToClipboard: true
   });
+  vi.mocked(api.selectChatAttachments).mockResolvedValue({ attachments: [] });
+  vi.mocked(api.discardChatAttachment).mockResolvedValue(undefined);
   window.reviewAssistant = api;
 });
+
+const getRecordCreateButton = (): HTMLElement => {
+  const button = screen.getByRole('button', { name: 'Create record' });
+  if (!button) {
+    throw new Error('Record Create button not found.');
+  }
+  return button as HTMLElement;
+};
+
+const findRecordCreateButton = async (): Promise<HTMLElement> => {
+  await waitFor(() => expect(getRecordCreateButton()).toBeEnabled());
+  return getRecordCreateButton();
+};
 
 describe('review UI', () => {
   it('renders request and response presentations with distinct classes', () => {
@@ -225,10 +253,7 @@ describe('review UI', () => {
     await userEvent.clear(editInput);
     await userEvent.type(editInput, 'Edited evidence content');
     expect(within(editableField as HTMLElement).getByLabelText('Edit')).toHaveValue('Edited evidence content');
-    await userEvent.click(within(editableField as HTMLElement).getByRole('button', { name: 'Stage feedback' }));
-    expect(onSubmitFeedback).toHaveBeenCalledWith(
-      expect.objectContaining({ propertyPath: '/turns/0/evidence/0/content', editValue: 'Edited evidence content' })
-    );
+    expect(onSubmitFeedback).not.toHaveBeenCalled();
   });
 
   it('renders whole-item feedback controls for generic array object items', () => {
@@ -288,6 +313,86 @@ describe('review UI', () => {
     const summary = screen.getByText('arch-order-001', { selector: '.array-item-identifier' }).closest('summary');
     expect(summary).toHaveAccessibleName('arch-order-001 Feedback ratings: 5 stars, 2 stars');
     expect(summary?.querySelector('.history-rating-summary')?.textContent).toBe('★★★★★,★★');
+  });
+
+  it('shows pending ratings on collapsed object sections without adding them to history', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [{ id: 'valid-record', displayName: 'valid-record' }],
+      feedbackConfig: {
+        properties: {
+          '/evidence/*': {
+            path: '/evidence/*',
+            target: 'Evidence > *',
+            tab: 'Main',
+            supportsEdit: true,
+            feedback: 'thumbs',
+            comments: false,
+            editMode: 'none'
+          }
+        }
+      }
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'valid-record',
+      displayName: 'valid-record',
+      data: { evidence: [{ id: 'doc-1', text: 'Relevant evidence' }] },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        path: '',
+        children: [
+          {
+            kind: 'array',
+            label: 'evidence',
+            path: '/evidence',
+            items: [
+              {
+                kind: 'object',
+                label: '0',
+                path: '/evidence/0',
+                children: [
+                  { kind: 'value', label: 'id', path: '/evidence/0/id', value: 'doc-1', validationIssues: [] },
+                  { kind: 'value', label: 'text', path: '/evidence/0/text', value: 'Relevant evidence', validationIssues: [] }
+                ],
+                validationIssues: []
+              }
+            ],
+            validationIssues: []
+          }
+        ],
+        validationIssues: []
+      },
+      feedbackHistory: { '/evidence/0': { feedback: [], edits: [], comments: [] } }
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+    await userEvent.click(await screen.findByRole('radio', { name: '👍' }));
+
+    const summary = screen.getByText('doc-1', { selector: '.array-item-identifier' }).closest('summary');
+    expect(summary).toHaveAccessibleName('doc-1 Feedback ratings: thumbs up');
+    expect(summary?.querySelector('.history-rating-summary')?.textContent).toBe('👍');
+    expect(screen.queryByText('History (1)')).not.toBeInTheDocument();
+    expect(api.submitFeedback).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('radio', { name: '👍' }));
+
+    expect(summary).toHaveAccessibleName('doc-1');
+    expect(summary?.querySelector('.history-rating-summary')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(api.submitFeedback).not.toHaveBeenCalled();
   });
 
   it('shows submitted ratings in the collapsed history summary', () => {
@@ -365,21 +470,45 @@ describe('review UI', () => {
     vi.mocked(api.startChat).mockResolvedValue({ requestId: 'request-1', messageId: 'assistant-1' });
 
     render(<App />);
-    expect(await screen.findByRole('button', { name: 'Configure' })).toBeDisabled();
+    await screen.findByLabelText('Current project');
+    expect(screen.queryByRole('button', { name: 'Configure' })).not.toBeInTheDocument();
+    const createProjectButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Create project' });
+    expect(createProjectButton).toHaveClass('header-action-button', 'action-icon-button');
+    expect(createProjectButton).toHaveAttribute('data-tooltip', 'Create project');
+    expect(document.querySelector('.create-record-button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refresh records' })).not.toBeInTheDocument();
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
     await waitFor(() => expect(screen.getByLabelText('Current feedback username')).toHaveTextContent('sme@example.com'));
+    expect(await screen.findByRole('button', { name: 'Configure' })).toBeInTheDocument();
+    const configureButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Configure' });
+    expect(configureButton).toHaveClass('header-action-button', 'action-icon-button');
+    expect(configureButton).toHaveAttribute('data-tooltip', 'Configure feedback');
+    const createRecordButton = getRecordCreateButton();
+    const refreshRecordsButton = screen.getByRole('button', { name: 'Refresh records' });
+    expect(createRecordButton).toBeEnabled();
+    expect(refreshRecordsButton).toBeEnabled();
+    expect(createRecordButton).toHaveClass('action-icon-button');
+    expect(createRecordButton).toHaveAttribute('data-tooltip', 'Create record');
+    expect(refreshRecordsButton).toHaveClass('action-icon-button');
+    expect(refreshRecordsButton).toHaveAttribute('data-tooltip', 'Refresh records');
+    expect(createRecordButton.parentElement).toBe(refreshRecordsButton.parentElement);
     const recordList = await screen.findByRole('region', { name: 'Records list' });
     const recordButton = await screen.findByRole('button', { name: 'valid-record' });
     expect(recordList).toContainElement(recordButton);
     await userEvent.click(recordButton);
     expect(await screen.findByText('Record passes schema validation.')).toBeInTheDocument();
+    const saveRecordButton = screen.getByRole('button', { name: 'Save' });
+    expect(saveRecordButton).toHaveClass('create-record-button', 'action-icon-button');
+    expect(saveRecordButton).toHaveAttribute('data-tooltip', 'Save record');
+    expect(saveRecordButton.querySelector('.action-svg-icon')).not.toBeNull();
+    expect(saveRecordButton).not.toHaveClass('create-project-button');
     expect(screen.queryByRole('heading', { name: 'record' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'question' })).toBeInTheDocument();
     expect(screen.getByText('How?')).toBeInTheDocument();
 
     await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'hello');
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
-    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith('sample-project', 'valid-record', 'hello', []));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith('sample-project', 'valid-record', 'hello', [], []));
     act(() => {
       listeners.chunk.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1', content: 'Streamed ' }));
       listeners.chunk.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1', content: 'response' }));
@@ -478,7 +607,7 @@ describe('review UI', () => {
     await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'who is the persona?');
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith('sample-project', 'valid-record', 'who is the persona?', []));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith('sample-project', 'valid-record', 'who is the persona?', [], []));
   });
 
   it('blocks browsing and shows configuration errors', async () => {
@@ -554,8 +683,21 @@ describe('review UI', () => {
 
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
-    const loginButton = screen.getByRole('button', { name: 'Login' });
-    expect(loginButton).toHaveClass('github-login-button');
+    const loginButton = screen.getByRole('button', { name: 'Login to GitHub' });
+    expect(loginButton).toHaveClass('github-login-button', 'chat-login-button', 'action-icon-button');
+    expect(loginButton).toHaveAttribute('data-tooltip', 'Login to GitHub');
+    expect(loginButton).toHaveAttribute('data-tooltip-align', 'left');
+    expect(loginButton.parentElement).toHaveClass('chat-login-actions');
+    expect(loginButton.parentElement?.nextElementSibling).toHaveClass('chat-actions');
+    expect(screen.getByRole('button', { name: 'Attach' })).toHaveClass('action-icon-button');
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveClass('action-icon-button');
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveTextContent('↵');
+    expect(screen.getByRole('button', { name: 'Clear' })).toHaveClass('action-icon-button');
+    expect(screen.getByRole('button', { name: 'Clear' })).toHaveTextContent('CLR');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveClass('action-icon-button');
+    expect(screen.getByRole('button', { name: 'Attach' })).toHaveAttribute('data-tooltip', 'Attach files');
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('data-tooltip', 'Send message');
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('data-tooltip-align', 'right');
     await userEvent.click(loginButton);
     expect(await screen.findByRole('dialog', { name: 'Login to GitHub Copilot' })).toBeVisible();
     expect(screen.getByText('Copied to clipboard')).toHaveClass('clipboard-status');
@@ -584,7 +726,117 @@ describe('review UI', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'general question', []));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'general question', [], []));
+  });
+
+  it('attaches selected text files to the next chat request', async () => {
+    const attachment = {
+      id: 'attachment-1',
+      name: 'notes.md',
+      path: '/Users/sme/notes.md',
+      sizeBytes: 2048
+    };
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.selectChatAttachments).mockResolvedValue({ attachments: [attachment] });
+    vi.mocked(api.startChat).mockResolvedValue({ requestId: 'request-1', messageId: 'assistant-1' });
+
+    render(<App />);
+    await screen.findByLabelText('Message GitHub Copilot');
+    await userEvent.click(screen.getByRole('button', { name: 'Attach' }));
+
+    expect(api.selectChatAttachments).toHaveBeenCalledOnce();
+    expect(await screen.findByText('notes.md')).toBeInTheDocument();
+    expect(screen.getByText('2 KB')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+
+    await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'use this context');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'use this context', [], [attachment]));
+    expect(screen.getByText('Attached files:')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Selected chat attachments')).not.toBeInTheDocument();
+  });
+
+  it('discards attachment content from main when an attachment chip is removed', async () => {
+    const attachment = {
+      id: 'attachment-1',
+      name: 'notes.md',
+      path: '/Users/sme/notes.md',
+      sizeBytes: 128
+    };
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.selectChatAttachments).mockResolvedValue({ attachments: [attachment] });
+
+    render(<App />);
+    await screen.findByLabelText('Message GitHub Copilot');
+    await userEvent.click(screen.getByRole('button', { name: 'Attach' }));
+    expect(await screen.findByText('notes.md')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Remove notes.md' }));
+
+    await waitFor(() => expect(api.discardChatAttachment).toHaveBeenCalledWith('attachment-1'));
+    expect(screen.queryByLabelText('Selected chat attachments')).not.toBeInTheDocument();
+  });
+
+  it('refreshes project feedback configuration after an agent updates the project schema', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject)
+      .mockResolvedValueOnce({
+        project: { id: 'sample-project', name: 'sample-project' },
+        projectConfig: {},
+        schema: { type: 'object', properties: {} },
+        records: [],
+        feedbackConfig: { properties: {} }
+      })
+      .mockResolvedValueOnce({
+        project: { id: 'sample-project', name: 'sample-project' },
+        projectConfig: {},
+        schema: { type: 'object', properties: { answer: { type: 'string' } } },
+        records: [],
+        feedbackConfig: {
+          properties: {
+            '/answer': {
+              path: '/answer',
+              target: 'Answer',
+              tab: 'Main',
+              supportsEdit: true,
+              feedback: 'none',
+              comments: false,
+              editMode: 'none'
+            }
+          }
+        }
+      });
+    vi.mocked(api.startChat).mockResolvedValue({ requestId: 'request-1', messageId: 'assistant-1' });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await screen.findByText('No records loaded.');
+
+    await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'generate a schema from the attachment');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith('sample-project', undefined, 'generate a schema from the attachment', [], []));
+    act(() => {
+      listeners.complete.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1' }));
+    });
+
+    await waitFor(() => expect(api.openProject).toHaveBeenCalledTimes(2));
+    await userEvent.click(screen.getByRole('button', { name: 'Configure' }));
+    expect(await screen.findByRole('dialog', { name: 'Feedback configuration' })).toBeVisible();
+    expect(screen.getByText('Answer')).toBeInTheDocument();
+    expect(screen.getByLabelText('Answer feedback mode')).toBeInTheDocument();
   });
 
   it('renders assistant markdown tables and inline formatting', async () => {
@@ -654,7 +906,7 @@ describe('review UI', () => {
     await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'search for "configuration management"');
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() =>
-      expect(api.startChat).toHaveBeenNthCalledWith(1, 'sample-project', 'valid-record', 'search for "configuration management"', [])
+      expect(api.startChat).toHaveBeenNthCalledWith(1, 'sample-project', 'valid-record', 'search for "configuration management"', [], [])
     );
     act(() => {
       listeners.chunk.forEach((listener) =>
@@ -682,7 +934,8 @@ describe('review UI', () => {
         expect.arrayContaining([
           expect.objectContaining({ role: 'user', content: 'search for "configuration management"' }),
           expect.objectContaining({ role: 'assistant', content: expect.stringContaining('vinsol/nectarcommerce') })
-        ])
+        ]),
+        []
       )
     );
   });
@@ -702,7 +955,7 @@ describe('review UI', () => {
     expect(api.startChat).not.toHaveBeenCalled();
 
     await userEvent.type(input, '{Enter}');
-    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'line one\nline two', []));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'line one\nline two', [], []));
     expect(input).toHaveValue('');
   });
 
@@ -735,7 +988,7 @@ describe('review UI', () => {
     act(() => {
       resolveStart({ requestId: 'request-1', messageId: 'assistant-1' });
     });
-    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'slow answer', []));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith(undefined, undefined, 'slow answer', [], []));
     act(() => {
       listeners.chunk.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1', content: 'Partial answer' }));
     });
@@ -852,6 +1105,57 @@ describe('review UI', () => {
     );
   });
 
+  it('renders clear validation messages without synthetic missing labels', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [{ id: 'draft-record', displayName: 'draft-record' }]
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'draft-record',
+      displayName: 'draft-record',
+      data: {},
+      schema: {},
+      validationIssues: [
+        { path: '/', keyword: 'required', message: 'Missing required field: id' },
+        { path: '/persona', keyword: 'enum', message: 'Value must be one of: TPM, developer, SME' }
+      ],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        children: [
+          { kind: 'value', label: 'id', path: '/id', value: undefined, validationIssues: [] },
+          {
+            kind: 'value',
+            label: 'persona',
+            path: '/persona',
+            value: undefined,
+            enumValues: ['TPM', 'developer', 'SME'],
+            validationIssues: [{ path: '/persona', keyword: 'enum', message: 'Value must be one of: TPM, developer, SME' }]
+          }
+        ],
+        validationIssues: []
+      }
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'draft-record' }));
+
+    expect(await screen.findByText('Record: Missing required field: id')).toBeInTheDocument();
+    expect(screen.getAllByText('persona: Value must be one of: TPM, developer, SME').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/\(missing\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\(not allowed\)/)).not.toBeInTheDocument();
+    expect((screen.getByLabelText('persona') as HTMLSelectElement).options[0]?.text).toBe('');
+  });
+
   it('preserves chat history across project changes and clears it only on request', async () => {
     vi.mocked(api.getBootstrap).mockResolvedValue({
       backendKind: 'local',
@@ -953,6 +1257,391 @@ describe('review UI', () => {
     expect(await screen.findByRole('button', { name: 'new-record' })).toBeInTheDocument();
   });
 
+  it('creates a new unsaved record and focuses it', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: { type: 'object', properties: { answer: { type: 'string' } } },
+      records: [{ id: 'valid-record', displayName: 'valid-record' }]
+    });
+    vi.mocked(api.createRecordDraft).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'custom-record',
+      displayName: 'custom-record',
+      data: {},
+      schema: { type: 'object', properties: { answer: { type: 'string' } } },
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        children: [],
+        validationIssues: []
+      }
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await findRecordCreateButton());
+
+    const dialog = await screen.findByRole('dialog', { name: 'Create record' });
+    expect(within(dialog).queryByText('Enter the JSON filename for this record. The .json extension is optional.')).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Filename')).toHaveValue('');
+    await userEvent.type(within(dialog).getByLabelText('Filename'), 'custom-record.json');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^Create$/ }));
+
+    await waitFor(() => expect(api.createRecordDraft).toHaveBeenCalledWith('sample-project', 'custom-record'));
+    expect(await screen.findByRole('button', { name: 'custom-record' })).toHaveClass('selected');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    expect(api.saveRecordChanges).not.toHaveBeenCalled();
+  });
+
+  it('keeps a draft-only record selected after an agent run refreshes project state', async () => {
+    const schema = { type: 'object', properties: { history: { type: 'array', items: {} } } };
+    const draftRecord = {
+      projectId: 'sample-project',
+      recordId: 'custom-record',
+      displayName: 'custom-record',
+      data: {},
+      schema,
+      validationIssues: [],
+      renderTree: {
+        kind: 'object' as const,
+        label: 'record',
+        children: [{ kind: 'array' as const, label: 'history', path: '/history', items: [], validationIssues: [] }],
+        validationIssues: []
+      }
+    };
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema,
+      records: [],
+      feedbackConfig: { properties: {} }
+    });
+    vi.mocked(api.createRecordDraft).mockResolvedValue(draftRecord);
+    vi.mocked(api.getRecord).mockResolvedValue({
+      ...draftRecord,
+      data: { history: [{ question: 'What is the system architecture of Order Management?' }] },
+      renderTree: {
+        kind: 'object' as const,
+        label: 'record',
+        children: [
+          {
+            kind: 'array' as const,
+            label: 'history',
+            path: '/history',
+            items: [
+              {
+                kind: 'object' as const,
+                label: '0',
+                path: '/history/0',
+                children: [{ kind: 'value' as const, label: 'question', path: '/history/0/question', value: 'What is the system architecture of Order Management?', validationIssues: [] }],
+                validationIssues: []
+              }
+            ],
+            validationIssues: []
+          }
+        ],
+        validationIssues: []
+      }
+    });
+    vi.mocked(api.startChat).mockResolvedValue({ requestId: 'request-1', messageId: 'assistant-1' });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await findRecordCreateButton());
+    await userEvent.type(within(await screen.findByRole('dialog', { name: 'Create record' })).getByLabelText('Filename'), 'custom-record.json');
+    await userEvent.click(within(screen.getByRole('dialog', { name: 'Create record' })).getByRole('button', { name: /^Create$/ }));
+    expect(await screen.findByRole('button', { name: 'custom-record' })).toHaveClass('selected');
+
+    await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'add a turn');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(api.startChat).toHaveBeenCalledWith('sample-project', 'custom-record', 'add a turn', [], []));
+    act(() => {
+      listeners.complete.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1' }));
+    });
+
+    expect(await screen.findByRole('button', { name: 'custom-record' })).toHaveClass('selected');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'custom-record' })).toHaveClass('selected'));
+    expect(api.getRecord).toHaveBeenCalledWith('sample-project', 'custom-record');
+  });
+
+  it('stages inline edits for a new record so validation and save use the edited data', async () => {
+    const schema = {
+      type: 'object',
+      required: ['id', 'persona', 'turns'],
+      properties: {
+        id: { type: 'string', description: 'Unique identifier for the record.' },
+        persona: { type: 'string', enum: ['developer', 'admin'] },
+        turns: { type: 'array', items: {} }
+      }
+    };
+    const feedbackConfig = {
+      properties: {
+        '/id': { path: '/id', target: 'ID', tab: 'Record', supportsEdit: true, feedback: 'none' as const, comments: false, editMode: 'inline' as const },
+        '/persona': {
+          path: '/persona',
+          target: 'Persona',
+          tab: 'Record',
+          supportsEdit: true,
+          feedback: 'none' as const,
+          comments: false,
+          editMode: 'inline' as const
+        },
+        '/turns': { path: '/turns', target: 'Turns', tab: 'Record', supportsEdit: false, feedback: 'none' as const, comments: false, editMode: 'none' as const }
+      }
+    };
+    const recordDetail = (data: Record<string, unknown>) => {
+      const missingIssues = (['id', 'persona', 'turns'] as const)
+        .filter((field) => data[field] === undefined)
+        .map((field) => ({ path: '', message: `Missing required field: ${field}`, keyword: 'required' }));
+      return {
+        projectId: 'sample-project',
+        recordId: 'q99',
+        displayName: 'q99',
+        data,
+        schema,
+        validationIssues: missingIssues,
+        renderTree: {
+          kind: 'object' as const,
+          label: 'record',
+          path: '',
+          children: [
+            { kind: 'value' as const, label: 'id', path: '/id', value: data.id, type: 'string', description: 'Unique identifier for the record.', validationIssues: [] },
+            { kind: 'value' as const, label: 'persona', path: '/persona', value: data.persona, type: 'string', enumValues: ['developer', 'admin'], validationIssues: [] },
+            { kind: 'array' as const, label: 'turns', path: '/turns', items: [], validationIssues: [] }
+          ],
+          validationIssues: missingIssues
+        },
+        feedbackHistory: {}
+      };
+    };
+    let stagedData: Record<string, unknown> = {};
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema,
+      records: [],
+      feedbackConfig
+    });
+    vi.mocked(api.createRecordDraft).mockResolvedValue(recordDetail(stagedData));
+    vi.mocked(api.updateRecordData).mockImplementation(async (_projectId, _recordId, data) => {
+      stagedData = data as Record<string, unknown>;
+      return recordDetail(stagedData);
+    });
+    vi.mocked(api.saveRecordChanges).mockImplementation(async () => recordDetail(stagedData));
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await findRecordCreateButton());
+    await userEvent.type(within(await screen.findByRole('dialog', { name: 'Create record' })).getByLabelText('Filename'), 'q99.json');
+    await userEvent.click(within(screen.getByRole('dialog', { name: 'Create record' })).getByRole('button', { name: /^Create$/ }));
+
+    expect(await screen.findByText('Record: Missing required field: id')).toBeInTheDocument();
+    expect(screen.getByLabelText('persona')).toHaveDisplayValue('(not set)');
+    await userEvent.type(screen.getByLabelText('id'), 'q99');
+    await userEvent.selectOptions(screen.getByLabelText('persona'), 'developer');
+
+    await waitFor(() => expect(api.updateRecordData).toHaveBeenLastCalledWith('sample-project', 'q99', { id: 'q99', persona: 'developer' }));
+    await waitFor(() => expect(screen.queryByText('Record: Missing required field: id')).not.toBeInTheDocument());
+    expect(screen.queryByText('Record: Missing required field: persona')).not.toBeInTheDocument();
+    expect(screen.getByText('Record: Missing required field: turns')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.saveRecordChanges).toHaveBeenCalledWith('sample-project', 'q99'));
+    expect(stagedData).toEqual({ id: 'q99', persona: 'developer' });
+  });
+
+  it('serializes inline edit staging so older responses cannot overwrite newer draft data', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        answer: { type: 'string' }
+      }
+    };
+    const feedbackConfig = {
+      properties: {
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Record', supportsEdit: true, feedback: 'none' as const, comments: false, editMode: 'inline' as const }
+      }
+    };
+    const recordDetail = (answer: string) => ({
+      projectId: 'sample-project',
+      recordId: 'record-1',
+      displayName: 'record-1',
+      data: { answer },
+      schema,
+      validationIssues: [],
+      renderTree: {
+        kind: 'object' as const,
+        label: 'record',
+        path: '',
+        children: [{ kind: 'value' as const, label: 'answer', path: '/answer', value: answer, type: 'string', validationIssues: [] }],
+        validationIssues: []
+      },
+      feedbackHistory: {}
+    });
+    const pendingUpdates: Array<{
+      data: unknown;
+      resolve: (record: ReturnType<typeof recordDetail>) => void;
+    }> = [];
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema,
+      records: [{ id: 'record-1', displayName: 'record-1' }],
+      feedbackConfig
+    });
+    vi.mocked(api.getRecord).mockResolvedValue(recordDetail(''));
+    vi.mocked(api.updateRecordData).mockImplementation(
+      async (_projectId, _recordId, data) =>
+        new Promise((resolve) => {
+          pendingUpdates.push({ data, resolve });
+        })
+    );
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'record-1' }));
+    await userEvent.type(await screen.findByLabelText('answer'), 'AB');
+
+    await waitFor(() => expect(api.updateRecordData).toHaveBeenCalledTimes(1));
+    expect(pendingUpdates[0].data).toEqual({ answer: 'A' });
+    expect(api.updateRecordData).not.toHaveBeenCalledTimes(2);
+
+    act(() => {
+      pendingUpdates[0].resolve(recordDetail('A'));
+    });
+    await waitFor(() => expect(api.updateRecordData).toHaveBeenCalledTimes(2));
+    expect(pendingUpdates[1].data).toEqual({ answer: 'AB' });
+
+    act(() => {
+      pendingUpdates[1].resolve(recordDetail('AB'));
+    });
+    await waitFor(() => expect(screen.getByLabelText('answer')).toHaveValue('AB'));
+  });
+
+  it('validates new record filenames before creating a draft', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: []
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await findRecordCreateButton());
+    const dialog = await screen.findByRole('dialog', { name: 'Create record' });
+
+    await userEvent.clear(within(dialog).getByLabelText('Filename'));
+    await userEvent.type(within(dialog).getByLabelText('Filename'), '../bad.json');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^Create$/ }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Filename cannot include path separators or "..".');
+    expect(api.createRecordDraft).not.toHaveBeenCalled();
+  });
+
+  it('shows duplicate new record filenames inside the create record dialog', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [{ id: 'q01', displayName: 'q01' }]
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await findRecordCreateButton());
+    const dialog = await screen.findByRole('dialog', { name: 'Create record' });
+    await userEvent.type(within(dialog).getByLabelText('Filename'), 'q01.json');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^Create$/ }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Record already exists: q01.json');
+    expect(api.createRecordDraft).not.toHaveBeenCalled();
+    expect(screen.queryByText(/records:createDraft/)).not.toBeInTheDocument();
+  });
+
+  it('removes a discarded unsaved record from the list before creating another', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: []
+    });
+    vi.mocked(api.createRecordDraft).mockImplementation(async (_projectId, recordId) => ({
+      projectId: 'sample-project',
+      recordId,
+      displayName: recordId,
+      data: {},
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        children: [],
+        validationIssues: []
+      }
+    }));
+    vi.mocked(api.getRecordDraftStatus).mockImplementation(async (_projectId, recordId) => ({ hasUnsavedChanges: recordId === 'new-record' }));
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await findRecordCreateButton());
+    let dialog = await screen.findByRole('dialog', { name: 'Create record' });
+    await userEvent.type(within(dialog).getByLabelText('Filename'), 'new-record.json');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^Create$/ }));
+    expect(await screen.findByRole('button', { name: 'new-record' })).toHaveClass('selected');
+
+    await userEvent.click(getRecordCreateButton());
+    expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+
+    await waitFor(() => expect(api.discardRecordChanges).toHaveBeenCalledWith('sample-project', 'new-record'));
+    dialog = await screen.findByRole('dialog', { name: 'Create record' });
+    expect(within(dialog).getByLabelText('Filename')).toHaveValue('');
+    await userEvent.type(within(dialog).getByLabelText('Filename'), 'new-record.json');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^Create$/ }));
+    await waitFor(() => expect(api.createRecordDraft).toHaveBeenCalledTimes(2));
+    expect(screen.getAllByRole('button', { name: 'new-record' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'new-record' })).toHaveClass('selected');
+  });
+
   it('warns before refreshing records when the selected record has unsaved changes', async () => {
     const feedbackConfig = {
       properties: {
@@ -1011,7 +1700,8 @@ describe('review UI', () => {
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
     await userEvent.click(await screen.findByRole('button', { name: 'record-1' }));
     await userEvent.click(screen.getByRole('radio', { name: 'Good' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Stage feedback' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    expect(api.submitFeedback).not.toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole('button', { name: 'Refresh records' }));
 
@@ -1040,10 +1730,10 @@ describe('review UI', () => {
     });
 
     render(<App />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    await userEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Create project' }));
     expect(await screen.findByRole('dialog', { name: 'Create project' })).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText('Project name'), 'new-project');
-    await userEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await userEvent.click(within(screen.getByRole('dialog', { name: 'Create project' })).getByRole('button', { name: /^Create$/ }));
 
     await waitFor(() => expect(api.createProject).toHaveBeenCalledWith('new-project'));
     await waitFor(() => expect(screen.getByLabelText('Current project')).toHaveValue('new-project'));
@@ -1101,12 +1791,12 @@ describe('review UI', () => {
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
     await userEvent.click(await screen.findByRole('button', { name: 'record-1' }));
     await userEvent.click(screen.getByRole('radio', { name: 'Good' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Stage feedback' }));
-    expect(await screen.findByText('Unsaved changes')).toHaveClass('unsaved-status');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    expect(api.submitFeedback).not.toHaveBeenCalled();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    await userEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Create project' }));
     await userEvent.type(await screen.findByLabelText('Project name'), 'new-project');
-    await userEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await userEvent.click(within(screen.getByRole('dialog', { name: 'Create project' })).getByRole('button', { name: /^Create$/ }));
 
     expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeVisible();
     expect(screen.getByLabelText('Current project')).toHaveValue('sample-project');
@@ -1226,7 +1916,7 @@ describe('review UI', () => {
     expect(await screen.findByRole('radio', { name: 'Good' })).toBeInTheDocument();
     expect(screen.getByLabelText('Comment')).toBeInTheDocument();
     expect(screen.getByLabelText('Edit')).toHaveDisplayValue('Run npm run check.');
-    expect(screen.getByRole('button', { name: 'Stage feedback' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Stage feedback' })).not.toBeInTheDocument();
     expect(api.getRecord).toHaveBeenCalledTimes(2);
   });
 
@@ -1332,17 +2022,17 @@ describe('review UI', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
     expect(await screen.findByText('Run npm run check.', { selector: 'output' })).toBeInTheDocument();
     expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your .env file.')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Stage feedback' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     expect(screen.getByLabelText('Current feedback username')).toHaveTextContent('sme@example.com');
     expect(screen.queryByText(/Feedback mode:/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('radio', { name: 'Good' }));
     await userEvent.type(screen.getByLabelText('Comment'), 'Looks right');
-    await userEvent.click(screen.getByRole('button', { name: 'Stage feedback' }));
-    await waitFor(() => expect(api.submitFeedback).toHaveBeenCalledWith('sample-project', 'valid-record', expect.objectContaining({ propertyPath: '/answer' })));
-    expect(screen.getByText('Unsaved changes')).toHaveClass('unsaved-status');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    expect(api.submitFeedback).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.submitFeedback).toHaveBeenCalledWith('sample-project', 'valid-record', expect.objectContaining({ propertyPath: '/answer' })));
     await waitFor(() => expect(api.saveRecordChanges).toHaveBeenCalledWith('sample-project', 'valid-record'));
-    expect(await screen.findByText('All changes saved')).toHaveClass('saved-status');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
 
     const historySummary = await screen.findByText('History (1)');
     await userEvent.click(historySummary);
@@ -1408,8 +2098,8 @@ describe('review UI', () => {
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
     await userEvent.click(await screen.findByRole('button', { name: 'record-1' }));
     await userEvent.click(screen.getByRole('radio', { name: 'Good' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Stage feedback' }));
-    expect(await screen.findByText('Unsaved changes')).toHaveClass('unsaved-status');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    expect(api.submitFeedback).not.toHaveBeenCalled();
 
     act(() => {
       listeners.closeRequested.forEach((listener) => listener());
@@ -1589,10 +2279,10 @@ describe('review UI', () => {
 
     expect(screen.getByLabelText('Edit')).toHaveDisplayValue('developer');
     expect(screen.queryByRole('option', { name: 'Choose edit' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Stage feedback' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Stage feedback' })).not.toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('Edit'), 'SME');
-    await userEvent.click(screen.getByRole('button', { name: 'Stage feedback' }));
-    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ propertyPath: '/persona', editValue: 'SME' }));
+    expect(screen.getByLabelText('Edit')).toHaveDisplayValue('SME');
+    expect(submit).not.toHaveBeenCalled();
   });
 
   it('renders inline editable values without feedback controls', async () => {
@@ -1637,6 +2327,7 @@ describe('review UI', () => {
 
     expect(screen.queryByRole('button', { name: 'Submit feedback' })).not.toBeInTheDocument();
     const answer = screen.getByLabelText('answer');
+    expect(answer).toHaveAttribute('rows', '1');
     expect(answer).toHaveValue('Original answer');
     await userEvent.clear(answer);
     await userEvent.type(answer, 'Inline draft');
@@ -1692,7 +2383,7 @@ describe('review UI', () => {
     expect(screen.getByLabelText('persona')).toHaveDisplayValue('SME');
     expect(screen.getByLabelText('persona')).not.toHaveClass('edited-value');
     expect(screen.getByLabelText('Edit')).toHaveDisplayValue('SME');
-    expect(screen.getByRole('button', { name: 'Stage feedback' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Stage feedback' })).not.toBeInTheDocument();
 
     const historySummary = screen.getByText('History (3)');
     await userEvent.click(historySummary);

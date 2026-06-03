@@ -44,6 +44,32 @@ type ContainerCandidate = {
   containerSchema: JsonSchema;
   itemSchema?: unknown;
 };
+type TurnTargetMode = 'append-array' | 'merge-object';
+type TurnTargetCandidate = {
+  path: string;
+  mode: TurnTargetMode;
+  schema: JsonSchema;
+  containerSchema?: JsonSchema;
+  data: unknown;
+  score: number;
+  inquiryField?: string;
+  responseField?: string;
+};
+type ExistingTurnTarget = {
+  path: string;
+  schema: JsonSchema;
+  data: Record<string, unknown>;
+};
+type TurnFieldMapping = {
+  inquiryField?: string;
+  responseField?: string;
+  evidenceField?: string;
+};
+type ResolvedTurnFields = {
+  inquiryField: string;
+  responseField: string;
+  evidenceField?: string;
+};
 
 const readRecordTool: LocalToolDefinition = {
   name: 'readRecord',
@@ -157,10 +183,116 @@ const getRecordContainerSchemaTool: LocalToolDefinition = {
   }
 };
 
+const getRecordSchemaTool: LocalToolDefinition = {
+  name: 'getRecordSchema',
+  description:
+    'Read the selected record project schema, optionally at a JSON Pointer, and list schema-derived candidate destinations for conversation turns.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      targetPath: {
+        type: 'string',
+        description: 'Optional JSON Pointer to inspect within the selected record schema. Empty string means the schema root.'
+      },
+      includeTurnCandidates: {
+        type: 'boolean',
+        description: 'Whether to include schema-derived candidate locations where startTurn could store a conversation turn.'
+      }
+    },
+    additionalProperties: false
+  },
+  execute: async (request, context) => {
+    if (!context.storage) {
+      return toolError(request.requestId, 'BACKEND_UNAVAILABLE', 'No storage backend is available.', true);
+    }
+    if (!context.selectedProjectId || !context.selectedRecordId) {
+      return toolError(request.requestId, 'NO_RECORD_SELECTED', 'No record is currently displayed in the UI.', false);
+    }
+    const targetPath = request.arguments.targetPath;
+    const includeTurnCandidates = request.arguments.includeTurnCandidates ?? true;
+    if (targetPath !== undefined && typeof targetPath !== 'string') {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'targetPath must be a JSON Pointer string when provided.', false);
+    }
+    if (typeof includeTurnCandidates !== 'boolean') {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'includeTurnCandidates must be a boolean when provided.', false);
+    }
+
+    try {
+      const record = await context.storage.getRecord(context.selectedProjectId, context.selectedRecordId);
+      const path = typeof targetPath === 'string' ? assertSchemaPointer(targetPath) : '';
+      const schema = path === '' ? record.schema : schemaAtPointer(record.schema, path);
+      return {
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          projectId: record.projectId,
+          recordId: record.recordId,
+          targetPath: path,
+          schema,
+          ...(includeTurnCandidates
+            ? {
+                turnCandidates: listTurnTargetCandidates(record.schema, record.data)
+                  .sort((left, right) => right.score - left.score)
+                  .map(toTurnCandidateResult)
+              }
+            : {})
+        }
+      };
+    } catch (error) {
+      return toolError(request.requestId, toolErrorCode(error), errorMessage(error), false);
+    }
+  }
+};
+
+const saveGeneratedSchemaTool: LocalToolDefinition = {
+  name: 'saveGeneratedSchema',
+  description:
+    'Save a JSON Schema generated from attached JSON file contents as the selected project _schema.json. Existing _schema.json is backed up to _schema_1.json, _schema_2.json, etc. Project identity always comes from trusted UI state.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      schema: {
+        type: 'object',
+        description: 'The generated JSON Schema object to save as the selected project _schema.json.'
+      }
+    },
+    required: ['schema'],
+    additionalProperties: false
+  },
+  execute: async (request, context) => {
+    if (!context.storage) {
+      return toolError(request.requestId, 'BACKEND_UNAVAILABLE', 'No storage backend is available.', true);
+    }
+    if (!context.selectedProjectId) {
+      return toolError(request.requestId, 'NO_PROJECT_SELECTED', 'No project is currently selected in the UI.', false);
+    }
+    const schema = request.arguments.schema;
+    if (!isPlainRecord(schema)) {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'schema must be a JSON Schema object.', false);
+    }
+    try {
+      validateRecord(schema, {});
+    } catch (error) {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', `schema must be a valid JSON Schema: ${errorMessage(error)}`, false);
+    }
+
+    try {
+      const result = await context.storage.saveProjectSchema(context.selectedProjectId, schema);
+      return {
+        requestId: request.requestId,
+        ok: true,
+        result
+      };
+    } catch (error) {
+      return toolError(request.requestId, toolErrorCode(error), errorMessage(error), false);
+    }
+  }
+};
+
 const saveSearchResultsTool: LocalToolDefinition = {
   name: 'saveSearchResults',
   description:
-    'Append or replace MCP search result entries in an array container of the currently selected record, validate the full record against the project schema, and save it.',
+    'Append or replace MCP search result entries in an array container of the currently selected record draft and validate only that destination container against its schema.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -219,12 +351,12 @@ const saveSearchResultsTool: LocalToolDefinition = {
       if (path !== '') {
         setValueAtPointer(nextData, path, nextContainer);
       }
-      const validationIssues = validateRecord(record.schema, nextData);
+      const validationIssues = validateRecord(containerSchema, nextContainer);
       if (validationIssues.length > 0) {
         return toolError(
           request.requestId,
           'INVALID_TOOL_ARGUMENTS',
-          `Search results do not match the record schema: ${validationIssues.map((issue) => `${issue.path} ${issue.message}`).join('; ')}`,
+          `Search results do not match the destination container schema: ${validationIssues.map((issue) => `${issue.path} ${issue.message}`).join('; ')}`,
           false
         );
       }
@@ -239,6 +371,250 @@ const saveSearchResultsTool: LocalToolDefinition = {
           mode,
           savedItemCount: results.length,
           containerItemCount: nextContainer.length,
+          record: updatedRecord.data
+        }
+      };
+    } catch (error) {
+      return toolError(request.requestId, toolErrorCode(error), errorMessage(error), false);
+    }
+  }
+};
+
+const startTurnTool: LocalToolDefinition = {
+  name: 'startTurn',
+  description:
+    'Start a conversation turn in the selected record from the user question/inquiry only. Do not ask the user for the agent response; compute it later and save the final response and evidence with completeTurn.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      inquiry: {
+        type: 'string',
+        description: 'The inquiry, request, question, prompt, or user message from a person.'
+      },
+      response: {
+        type: 'string',
+        description:
+          'Optional already-known agent response. Omit this when the agent still needs to search or reason before answering; use completeTurn later.'
+      },
+      targetPath: {
+        type: 'string',
+        description:
+          'Optional JSON Pointer to the turn destination. Point to an array to append a turn, or to an object/root to set one turn on that object.'
+      },
+      fieldMapping: {
+        type: 'object',
+        description:
+          'Optional field names to use when the schema does not use common inquiry/response names, for example { "inquiryField": "utterance", "responseField": "completion" }.',
+        properties: {
+          inquiryField: { type: 'string' },
+          responseField: { type: 'string' }
+        },
+        additionalProperties: false
+      },
+      additionalFields: {
+        type: 'object',
+        description: 'Optional additional fields to include in the created turn object when required by the project schema.'
+      }
+    },
+    required: ['inquiry'],
+    additionalProperties: false
+  },
+  execute: async (request, context) => {
+    if (!context.storage) {
+      return toolError(request.requestId, 'BACKEND_UNAVAILABLE', 'No storage backend is available.', true);
+    }
+    if (!context.selectedProjectId || !context.selectedRecordId) {
+      return toolError(request.requestId, 'NO_RECORD_SELECTED', 'No record is currently displayed in the UI.', false);
+    }
+    const inquiry = request.arguments.inquiry;
+    const response = request.arguments.response;
+    const targetPath = request.arguments.targetPath;
+    const fieldMapping = request.arguments.fieldMapping;
+    const additionalFields = request.arguments.additionalFields;
+    if (typeof inquiry !== 'string') {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'inquiry must be a string.', false);
+    }
+    if (response !== undefined && typeof response !== 'string') {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'response must be a string when provided.', false);
+    }
+    if (targetPath !== undefined && typeof targetPath !== 'string') {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'targetPath must be a JSON Pointer string when provided.', false);
+    }
+    if (fieldMapping !== undefined && !isTurnFieldMapping(fieldMapping)) {
+      return toolError(
+        request.requestId,
+        'INVALID_TOOL_ARGUMENTS',
+        'fieldMapping must be an object with optional inquiryField and responseField string properties.',
+        false
+      );
+    }
+    if (additionalFields !== undefined && !isPlainRecord(additionalFields)) {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'additionalFields must be an object when provided.', false);
+    }
+
+    try {
+      const record = await context.storage.getRecord(context.selectedProjectId, context.selectedRecordId);
+      const target = resolveTurnTarget(record.schema, record.data, typeof targetPath === 'string' ? assertTurnTargetPointer(targetPath) : undefined);
+      const mapping = isTurnFieldMapping(fieldMapping) ? fieldMapping : undefined;
+      const fields = resolveTurnFields(target, mapping);
+      const turn = buildStartedTurn(target.schema, fields, inquiry, typeof response === 'string' ? response : undefined, additionalFields);
+      const { nextData, turnIndex, targetValue } = applyTurnToRecord(record.data, target, turn);
+      const validationIssues = validateTurnChange(target, targetValue);
+      if (validationIssues.length > 0) {
+        return toolError(
+          request.requestId,
+          'INVALID_TOOL_ARGUMENTS',
+          `Turn does not match the target schema: ${validationIssues.map((issue) => `${issue.path} ${issue.message}`).join('; ')}`,
+          false
+        );
+      }
+      const updatedRecord = await context.storage.updateRecord(context.selectedProjectId, context.selectedRecordId, nextData);
+      return {
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          projectId: updatedRecord.projectId,
+          recordId: updatedRecord.recordId,
+          targetPath: target.path,
+          mode: target.mode === 'append-array' ? 'append' : 'merge',
+          fields,
+          ...(turnIndex === undefined ? {} : { turnIndex }),
+          turn,
+          record: updatedRecord.data
+        }
+      };
+    } catch (error) {
+      return toolError(request.requestId, toolErrorCode(error), errorMessage(error), false);
+    }
+  }
+};
+
+const completeTurnTool: LocalToolDefinition = {
+  name: 'completeTurn',
+  description:
+    'Complete an existing conversation turn after the agent has searched or reasoned by setting the final response and, when available, the supporting evidence in the same call.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      response: {
+        type: 'string',
+        description: 'The computed agent response, answer, reply, completion, or assistant message to store on the turn.'
+      },
+      evidence: {
+        type: 'array',
+        description:
+          'Optional supporting evidence entries found while computing the response. Each entry must match the turn evidence field schema. Prefer passing evidence here with the response instead of calling a separate persistence tool.',
+        items: {}
+      },
+      targetPath: {
+        type: 'string',
+        description:
+          'Optional JSON Pointer to a turn object, or to an array of turns when turnIndex is also provided. If omitted, the latest turn from the best schema candidate is used.'
+      },
+      turnIndex: {
+        type: 'integer',
+        minimum: 0,
+        description: 'Optional zero-based turn index when targetPath points to an array of turns.'
+      },
+      fieldMapping: {
+        type: 'object',
+        description: 'Optional response and evidence field names for schemas that do not use common response/evidence names.',
+        properties: {
+          responseField: { type: 'string' },
+          evidenceField: { type: 'string' }
+        },
+        additionalProperties: false
+      },
+      additionalFields: {
+        type: 'object',
+        description: 'Optional additional fields to merge into the existing turn while setting the response.'
+      }
+    },
+    required: ['response'],
+    additionalProperties: false
+  },
+  execute: async (request, context) => {
+    if (!context.storage) {
+      return toolError(request.requestId, 'BACKEND_UNAVAILABLE', 'No storage backend is available.', true);
+    }
+    if (!context.selectedProjectId || !context.selectedRecordId) {
+      return toolError(request.requestId, 'NO_RECORD_SELECTED', 'No record is currently displayed in the UI.', false);
+    }
+    const response = request.arguments.response;
+    const evidence = request.arguments.evidence;
+    const targetPath = request.arguments.targetPath;
+    const turnIndexArgument = request.arguments.turnIndex;
+    const fieldMapping = request.arguments.fieldMapping;
+    const additionalFields = request.arguments.additionalFields;
+    if (typeof response !== 'string') {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'response must be a string.', false);
+    }
+    if (evidence !== undefined && !Array.isArray(evidence)) {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'evidence must be an array when provided.', false);
+    }
+    if (targetPath !== undefined && typeof targetPath !== 'string') {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'targetPath must be a JSON Pointer string when provided.', false);
+    }
+    if (turnIndexArgument !== undefined && (typeof turnIndexArgument !== 'number' || !Number.isInteger(turnIndexArgument) || turnIndexArgument < 0)) {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'turnIndex must be a non-negative integer when provided.', false);
+    }
+    if (fieldMapping !== undefined && !isResponseFieldMapping(fieldMapping)) {
+      return toolError(
+        request.requestId,
+        'INVALID_TOOL_ARGUMENTS',
+        'fieldMapping must be an object with optional responseField and evidenceField string properties.',
+        false
+      );
+    }
+    if (additionalFields !== undefined && !isPlainRecord(additionalFields)) {
+      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'additionalFields must be an object when provided.', false);
+    }
+
+    try {
+      const record = await context.storage.getRecord(context.selectedProjectId, context.selectedRecordId);
+      const target = resolveExistingTurnTarget(
+        record.schema,
+        record.data,
+        typeof targetPath === 'string' ? assertTurnTargetPointer(targetPath) : undefined,
+        typeof turnIndexArgument === 'number' ? turnIndexArgument : undefined
+      );
+      const responseField = isResponseFieldMapping(fieldMapping) && fieldMapping.responseField ? fieldMapping.responseField : resolveResponseField(target);
+      const evidenceField =
+        Array.isArray(evidence) && isResponseFieldMapping(fieldMapping) && fieldMapping.evidenceField
+          ? fieldMapping.evidenceField
+          : Array.isArray(evidence)
+            ? resolveEvidenceField(target)
+            : undefined;
+      const nextTurn = {
+        ...target.data,
+        ...(isPlainRecord(additionalFields) ? cloneJson(additionalFields) : {}),
+        ...(evidenceField ? { [evidenceField]: cloneJson(evidence) } : {}),
+        [responseField]: response
+      };
+      const nextData = target.path === '' ? nextTurn : cloneJson(record.data);
+      if (target.path !== '') {
+        setValueAtPointer(nextData, target.path, nextTurn);
+      }
+      const validationIssues = validateRecord(target.schema, nextTurn);
+      if (validationIssues.length > 0) {
+        return toolError(
+          request.requestId,
+          'INVALID_TOOL_ARGUMENTS',
+          `Response does not match the turn schema: ${validationIssues.map((issue) => `${issue.path} ${issue.message}`).join('; ')}`,
+          false
+        );
+      }
+      const updatedRecord = await context.storage.updateRecord(context.selectedProjectId, context.selectedRecordId, nextData);
+      return {
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          projectId: updatedRecord.projectId,
+          recordId: updatedRecord.recordId,
+          targetPath: target.path,
+          responseField,
+          ...(evidenceField ? { evidenceField, savedEvidenceCount: Array.isArray(evidence) ? evidence.length : 0 } : {}),
+          turn: nextTurn,
           record: updatedRecord.data
         }
       };
@@ -263,7 +639,16 @@ const listToolsTool: LocalToolDefinition = {
   })
 };
 
-const builtInTools = [readRecordTool, getRecordContainerSchemaTool, saveSearchResultsTool, listToolsTool];
+const builtInTools = [
+  readRecordTool,
+  getRecordSchemaTool,
+  getRecordContainerSchemaTool,
+  saveGeneratedSchemaTool,
+  saveSearchResultsTool,
+  startTurnTool,
+  completeTurnTool,
+  listToolsTool
+];
 
 export const createLocalToolRuntime = (context: ToolExecutionContext, plugins: LocalToolPlugin[] = []): LocalToolRuntime => {
   const registeredTools = registerTools(plugins);
@@ -361,6 +746,354 @@ const collectContainers = (schema: JsonSchema, data: unknown, path: string): Con
   return current;
 };
 
+const resolveTurnTarget = (schema: unknown, data: unknown, targetPath: string | undefined): TurnTargetCandidate => {
+  if (!isSchema(schema)) {
+    throw new Error('Project _schema.json must be a JSON object.');
+  }
+  if (targetPath !== undefined) {
+    return turnTargetAtPointer(schema, data, targetPath);
+  }
+  const candidates = listTurnTargetCandidates(schema, data)
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+  if (candidates.length === 0) {
+    throw new Error('No turn target could be inferred. Read the record schema and call startTurn with targetPath and fieldMapping.');
+  }
+  const [best, second] = candidates;
+  if (!best.inquiryField || !best.responseField || (second && second.score === best.score)) {
+    throw new Error(
+      `Turn target is ambiguous. Call startTurn with targetPath and fieldMapping. Candidate targets: ${candidates
+        .slice(0, 5)
+        .map(formatTurnTargetCandidate)
+        .join('; ')}`
+    );
+  }
+  return best;
+};
+
+const turnTargetAtPointer = (schema: unknown, data: unknown, path: string): TurnTargetCandidate => {
+  const targetSchema = schemaAtPointer(schema, path);
+  const resolved = resolveSchema(targetSchema);
+  if (isArraySchema(resolved)) {
+    if (!isSchema(resolved.items)) {
+      throw new Error(`Schema at ${path || '/'} does not define object item schemas.`);
+    }
+    const currentValue = valueAtPointer(data, path);
+    if (currentValue !== undefined && !Array.isArray(currentValue)) {
+      throw new Error(`Record value at ${path || '/'} is not an array container.`);
+    }
+    const itemSchema = resolveSchema(resolved.items);
+    return {
+      path,
+      mode: 'append-array',
+      schema: itemSchema,
+      containerSchema: resolved,
+      data: undefined,
+      ...scoreTurnTarget(path, itemSchema, undefined, 'append-array')
+    };
+  }
+  if (schemaType(resolved, valueAtPointer(data, path)) !== 'object') {
+    throw new Error(`Schema at ${path || '/'} is not an object or array turn target.`);
+  }
+  const currentValue = valueAtPointer(data, path);
+  if (currentValue !== undefined && !isPlainRecord(currentValue)) {
+    throw new Error(`Record value at ${path || '/'} is not an object turn target.`);
+  }
+  return {
+    path,
+    mode: 'merge-object',
+    schema: resolved,
+    data: currentValue,
+    ...scoreTurnTarget(path, resolved, currentValue, 'merge-object')
+  };
+};
+
+const listTurnTargetCandidates = (schema: unknown, data: unknown): TurnTargetCandidate[] => {
+  if (!isSchema(schema)) {
+    return [];
+  }
+  return collectTurnTargets(resolveSchema(schema), data, '');
+};
+
+const collectTurnTargets = (schema: JsonSchema, data: unknown, path: string): TurnTargetCandidate[] => {
+  const resolved = resolveSchema(schema);
+  const type = schemaType(resolved, data);
+  const current: TurnTargetCandidate[] = [];
+  if (type === 'object') {
+    current.push({
+      path,
+      mode: 'merge-object',
+      schema: resolved,
+      data,
+      ...scoreTurnTarget(path, resolved, data, 'merge-object')
+    });
+    const properties = isSchemaMap(resolved.properties) ? resolved.properties : {};
+    const value = isPlainRecord(data) ? data : {};
+    return [
+      ...current,
+      ...Object.entries(properties).flatMap(([key, childSchema]) =>
+        collectTurnTargets(childSchema, value[key], `${path}/${escapePointer(key)}`)
+      )
+    ];
+  }
+  if (type === 'array' && isSchema(resolved.items)) {
+    const itemSchema = resolveSchema(resolved.items);
+    current.push({
+      path,
+      mode: 'append-array',
+      schema: itemSchema,
+      containerSchema: resolved,
+      data: undefined,
+      ...scoreTurnTarget(path, itemSchema, undefined, 'append-array')
+    });
+    if (Array.isArray(data)) {
+      return [
+        ...current,
+        ...data.flatMap((item, index) => collectTurnTargets(itemSchema, item, `${path}/${index}`))
+      ];
+    }
+  }
+  return current;
+};
+
+const scoreTurnTarget = (
+  path: string,
+  schema: JsonSchema,
+  data: unknown,
+  mode: TurnTargetMode
+): Pick<TurnTargetCandidate, 'score' | 'inquiryField' | 'responseField'> => {
+  const properties = isSchemaMap(schema.properties) ? schema.properties : {};
+  const dataKeys = isPlainRecord(data) ? Object.keys(data) : [];
+  const propertyKeys = Object.keys(properties);
+  const keys = [...new Set([...propertyKeys, ...dataKeys])];
+  const inquiryField = bestTurnField(keys, inquiryFieldAliases);
+  const responseField = bestTurnField(keys, responseFieldAliases);
+  const pathScore = turnPathScore(path);
+  const schemaScore = schemaTitleScore(schema);
+  const pairScore = inquiryField && responseField ? 100 : inquiryField || responseField ? 20 : 0;
+  const modeScore = mode === 'append-array' ? 10 : 0;
+  const requiredScore = requiredTurnFieldScore(schema, inquiryField, responseField);
+  return { score: pairScore + pathScore + schemaScore + modeScore + requiredScore, inquiryField, responseField };
+};
+
+const resolveTurnFields = (
+  target: TurnTargetCandidate,
+  fieldMapping: TurnFieldMapping | undefined
+): ResolvedTurnFields => {
+  const inquiryField = fieldMapping?.inquiryField ?? target.inquiryField ?? defaultTurnField(target, inquiryFieldAliases, 'request');
+  const responseField = fieldMapping?.responseField ?? target.responseField ?? defaultTurnField(target, responseFieldAliases, 'response');
+  if (inquiryField === responseField) {
+    throw new Error('fieldMapping inquiryField and responseField must be different.');
+  }
+  return { inquiryField, responseField };
+};
+
+const buildStartedTurn = (
+  schema: JsonSchema,
+  fields: ResolvedTurnFields,
+  inquiry: string,
+  response: string | undefined,
+  additionalFields: unknown
+): Record<string, unknown> => {
+  const turn: Record<string, unknown> = {
+    ...(isPlainRecord(additionalFields) ? cloneJson(additionalFields) : {}),
+    [fields.inquiryField]: inquiry
+  };
+  if (response !== undefined) {
+    turn[fields.responseField] = response;
+  } else if (isRequiredField(schema, fields.responseField)) {
+    turn[fields.responseField] = '';
+  }
+  return turn;
+};
+
+const resolveExistingTurnTarget = (schema: unknown, data: unknown, targetPath: string | undefined, turnIndex: number | undefined): ExistingTurnTarget => {
+  if (targetPath !== undefined) {
+    const targetSchema = schemaAtPointer(schema, targetPath);
+    const resolved = resolveSchema(targetSchema);
+    if (isArraySchema(resolved)) {
+      if (turnIndex === undefined) {
+        throw new Error('turnIndex is required when targetPath points to a turn array.');
+      }
+      if (!isSchema(resolved.items)) {
+        throw new Error(`Schema at ${targetPath || '/'} does not define object item schemas.`);
+      }
+      const turnPath = `${targetPath}/${turnIndex}`;
+      const turn = valueAtPointer(data, turnPath);
+      if (!isPlainRecord(turn)) {
+        throw new Error(`Record value at ${turnPath || '/'} is not an object turn target.`);
+      }
+      return { path: turnPath, schema: resolveSchema(resolved.items), data: cloneJson(turn) };
+    }
+    if (turnIndex !== undefined) {
+      throw new Error('turnIndex can only be used when targetPath points to a turn array.');
+    }
+    const turn = valueAtPointer(data, targetPath);
+    if (!isPlainRecord(turn)) {
+      throw new Error(`Record value at ${targetPath || '/'} is not an object turn target.`);
+    }
+    return { path: targetPath, schema: resolved, data: cloneJson(turn) };
+  }
+
+  const candidates = listTurnTargetCandidates(schema, data)
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+  for (const candidate of candidates) {
+    if (candidate.mode === 'append-array') {
+      const turns = valueAtPointer(data, candidate.path);
+      if (Array.isArray(turns) && turns.length > 0) {
+        const index = turnIndex ?? turns.length - 1;
+        const turn = turns[index];
+        if (isPlainRecord(turn)) {
+          return { path: `${candidate.path}/${index}`, schema: candidate.schema, data: cloneJson(turn) };
+        }
+      }
+    } else if (isPlainRecord(candidate.data)) {
+      return { path: candidate.path, schema: candidate.schema, data: cloneJson(candidate.data) };
+    }
+  }
+  throw new Error('No existing turn could be inferred. Call completeTurn with targetPath and, for arrays, turnIndex.');
+};
+
+const resolveResponseField = (target: ExistingTurnTarget): string => {
+  const schemaFields = isSchemaMap(target.schema.properties) ? Object.keys(target.schema.properties) : [];
+  return bestTurnField([...new Set([...schemaFields, ...Object.keys(target.data)])], responseFieldAliases) ?? 'response';
+};
+
+const resolveEvidenceField = (target: ExistingTurnTarget): string => {
+  const schemaFields = isSchemaMap(target.schema.properties) ? Object.keys(target.schema.properties) : [];
+  const evidenceField = bestTurnField([...new Set([...schemaFields, ...Object.keys(target.data)])], evidenceFieldAliases);
+  if (!evidenceField) {
+    throw new Error('No evidence field could be inferred for this turn. Call completeTurn with fieldMapping.evidenceField.');
+  }
+  return evidenceField;
+};
+
+const defaultTurnField = (target: TurnTargetCandidate, aliases: string[], fallback: string): string => {
+  const properties = isSchemaMap(target.schema.properties) ? Object.keys(target.schema.properties) : [];
+  const dataKeys = isPlainRecord(target.data) ? Object.keys(target.data) : [];
+  return bestTurnField([...new Set([...properties, ...dataKeys])], aliases) ?? fallback;
+};
+
+const applyTurnToRecord = (
+  data: unknown,
+  target: TurnTargetCandidate,
+  turn: Record<string, unknown>
+): { nextData: unknown; targetValue: unknown; turnIndex?: number } => {
+  const nextData = cloneJson(data);
+  if (target.mode === 'append-array') {
+    const currentValue = valueAtPointer(nextData, target.path);
+    if (currentValue !== undefined && !Array.isArray(currentValue)) {
+      throw new Error(`Record value at ${target.path || '/'} is not an array container.`);
+    }
+    const nextContainer = [...(Array.isArray(currentValue) ? currentValue : []), turn];
+    if (target.path === '') {
+      return { nextData: nextContainer, targetValue: nextContainer, turnIndex: nextContainer.length - 1 };
+    }
+    setValueAtPointer(nextData, target.path, nextContainer);
+    return { nextData, targetValue: nextContainer, turnIndex: nextContainer.length - 1 };
+  }
+  const currentValue = target.path === '' ? nextData : valueAtPointer(nextData, target.path);
+  if (currentValue !== undefined && !isPlainRecord(currentValue)) {
+    throw new Error(`Record value at ${target.path || '/'} is not an object turn target.`);
+  }
+  const nextObject = { ...(isPlainRecord(currentValue) ? currentValue : {}), ...turn };
+  if (target.path === '') {
+    return { nextData: nextObject, targetValue: nextObject };
+  }
+  setValueAtPointer(nextData, target.path, nextObject);
+  return { nextData, targetValue: nextObject };
+};
+
+const validateTurnChange = (target: TurnTargetCandidate, targetValue: unknown): ReturnType<typeof validateRecord> =>
+  validateRecord(target.mode === 'append-array' ? (target.containerSchema ?? { type: 'array', items: target.schema }) : target.schema, targetValue);
+
+const inquiryFieldAliases = [
+  'inquiry',
+  'request',
+  'question',
+  'prompt',
+  'query',
+  'input',
+  'userMessage',
+  'user',
+  'human',
+  'utterance',
+  'ask'
+];
+
+const responseFieldAliases = [
+  'response',
+  'answer',
+  'reply',
+  'completion',
+  'output',
+  'agentResponse',
+  'assistantMessage',
+  'assistant',
+  'agent',
+  'result'
+];
+
+const evidenceFieldAliases = ['evidence', 'references', 'sources', 'citations', 'supportingEvidence', 'searchResults', 'results', 'documents'];
+
+const bestTurnField = (fields: string[], aliases: string[]): string | undefined => {
+  const normalizedAliases = aliases.map(normalizeTurnField);
+  return fields.find((field) => normalizedAliases.includes(normalizeTurnField(field)));
+};
+
+const normalizeTurnField = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const turnPathScore = (path: string): number => {
+  const normalizedSegments = pointerSegments(path).map(normalizeTurnField);
+  if (normalizedSegments.some((segment) => ['turn', 'turns'].includes(segment))) {
+    return 40;
+  }
+  if (normalizedSegments.some((segment) => ['conversation', 'conversations', 'message', 'messages', 'chat', 'transcript'].includes(segment))) {
+    return 25;
+  }
+  return 0;
+};
+
+const schemaTitleScore = (schema: JsonSchema): number => {
+  const text = [schema.title, schema.description].filter((value): value is string => typeof value === 'string').join(' ');
+  const normalized = normalizeTurnField(text);
+  if (normalized.includes('turn')) {
+    return 20;
+  }
+  if (['conversation', 'message', 'chat', 'transcript'].some((term) => normalized.includes(term))) {
+    return 10;
+  }
+  return 0;
+};
+
+const requiredTurnFieldScore = (schema: JsonSchema, inquiryField: string | undefined, responseField: string | undefined): number => {
+  if (!Array.isArray(schema.required)) {
+    return 0;
+  }
+  const required = schema.required.filter((value): value is string => typeof value === 'string');
+  return (inquiryField && required.includes(inquiryField) ? 10 : 0) + (responseField && required.includes(responseField) ? 10 : 0);
+};
+
+const isRequiredField = (schema: JsonSchema, field: string): boolean =>
+  Array.isArray(schema.required) && schema.required.some((value) => value === field);
+
+const formatTurnTargetCandidate = (candidate: TurnTargetCandidate): string => {
+  const fields = [candidate.inquiryField, candidate.responseField].filter((field): field is string => Boolean(field)).join('/');
+  return `${candidate.path || '/'} (${candidate.mode}${fields ? `, ${fields}` : ''})`;
+};
+
+const toTurnCandidateResult = (candidate: TurnTargetCandidate): Record<string, unknown> => ({
+  path: candidate.path,
+  mode: candidate.mode === 'append-array' ? 'append' : 'merge',
+  score: candidate.score,
+  schema: candidate.schema,
+  fields: {
+    inquiryField: candidate.inquiryField,
+    responseField: candidate.responseField
+  }
+});
+
 const schemaAtPointer = (schema: unknown, path: string): JsonSchema => {
   if (!isSchema(schema)) {
     throw new Error('Project _schema.json must be a JSON object.');
@@ -416,7 +1149,7 @@ const setValueAtPointer = (data: unknown, path: string, value: unknown): void =>
       current = current[index];
     } else if (isPlainRecord(current)) {
       if (!(segment in current)) {
-        current[segment] = {};
+        throw new Error(`Record path ${path || '/'} does not exist.`);
       }
       current = current[segment];
     } else {
@@ -447,6 +1180,28 @@ const assertJsonPointer = (value: string): string => {
   }
   if (!value.startsWith('/')) {
     throw new Error('containerPath must be a JSON Pointer beginning with /.');
+  }
+  pointerSegments(value);
+  return value;
+};
+
+const assertTurnTargetPointer = (value: string): string => {
+  if (value === '') {
+    return value;
+  }
+  if (!value.startsWith('/')) {
+    throw new Error('targetPath must be a JSON Pointer beginning with /.');
+  }
+  pointerSegments(value);
+  return value;
+};
+
+const assertSchemaPointer = (value: string): string => {
+  if (value === '') {
+    return value;
+  }
+  if (!value.startsWith('/')) {
+    throw new Error('targetPath must be a JSON Pointer beginning with /.');
   }
   pointerSegments(value);
   return value;
@@ -513,6 +1268,22 @@ const isSchemaMap = (value: unknown): value is Record<string, JsonSchema> =>
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const isTurnFieldMapping = (value: unknown): value is TurnFieldMapping => {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  const allowedKeys = ['inquiryField', 'responseField'];
+  return Object.entries(value).every(([key, field]) => allowedKeys.includes(key) && typeof field === 'string' && field.trim() !== '');
+};
+
+const isResponseFieldMapping = (value: unknown): value is Pick<TurnFieldMapping, 'responseField' | 'evidenceField'> => {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  const allowedKeys = ['responseField', 'evidenceField'];
+  return Object.entries(value).every(([key, field]) => allowedKeys.includes(key) && typeof field === 'string' && field.trim() !== '');
+};
+
 const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -527,7 +1298,14 @@ const toolErrorCode = (error: unknown): AgentErrorEnvelope['code'] => {
     message.includes('containerpath') ||
     message.includes('no schema exists') ||
     message.includes('schema at') ||
-    message.includes('record path')
+    message.includes('_schema.json') ||
+    message.includes('record path') ||
+    message.includes('targetpath') ||
+    message.includes('turn target') ||
+    message.includes('turnindex') ||
+    message.includes('existing turn') ||
+    message.includes('fieldmapping') ||
+    message.includes('turn does not')
   ) {
     return 'INVALID_TOOL_ARGUMENTS';
   }

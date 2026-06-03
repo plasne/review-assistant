@@ -34,6 +34,8 @@ const MAX_PROMPT_CHARS = 120000;
 const MAX_HISTORY_MESSAGES = 20;
 const MAX_HISTORY_CHARS = 40000;
 const MAX_HISTORY_MESSAGE_CHARS = 8000;
+const MAX_ATTACHMENT_PROMPT_CHARS = 60000;
+const PROMPT_SAFETY_MARGIN_CHARS = 2000;
 const provider = { id: 'github-copilot' as const, name: 'GitHub Copilot' };
 let active:
   | {
@@ -78,6 +80,8 @@ const startChat = async (request: Extract<WorkerRequest, { type: 'start' }>): Pr
   sendLog('info', 'review-assistant.agent-worker-starting', {
     requestId: request.requestId,
     toolCount: request.context.tools.length,
+    attachmentCount: request.context.attachments?.length ?? 0,
+    attachmentChars: request.context.attachments?.reduce((total, attachment) => total + attachment.content.length, 0) ?? 0,
     promptChars: prompt.length,
     mcpEnabled: request.context.tools.length > 0 || (request.context.mcpServers ?? []).length > 0,
     externalMcpServers: (request.context.mcpServers ?? []).map((server) => server.id).join(',') || 'none',
@@ -220,10 +224,48 @@ const buildPrompt = (context: ChatContext): string => {
       null,
       2
     )}`,
-    `Conversation so far:\n${formatHistory(context.history ?? [])}`,
-    `User message:\n${context.message}`
+    `Conversation so far:\n${formatHistory(context.history ?? [])}`
   ];
-  return parts.join('\n\n');
+  const basePrompt = [...parts, `User message:\n${context.message}`].join('\n\n');
+  const remainingAttachmentBudget = Math.max(
+    0,
+    Math.min(MAX_ATTACHMENT_PROMPT_CHARS, MAX_PROMPT_CHARS - basePrompt.length - PROMPT_SAFETY_MARGIN_CHARS)
+  );
+  return [
+    parts.join('\n\n'),
+    `Attached files:\n${formatAttachments(context.attachments ?? [], remainingAttachmentBudget)}`,
+    `User message:\n${context.message}`
+  ].join('\n\n');
+};
+
+const formatAttachments = (attachments: ChatContext['attachments'], budget: number): string => {
+  if (!attachments || attachments.length === 0) {
+    return 'none';
+  }
+  if (budget <= 0) {
+    return '[attachment content omitted: prompt budget exhausted]';
+  }
+  const formatted: string[] = [];
+  let remaining = budget;
+  for (const attachment of attachments) {
+    const header = `File: ${attachment.name}\nPath: ${attachment.path}\nSize: ${attachment.sizeBytes} bytes\nContent:\n`;
+    const footer = `\n--- END ATTACHMENT ${attachment.name} ---`;
+    const marker = `--- BEGIN ATTACHMENT ${attachment.name} ---\n`;
+    const overhead = header.length + marker.length + footer.length + 2;
+    if (remaining <= overhead + 12) {
+      formatted.push(`File: ${attachment.name}\nPath: ${attachment.path}\nSize: ${attachment.sizeBytes} bytes\n[attachment content omitted: prompt budget exhausted]`);
+      break;
+    }
+    const contentBudget = remaining - overhead;
+    const content = truncateText(attachment.content, contentBudget);
+    const entry = `${header}${marker}${content}${footer}`;
+    formatted.push(entry);
+    remaining -= entry.length + 2;
+    if (remaining <= 0) {
+      break;
+    }
+  }
+  return formatted.join('\n\n');
 };
 
 const formatHistory = (history: ChatMessage[]): string => {

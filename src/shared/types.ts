@@ -164,6 +164,21 @@ export type ChatMessage = {
   createdAt: string;
 };
 
+export type ChatAttachment = {
+  id: string;
+  name: string;
+  path: string;
+  sizeBytes: number;
+};
+
+export type ChatAttachmentContent = ChatAttachment & {
+  content: string;
+};
+
+export type ChatAttachmentSelectionResult = {
+  attachments: ChatAttachment[];
+};
+
 export type AgentProviderMetadata = {
   id: 'github-copilot';
   name: string;
@@ -177,6 +192,7 @@ export type AgentErrorCode =
   | 'CONTEXT_TOO_LARGE'
   | 'TOOL_NOT_FOUND'
   | 'INVALID_TOOL_ARGUMENTS'
+  | 'NO_PROJECT_SELECTED'
   | 'NO_RECORD_SELECTED'
   | 'RECORD_NOT_FOUND'
   | 'PROVIDER_ERROR';
@@ -297,7 +313,9 @@ export type Api = {
   listProjects: () => Promise<ProjectSummary[]>;
   createProject: (projectId: string) => Promise<ProjectSummary>;
   openProject: (projectId: string) => Promise<OpenProjectResult>;
+  createRecordDraft: (projectId: string, recordId: string) => Promise<RecordDetail>;
   getRecord: (projectId: string, recordId: string) => Promise<RecordDetail>;
+  updateRecordData: (projectId: string, recordId: string, data: unknown) => Promise<RecordDetail>;
   getRecordDraftStatus: (projectId: string, recordId: string) => Promise<RecordDraftStatus>;
   saveRecordChanges: (projectId: string, recordId: string) => Promise<RecordDetail>;
   discardRecordChanges: (projectId: string, recordId: string) => Promise<RecordDraftStatus>;
@@ -310,8 +328,11 @@ export type Api = {
     projectId: string | undefined,
     recordId: string | undefined,
     message: string,
-    history?: ChatMessage[]
+    history?: ChatMessage[],
+    attachments?: ChatAttachment[]
   ) => Promise<ChatStreamStartResult>;
+  selectChatAttachments: () => Promise<ChatAttachmentSelectionResult>;
+  discardChatAttachment: (attachmentId: string) => Promise<void>;
   continueWithGitHub: () => Promise<ContinueWithGitHubResult>;
   closeWindow: () => Promise<void>;
   cancelChat: (requestId: string) => Promise<ChatCancelResult>;
