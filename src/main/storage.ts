@@ -34,6 +34,10 @@ export interface StorageAdapter {
   createProject(projectId: string): Promise<ProjectSummary>;
   openProject(projectId: string): Promise<OpenProjectResult>;
   getRecord(projectId: string, recordId: string): Promise<RecordDetail>;
+  readRecordData?(projectId: string, recordId: string): Promise<unknown>;
+  renderRecordData?(projectId: string, recordId: string, data: unknown): Promise<RecordDetail>;
+  writeRecordData?(projectId: string, recordId: string, data: unknown): Promise<RecordDetail>;
+  writeRecordDataIfUnchanged?(projectId: string, recordId: string, data: unknown, expectedData: unknown): Promise<RecordDetail>;
   getFeedbackConfig(projectId: string): Promise<FeedbackConfig>;
   saveFeedbackConfig(projectId: string, config: FeedbackConfig): Promise<FeedbackConfig>;
   getProjectUser(projectId: string): Promise<ProjectUser>;
@@ -49,6 +53,8 @@ const NEW_PROJECT_SCHEMA = {
   properties: {},
   additionalProperties: true
 };
+export const RECORD_DRAFT_CONFLICT_MESSAGE =
+  'Record changed after this draft was staged. Refresh the record, review the latest changes, and stage your edits again.';
 const BACKEND_KEYS = new Set(['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'LOCAL_PATH']);
 
 export const createStorageAdapter = (config: AppConfig): StorageAdapter => {
@@ -102,12 +108,40 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
+    return this.renderRecordData(projectId, recordId, await this.readRecordData(projectId, recordId));
+  }
+
+  async readRecordData(projectId: string, recordId: string): Promise<unknown> {
+    const project = this.projectPath(assertProjectId(projectId));
+    const id = assertRecordId(recordId);
+    const recordPath = containedPath(project, `${id}.json`);
+    return readJsonFile(recordPath, `Record not found: ${id}`);
+  }
+
+  async renderRecordData(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
     const project = this.projectPath(assertProjectId(projectId));
     const id = assertRecordId(recordId);
     const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
-    const recordPath = containedPath(project, `${id}.json`);
-    const data = await readJsonFile(recordPath, `Record not found: ${id}`);
     return buildRecordDetail(projectId, id, schema, data, await this.readDisplayConfig(project));
+  }
+
+  async writeRecordData(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
+    const project = this.projectPath(assertProjectId(projectId));
+    const id = assertRecordId(recordId);
+    await writeJsonFile(containedPath(project, `${id}.json`), data);
+    return this.renderRecordData(projectId, id, data);
+  }
+
+  async writeRecordDataIfUnchanged(projectId: string, recordId: string, data: unknown, expectedData: unknown): Promise<RecordDetail> {
+    const project = this.projectPath(assertProjectId(projectId));
+    const id = assertRecordId(recordId);
+    const recordPath = containedPath(project, `${id}.json`);
+    const current = await readJsonFile(recordPath, `Record not found: ${id}`);
+    if (!jsonEqual(current, expectedData)) {
+      throw new Error(RECORD_DRAFT_CONFLICT_MESSAGE);
+    }
+    await writeJsonFile(recordPath, data);
+    return this.renderRecordData(projectId, id, data);
   }
 
   async getFeedbackConfig(projectId: string): Promise<FeedbackConfig> {
@@ -151,17 +185,13 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   async updateRecord(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
-    const project = this.projectPath(assertProjectId(projectId));
     const id = assertRecordId(recordId);
-    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
-    const recordPath = containedPath(project, `${id}.json`);
-    const existing = await readJsonFile(recordPath, `Record not found: ${id}`);
+    const existing = await this.readRecordData(projectId, id);
     const feedback = isPlainRecord(existing)
       ? Object.fromEntries(Object.entries(existing).filter(([key]) => key.endsWith('_feedback') || key.endsWith('_edits') || key.endsWith('_comments')))
       : {};
     const next = isPlainRecord(data) ? { ...data, ...feedback } : data;
-    await writeJsonFile(recordPath, next);
-    return buildRecordDetail(projectId, id, schema, next, await this.readDisplayConfig(project));
+    return this.writeRecordData(projectId, id, next);
   }
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
@@ -251,12 +281,58 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   }
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
+    return this.renderRecordData(projectId, recordId, await this.readRecordData(projectId, recordId));
+  }
+
+  async readRecordData(projectId: string, recordId: string): Promise<unknown> {
+    const id = assertProjectId(projectId);
+    const record = assertRecordId(recordId);
+    const container = this.client.getContainerClient(id);
+    return JSON.parse(await this.readBlob(container, `${record}.json`, `Record not found: ${record}`)) as unknown;
+  }
+
+  async renderRecordData(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
     const id = assertProjectId(projectId);
     const record = assertRecordId(recordId);
     const container = this.client.getContainerClient(id);
     const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
-    const data = JSON.parse(await this.readBlob(container, `${record}.json`, `Record not found: ${record}`)) as unknown;
     return buildRecordDetail(id, record, schema, data, normalizeDisplayConfig(await this.readOptionalJsonBlob(container, '_display.json')));
+  }
+
+  async writeRecordData(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
+    const id = assertProjectId(projectId);
+    const record = assertRecordId(recordId);
+    const body = `${JSON.stringify(data, null, 2)}\n`;
+    await this.client
+      .getContainerClient(id)
+      .getBlockBlobClient(`${record}.json`)
+      .upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
+    return this.renderRecordData(id, record, data);
+  }
+
+  async writeRecordDataIfUnchanged(projectId: string, recordId: string, data: unknown, expectedData: unknown): Promise<RecordDetail> {
+    const id = assertProjectId(projectId);
+    const record = assertRecordId(recordId);
+    const container = this.client.getContainerClient(id);
+    const blob = container.getBlockBlobClient(`${record}.json`);
+    const response = await blob.download();
+    const current = JSON.parse(await streamToString(response.readableStreamBody)) as unknown;
+    if (!jsonEqual(current, expectedData) || !response.etag) {
+      throw new Error(RECORD_DRAFT_CONFLICT_MESSAGE);
+    }
+    const body = `${JSON.stringify(data, null, 2)}\n`;
+    try {
+      await blob.upload(body, Buffer.byteLength(body), {
+        blobHTTPHeaders: { blobContentType: 'application/json' },
+        conditions: { ifMatch: response.etag }
+      });
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'statusCode' in error && (error as { statusCode?: number }).statusCode === 412) {
+        throw new Error(RECORD_DRAFT_CONFLICT_MESSAGE);
+      }
+      throw error;
+    }
+    return this.renderRecordData(id, record, data);
   }
 
   async getFeedbackConfig(projectId: string): Promise<FeedbackConfig> {
@@ -311,16 +387,12 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   async updateRecord(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
     const id = assertProjectId(projectId);
     const record = assertRecordId(recordId);
-    const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
-    const existing = JSON.parse(await this.readBlob(container, `${record}.json`, `Record not found: ${record}`)) as unknown;
+    const existing = await this.readRecordData(id, record);
     const feedback = isPlainRecord(existing)
       ? Object.fromEntries(Object.entries(existing).filter(([key]) => key.endsWith('_feedback') || key.endsWith('_edits') || key.endsWith('_comments')))
       : {};
     const next = isPlainRecord(data) ? { ...data, ...feedback } : data;
-    const body = `${JSON.stringify(next, null, 2)}\n`;
-    await container.getBlockBlobClient(`${record}.json`).upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
-    return buildRecordDetail(id, record, schema, next, normalizeDisplayConfig(await this.readOptionalJsonBlob(container, '_display.json')));
+    return this.writeRecordData(id, record, next);
   }
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
@@ -406,6 +478,8 @@ const writeJsonFile = async (filePath: string, value: unknown): Promise<void> =>
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 };
 
+const jsonEqual = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
+
 const readRuntimeEnvValues = (envPath: string): Record<string, string> =>
   Object.fromEntries(Object.entries(readEnvFile(envPath)).filter(([key]) => !BACKEND_KEYS.has(key)));
 
@@ -446,7 +520,7 @@ const parseAzureProjectEnv = (content: string): Record<string, string> =>
       })
   );
 
-const buildRecordDetail = (projectId: string, recordId: string, schema: unknown, data: unknown, displayConfig?: DisplayConfig): RecordDetail => {
+export const buildRecordDetail = (projectId: string, recordId: string, schema: unknown, data: unknown, displayConfig?: DisplayConfig): RecordDetail => {
   const coreData = stripFeedbackProperties(data);
   const validationIssues = validateRecord(schema, coreData);
   return {
@@ -461,7 +535,7 @@ const buildRecordDetail = (projectId: string, recordId: string, schema: unknown,
   };
 };
 
-const assertSubmissionAllowed = (config: FeedbackConfig, input: FeedbackSubmissionInput): void => {
+export const assertSubmissionAllowed = (config: FeedbackConfig, input: FeedbackSubmissionInput): void => {
   const entry = feedbackConfigEntryForPath(config, input.propertyPath);
   if (!entry) {
     throw new Error('Feedback target is not present in the project schema.');

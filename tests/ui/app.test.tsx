@@ -11,6 +11,7 @@ type ListenerMap = {
   error: ((error: ChatStreamError) => void)[];
   canceled: ((canceled: ChatCanceled) => void)[];
   loginComplete: ((completion: GitHubLoginCompletion) => void)[];
+  closeRequested: (() => void)[];
 };
 
 const listeners: ListenerMap = {
@@ -18,7 +19,8 @@ const listeners: ListenerMap = {
   complete: [],
   error: [],
   canceled: [],
-  loginComplete: []
+  loginComplete: [],
+  closeRequested: []
 };
 
 const api: Api = {
@@ -27,6 +29,9 @@ const api: Api = {
   createProject: vi.fn(),
   openProject: vi.fn(),
   getRecord: vi.fn(),
+  getRecordDraftStatus: vi.fn(),
+  saveRecordChanges: vi.fn(),
+  discardRecordChanges: vi.fn(),
   getFeedbackConfig: vi.fn(),
   saveFeedbackConfig: vi.fn(),
   getProjectUser: vi.fn(),
@@ -34,7 +39,14 @@ const api: Api = {
   getAgentStatus: vi.fn(),
   continueWithGitHub: vi.fn(),
   startChat: vi.fn(),
+  closeWindow: vi.fn(),
   cancelChat: vi.fn(),
+  onCloseRequested: vi.fn((listener) => {
+    listeners.closeRequested.push(listener);
+    return () => {
+      listeners.closeRequested = listeners.closeRequested.filter((item) => item !== listener);
+    };
+  }),
   onGitHubLoginComplete: vi.fn((listener) => {
     listeners.loginComplete.push(listener);
     return () => {
@@ -74,12 +86,17 @@ beforeEach(() => {
   listeners.error = [];
   listeners.canceled = [];
   listeners.loginComplete = [];
+  listeners.closeRequested = [];
   vi.mocked(api.getAgentStatus).mockResolvedValue({
     provider: { id: 'github-copilot', name: 'GitHub Copilot' },
     availability: 'ready'
   });
   vi.mocked(api.getProjectUser).mockResolvedValue({ username: 'sme@example.com', valid: true });
+  vi.mocked(api.getRecordDraftStatus).mockResolvedValue({ hasUnsavedChanges: false });
+  vi.mocked(api.saveRecordChanges).mockImplementation(async (projectId, recordId) => api.getRecord(projectId, recordId));
+  vi.mocked(api.discardRecordChanges).mockResolvedValue({ hasUnsavedChanges: false });
   vi.mocked(api.saveFeedbackConfig).mockImplementation(async (_projectId, config) => config);
+  vi.mocked(api.closeWindow).mockResolvedValue(undefined);
   vi.mocked(api.continueWithGitHub).mockResolvedValue({
     opened: true,
     loginId: 'login-1',
@@ -113,7 +130,7 @@ describe('review UI', () => {
     expect(screen.getByText('It succeeded.').closest('details')).toHaveAttribute('open');
   });
 
-  it('renders evidence lists compactly with editable and read-only indicators', () => {
+  it('renders evidence lists compactly with editable and read-only indicators', async () => {
     const onSubmitFeedback = vi.fn().mockResolvedValue(undefined);
     render(
       <RenderTree
@@ -199,6 +216,16 @@ describe('review UI', () => {
     expect(contentFeedback).toBeInTheDocument();
     expect(contentFeedback.textContent?.indexOf('Edit')).toBeLessThan(contentFeedback.textContent?.indexOf('Comment') ?? 0);
     expect(screen.queryByLabelText('id feedback')).not.toBeInTheDocument();
+    const editableField = screen.getByText('content').closest('.evidence-field');
+    expect(editableField).not.toBeNull();
+    const editInput = within(editableField as HTMLElement).getByLabelText('Edit');
+    await userEvent.clear(editInput);
+    await userEvent.type(editInput, 'Edited evidence content');
+    expect(within(editableField as HTMLElement).getByLabelText('Edit')).toHaveValue('Edited evidence content');
+    await userEvent.click(within(editableField as HTMLElement).getByRole('button', { name: 'Stage feedback' }));
+    expect(onSubmitFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({ propertyPath: '/turns/0/evidence/0/content', editValue: 'Edited evidence content' })
+    );
   });
 
   it('renders evidence content with the diff-view presentation', () => {
@@ -262,13 +289,12 @@ describe('review UI', () => {
     expect(screen.getByText('Logged')).toBeInTheDocument();
     expect(screen.getByLabelText('content feedback')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Updated evidence content.')).toBeInTheDocument();
-    const diff = screen.getByLabelText('Edit diff');
+    const diff = screen.getByLabelText('Diff preview');
     expect(diff).toBeInTheDocument();
     expect(screen.getByText('Diff preview')).toBeInTheDocument();
-    expect(within(diff).getByText('Original evidence content.')).toBeInTheDocument();
-    expect(within(diff).getByText('Updated evidence content.')).toBeInTheDocument();
+    expect(diff.querySelector('diffs-container')).not.toBeNull();
     expect(screen.getByLabelText('Comment')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stage feedback' })).toBeDisabled();
     expect(screen.getByText('History (3)')).toBeInTheDocument();
   });
 
@@ -1144,6 +1170,79 @@ describe('review UI', () => {
     expect(await screen.findByRole('button', { name: 'new-record' })).toBeInTheDocument();
   });
 
+  it('warns before refreshing records when the selected record has unsaved changes', async () => {
+    const feedbackConfig = {
+      properties: {
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'good_fair_bad' as const, comments: false, editMode: 'none' as const }
+      }
+    };
+    const recordDetail = {
+      projectId: 'sample-project',
+      recordId: 'record-1',
+      displayName: 'record-1',
+      data: { answer: 'First answer' },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object' as const,
+        label: 'record',
+        path: '',
+        children: [{ kind: 'value' as const, label: 'answer', path: '/answer', value: 'First answer', validationIssues: [] }],
+        validationIssues: []
+      },
+      feedbackHistory: { '/answer': { feedback: [], edits: [], comments: [] } }
+    };
+    let hasDraft = false;
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject)
+      .mockResolvedValueOnce({
+        project: { id: 'sample-project', name: 'sample-project' },
+        projectConfig: {},
+        schema: {},
+        records: [{ id: 'record-1', displayName: 'record-1' }],
+        feedbackConfig
+      })
+      .mockResolvedValue({
+        project: { id: 'sample-project', name: 'sample-project' },
+        projectConfig: {},
+        schema: {},
+        records: [],
+        feedbackConfig
+      });
+    vi.mocked(api.getRecord).mockResolvedValue(recordDetail);
+    vi.mocked(api.getRecordDraftStatus).mockImplementation(async () => ({ hasUnsavedChanges: hasDraft }));
+    vi.mocked(api.submitFeedback).mockImplementation(async () => {
+      hasDraft = true;
+      return { username: 'sme@example.com', record: recordDetail };
+    });
+    vi.mocked(api.discardRecordChanges).mockImplementation(async () => {
+      hasDraft = false;
+      return { hasUnsavedChanges: false };
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'record-1' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Good' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Stage feedback' }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Expand records sidebar' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh records' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeVisible();
+    expect(api.openProject).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('First answer')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(api.discardRecordChanges).toHaveBeenCalledWith('sample-project', 'record-1'));
+    await waitFor(() => expect(api.openProject).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('First answer')).not.toBeInTheDocument();
+  });
+
   it('creates a project and opens it', async () => {
     vi.mocked(api.getBootstrap).mockResolvedValue({
       backendKind: 'local',
@@ -1166,6 +1265,77 @@ describe('review UI', () => {
 
     await waitFor(() => expect(api.createProject).toHaveBeenCalledWith('new-project'));
     await waitFor(() => expect(screen.getByLabelText('Current project')).toHaveValue('new-project'));
+    expect(await screen.findByRole('heading', { name: 'records' })).toBeInTheDocument();
+  });
+
+  it('warns before opening a newly created project with unsaved changes', async () => {
+    const feedbackConfig = {
+      properties: {
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'good_fair_bad' as const, comments: false, editMode: 'none' as const }
+      }
+    };
+    const recordDetail = {
+      projectId: 'sample-project',
+      recordId: 'record-1',
+      displayName: 'record-1',
+      data: { answer: 'First answer' },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object' as const,
+        label: 'record',
+        path: '',
+        children: [{ kind: 'value' as const, label: 'answer', path: '/answer', value: 'First answer', validationIssues: [] }],
+        validationIssues: []
+      },
+      feedbackHistory: { '/answer': { feedback: [], edits: [], comments: [] } }
+    };
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockImplementation(async (projectId) => ({
+      project: { id: projectId, name: projectId },
+      projectConfig: {},
+      schema: {},
+      records: projectId === 'new-project' ? [] : [{ id: 'record-1', displayName: 'record-1' }],
+      feedbackConfig
+    }));
+    vi.mocked(api.getRecord).mockResolvedValue(recordDetail);
+    let hasDraft = false;
+    vi.mocked(api.getRecordDraftStatus).mockImplementation(async () => ({ hasUnsavedChanges: hasDraft }));
+    vi.mocked(api.submitFeedback).mockImplementation(async () => {
+      hasDraft = true;
+      return { username: 'sme@example.com', record: recordDetail };
+    });
+    vi.mocked(api.discardRecordChanges).mockImplementation(async () => {
+      hasDraft = false;
+      return { hasUnsavedChanges: false };
+    });
+    vi.mocked(api.createProject).mockResolvedValue({ id: 'new-project', name: 'new-project' });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'record-1' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Good' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Stage feedback' }));
+    expect(await screen.findByText('Unsaved changes')).toHaveClass('unsaved-status');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    await userEvent.type(await screen.findByLabelText('Project name'), 'new-project');
+    await userEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeVisible();
+    expect(screen.getByLabelText('Current project')).toHaveValue('sample-project');
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(vi.mocked(api.openProject).mock.calls.some(([projectId]) => projectId === 'new-project')).toBe(false);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(api.discardRecordChanges).toHaveBeenCalledWith('sample-project', 'record-1'));
+    await waitFor(() => expect(api.createProject).toHaveBeenCalledWith('new-project'));
+    await waitFor(() => expect(api.openProject).toHaveBeenCalledWith('new-project'));
+    expect(await screen.findByLabelText('Current project')).toHaveValue('new-project');
     expect(await screen.findByRole('heading', { name: 'records' })).toBeInTheDocument();
   });
 
@@ -1215,6 +1385,67 @@ describe('review UI', () => {
     expect(screen.queryByText('No feedback configured')).not.toBeInTheDocument();
     expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your .env file.')).not.toBeInTheDocument();
     expect(screen.queryByText('History (0)')).not.toBeInTheDocument();
+  });
+
+  it('applies saved feedback configuration to the currently displayed record', async () => {
+    const feedbackConfig = {
+      properties: {
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none' as const, comments: false, editMode: 'none' as const }
+      }
+    };
+    const configuredFeedbackConfig = {
+      properties: {
+        '/answer': { ...feedbackConfig.properties['/answer'], feedback: 'good_fair_bad' as const, comments: true, editMode: 'logged' as const }
+      }
+    };
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: { type: 'object', properties: { answer: { type: 'string' } } },
+      records: [{ id: 'valid-record', displayName: 'valid-record' }],
+      feedbackConfig
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'valid-record',
+      displayName: 'valid-record',
+      data: { answer: 'Run npm run check.' },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        path: '',
+        children: [{ kind: 'value', label: 'answer', path: '/answer', value: 'Run npm run check.', validationIssues: [] }],
+        validationIssues: []
+      },
+      feedbackHistory: { '/answer': { feedback: [], edits: [], comments: [] } }
+    });
+    vi.mocked(api.saveFeedbackConfig).mockResolvedValue(configuredFeedbackConfig);
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+    expect(await screen.findByText('Run npm run check.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stage feedback' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Configure' }));
+    await userEvent.selectOptions(await screen.findByLabelText('Answer feedback mode'), 'good_fair_bad');
+    await userEvent.click(screen.getByLabelText('Answer comment'));
+    await userEvent.selectOptions(screen.getByLabelText('Answer editable'), 'logged');
+    await userEvent.click(within(screen.getByRole('dialog', { name: 'Feedback configuration' })).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.saveFeedbackConfig).toHaveBeenCalledWith('sample-project', configuredFeedbackConfig));
+    expect(await screen.findByRole('radio', { name: 'Good' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Comment')).toBeInTheDocument();
+    expect(screen.getByLabelText('Edit')).toHaveDisplayValue('Run npm run check.');
+    expect(screen.getByRole('button', { name: 'Stage feedback' })).toBeDisabled();
+    expect(api.getRecord).toHaveBeenCalledTimes(2);
   });
 
   it('configures feedback, submits, and toggles history', async () => {
@@ -1319,13 +1550,17 @@ describe('review UI', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
     expect(await screen.findByText('Run npm run check.', { selector: 'output' })).toBeInTheDocument();
     expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your .env file.')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stage feedback' })).toBeDisabled();
     expect(screen.getByLabelText('Current feedback username')).toHaveTextContent('sme@example.com');
     expect(screen.queryByText(/Feedback mode:/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('radio', { name: 'Good' }));
     await userEvent.type(screen.getByLabelText('Comment'), 'Looks right');
-    await userEvent.click(screen.getByRole('button', { name: 'Submit feedback' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Stage feedback' }));
     await waitFor(() => expect(api.submitFeedback).toHaveBeenCalledWith('sample-project', 'valid-record', expect.objectContaining({ propertyPath: '/answer' })));
+    expect(screen.getByText('Unsaved changes')).toHaveClass('unsaved-status');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecordChanges).toHaveBeenCalledWith('sample-project', 'valid-record'));
+    expect(await screen.findByText('All changes saved')).toHaveClass('saved-status');
 
     const historySummary = await screen.findByText('History (1)');
     await userEvent.click(historySummary);
@@ -1334,6 +1569,151 @@ describe('review UI', () => {
     expect(screen.getAllByText('good').find((element) => element.closest('.history-entry'))).toBeVisible();
     expect(screen.getByText('Looks right')).toBeVisible();
     expect(screen.getAllByText(/ago|just now/).length).toBeGreaterThan(0);
+  });
+
+  it('warns before closing or switching records with unsaved changes', async () => {
+    const feedbackConfig = {
+      properties: {
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'good_fair_bad' as const, comments: false, editMode: 'none' as const }
+      }
+    };
+    const recordDetail = (recordId: string, answer: string) => ({
+      projectId: 'sample-project',
+      recordId,
+      displayName: recordId,
+      data: { answer },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object' as const,
+        label: 'record',
+        path: '',
+        children: [{ kind: 'value' as const, label: 'answer', path: '/answer', value: answer, validationIssues: [] }],
+        validationIssues: []
+      },
+      feedbackHistory: { '/answer': { feedback: [], edits: [], comments: [] } }
+    });
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [
+        { id: 'record-1', displayName: 'record-1' },
+        { id: 'record-2', displayName: 'record-2' }
+      ],
+      feedbackConfig
+    });
+    vi.mocked(api.getRecord).mockImplementation(async (_projectId, recordId) =>
+      recordId === 'record-2' ? recordDetail('record-2', 'Second answer') : recordDetail('record-1', 'First answer')
+    );
+    let hasDraft = false;
+    vi.mocked(api.getRecordDraftStatus).mockImplementation(async () => ({ hasUnsavedChanges: hasDraft }));
+    vi.mocked(api.submitFeedback).mockImplementation(async () => {
+      hasDraft = true;
+      return { username: 'sme@example.com', record: recordDetail('record-1', 'First answer') };
+    });
+    vi.mocked(api.discardRecordChanges).mockImplementation(async () => {
+      hasDraft = false;
+      return { hasUnsavedChanges: false };
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'record-1' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Good' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Stage feedback' }));
+    expect(await screen.findByText('Unsaved changes')).toHaveClass('unsaved-status');
+
+    act(() => {
+      listeners.closeRequested.forEach((listener) => listener());
+    });
+    expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Stay' }));
+    expect(api.closeWindow).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Expand records sidebar' }));
+    await userEvent.click(screen.getByRole('button', { name: 'record-2' }));
+    expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+
+    await waitFor(() => expect(api.discardRecordChanges).toHaveBeenCalledWith('sample-project', 'record-1'));
+    expect(await screen.findByText('Second answer')).toBeInTheDocument();
+  });
+
+  it('checks draft status before switching records while an agent response is still running', async () => {
+    const recordDetail = (recordId: string, answer: string) => ({
+      projectId: 'sample-project',
+      recordId,
+      displayName: recordId,
+      data: { answer },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object' as const,
+        label: 'record',
+        path: '',
+        children: [{ kind: 'value' as const, label: 'answer', path: '/answer', value: answer, validationIssues: [] }],
+        validationIssues: []
+      },
+      feedbackHistory: { '/answer': { feedback: [], edits: [], comments: [] } }
+    });
+    let hasDraft = false;
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [
+        { id: 'record-1', displayName: 'record-1' },
+        { id: 'record-2', displayName: 'record-2' }
+      ]
+    });
+    vi.mocked(api.getRecord).mockImplementation(async (_projectId, recordId) =>
+      recordId === 'record-2' ? recordDetail('record-2', 'Second answer') : recordDetail('record-1', 'First answer')
+    );
+    vi.mocked(api.getRecordDraftStatus).mockImplementation(async () => ({ hasUnsavedChanges: hasDraft }));
+    vi.mocked(api.discardRecordChanges).mockImplementation(async () => {
+      hasDraft = false;
+      return { hasUnsavedChanges: false };
+    });
+    vi.mocked(api.startChat).mockResolvedValue({ requestId: 'request-1', messageId: 'assistant-1' });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'record-1' }));
+    await userEvent.type(screen.getByLabelText('Message GitHub Copilot'), 'update the record');
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('Working')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Expand records sidebar' }));
+    await userEvent.click(screen.getByRole('button', { name: 'record-2' }));
+
+    const warningDialog = await screen.findByRole('dialog', { name: 'Unsaved changes' });
+    expect(warningDialog).toBeVisible();
+    expect(within(warningDialog).getByText(/agent is still running/i)).toBeInTheDocument();
+    expect(within(warningDialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(within(warningDialog).getByRole('button', { name: 'Discard changes' })).toBeDisabled();
+    expect(screen.getByText('First answer')).toBeInTheDocument();
+
+    hasDraft = true;
+    act(() => {
+      listeners.complete.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1' }));
+    });
+    await waitFor(() => expect(within(warningDialog).getByRole('button', { name: 'Discard changes' })).not.toBeDisabled());
+    expect(api.getRecordDraftStatus).toHaveBeenCalledWith('sample-project', 'record-1');
+
+    await userEvent.click(within(warningDialog).getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(api.discardRecordChanges).toHaveBeenCalledWith('sample-project', 'record-1'));
+    expect(await screen.findByText('Second answer')).toBeInTheDocument();
   });
 
   it('renders schema descriptions inline, enum values as drop-downs, and array objects collapsed with counts', async () => {
@@ -1429,9 +1809,9 @@ describe('review UI', () => {
 
     expect(screen.getByLabelText('Edit')).toHaveDisplayValue('developer');
     expect(screen.queryByRole('option', { name: 'Choose edit' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stage feedback' })).toBeDisabled();
     await userEvent.selectOptions(screen.getByLabelText('Edit'), 'SME');
-    await userEvent.click(screen.getByRole('button', { name: 'Submit feedback' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Stage feedback' }));
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({ propertyPath: '/persona', editValue: 'SME' }));
   });
 
@@ -1532,7 +1912,7 @@ describe('review UI', () => {
     expect(screen.getByLabelText('persona')).toHaveDisplayValue('SME');
     expect(screen.getByLabelText('persona')).not.toHaveClass('edited-value');
     expect(screen.getByLabelText('Edit')).toHaveDisplayValue('SME');
-    expect(screen.getByRole('button', { name: 'Submit feedback' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stage feedback' })).toBeDisabled();
 
     const historySummary = screen.getByText('History (3)');
     await userEvent.click(historySummary);
