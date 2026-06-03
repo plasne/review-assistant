@@ -1,6 +1,8 @@
 import { pathToFileURL } from 'node:url';
+import { parseAgentSettingsJson } from '../shared/agent-settings';
 import type {
   AgentErrorEnvelope,
+  AgentSettings,
   AgentStatusSnapshot,
   ChatMessage,
   ToolInvocationRequest,
@@ -37,6 +39,7 @@ const MAX_HISTORY_MESSAGE_CHARS = 8000;
 const MAX_ATTACHMENT_PROMPT_CHARS = 60000;
 const PROMPT_SAFETY_MARGIN_CHARS = 2000;
 const provider = { id: 'github-copilot' as const, name: 'GitHub Copilot' };
+const agentSettings: AgentSettings = parseAgentSettingsJson(process.env.AGENT_SETTINGS);
 let active:
   | {
       requestId: string;
@@ -312,6 +315,7 @@ const getAgentProvider = async (): Promise<AgentProvider> => {
 const loadAgentProvider = async (): Promise<AgentProvider> => {
   const deps: AgentProviderFactoryDeps = {
     providerMetadata: provider,
+    agentSettings,
     requestTool,
     normalizeProviderError,
     sendLog
@@ -380,7 +384,8 @@ const unavailable = (requestId: string, error: AgentErrorEnvelope): AgentStatusS
   requestId,
   provider,
   availability: 'unavailable',
-  error
+  error,
+  settings: agentSettings
 });
 
 const normalizeProviderError = (error: unknown): AgentErrorEnvelope => {

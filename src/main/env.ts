@@ -3,6 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { logInfo } from '../shared/logging';
 import type { AppConfig, BackendKind } from '../shared/types';
+import { AgentSettingsError, parseAgentSettingsFromEnvValues } from '../shared/agent-settings';
 
 const SECRET_KEYS = new Set(['AZURE_STORAGE_ACCOUNT_CONNSTRING']);
 const BACKEND_KEYS = ['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'LOCAL_PATH'];
@@ -66,12 +67,24 @@ export const getAppEnvPath = (): string =>
 export const loadAppConfig = (envPath = getAppEnvPath()): AppConfig => {
   const values = readEnvFile(envPath);
   const backendKind = selectBackend(values);
+  const agentSettings = parseAgentSettings(values);
   logInfo('review-assistant.config', {
     source: envPath,
     backendKind,
     values: redactConfig(values)
   });
-  return { backendKind, values, appEnvPath: envPath };
+  return { backendKind, values, appEnvPath: envPath, agentSettings };
+};
+
+export const parseAgentSettings = (values: Record<string, string | undefined>) => {
+  try {
+    return parseAgentSettingsFromEnvValues(values);
+  } catch (error) {
+    if (error instanceof AgentSettingsError) {
+      throw new ConfigError(error.message);
+    }
+    throw error;
+  }
 };
 
 export const loadProjectEnv = (projectEnvPath: string, appValues: Record<string, string>, options: { log?: boolean } = {}): Record<string, string> => {

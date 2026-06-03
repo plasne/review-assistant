@@ -44,10 +44,10 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 
 - Renderer owns presentation, keyboard/mouse interactions, chat view state, and schema-driven read-only rendering.
 - Preload owns IPC allowlisting and runtime validation at the renderer boundary.
-- Main owns app lifecycle, config loading, backend selection, storage access, validation policy, local tool execution, and agent orchestration.
+- Main owns app lifecycle, config loading, backend selection, app-level agent settings, storage access, validation policy, local tool execution, and agent orchestration.
 - Main owns local chat attachment file access; renderer must not provide paths for main to read outside the main-owned attachment cache, and attachment cache entries are cleared after use or explicit discard.
 - Main owns project schema writes; generated schemas are validated before replacing `_schema.json`, and existing schemas are backed up as `_schema_N.json`.
-- Agent worker owns provider transport details, temporary directories, MCP server wiring, and process cleanup.
+- Agent worker owns provider transport details, provider-specific agent setting application, temporary directories, MCP server wiring, and process cleanup.
 - External MCP connector credentials remain in main/worker configuration and must not be exposed to the renderer. Project-level MCP server definitions override app-level definitions with the same server id for the active request.
 - Provider-specific logic must not leak into renderer components.
 - Storage backends must stay behind `StorageAdapter`; local filesystem and Azure Blob details must not leak into renderer or agent worker code.

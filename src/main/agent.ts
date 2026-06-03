@@ -5,6 +5,7 @@ import { logError, logInfo } from '../shared/logging';
 import type {
   AgentErrorEnvelope,
   AgentProviderMetadata,
+  AgentSettings,
   AgentStatusSnapshot,
   ChatCanceled,
   ChatAttachmentContent,
@@ -27,6 +28,7 @@ export type ChatContext = {
   projectId?: string;
   recordId?: string;
   systemPrompt?: string;
+  agentSettings?: AgentSettings;
   tools: LocalToolMetadata[];
   mcpServers?: ExternalMcpServerConfig[];
 };
@@ -83,6 +85,7 @@ type AgentRuntimeOptions = {
   commandArgs?: string[];
   commandEnv?: NodeJS.ProcessEnv;
   providerModule?: string;
+  agentSettings?: AgentSettings;
 };
 
 const provider: AgentProviderMetadata = {
@@ -92,8 +95,19 @@ const provider: AgentProviderMetadata = {
 
 export class AgentRuntime {
   private readonly pending = new Map<string, PendingChat>();
+  private agentSettings: AgentSettings;
 
-  constructor(private readonly options: AgentRuntimeOptions) {}
+  constructor(private readonly options: AgentRuntimeOptions) {
+    this.agentSettings = options.agentSettings ?? {};
+  }
+
+  setAgentSettings(agentSettings: AgentSettings): void {
+    this.agentSettings = agentSettings;
+  }
+
+  getAgentSettings(): AgentSettings {
+    return this.agentSettings;
+  }
 
   async getStatus(timeoutMs = 5000): Promise<AgentStatusSnapshot> {
     const requestId = randomUUID();
@@ -101,7 +115,7 @@ export class AgentRuntime {
     return await new Promise<AgentStatusSnapshot>((resolve) => {
       const timeout = setTimeout(() => {
         child.kill();
-        resolve(unavailable(normalizeProviderError(new Error('Timed out while checking GitHub Copilot availability.'))));
+        resolve(unavailable(normalizeProviderError(new Error('Timed out while checking GitHub Copilot availability.')), this.agentSettings));
       }, timeoutMs);
       child.once('message', (event: ProviderWorkerEvent) => {
         clearTimeout(timeout);
@@ -110,11 +124,11 @@ export class AgentRuntime {
           resolve(event);
           return;
         }
-        resolve(unavailable(normalizeProviderError(new Error('Invalid GitHub Copilot status response.'))));
+        resolve(unavailable(normalizeProviderError(new Error('Invalid GitHub Copilot status response.')), this.agentSettings));
       });
       child.once('error', (error) => {
         clearTimeout(timeout);
-        resolve(unavailable(normalizeProviderError(error)));
+        resolve(unavailable(normalizeProviderError(error), this.agentSettings));
       });
       child.send({ type: 'status', requestId } satisfies ProviderWorkerRequest);
     });
@@ -122,6 +136,7 @@ export class AgentRuntime {
 
   async start(context: ChatContext, handlers: ChatStreamHandlers, tools: LocalToolRuntime): Promise<ChatStreamStartResult> {
     const startedAt = Date.now();
+    const contextWithSettings = { ...context, agentSettings: context.agentSettings ?? this.agentSettings };
     const status = await this.getStatus();
     if (status.availability === 'unavailable') {
       throw new AgentRuntimeError(status.error ?? normalizeProviderError(new Error('GitHub Copilot is unavailable.')));
@@ -143,16 +158,16 @@ export class AgentRuntime {
     logInfo('review-assistant.agent-request-started', {
       provider: provider.id,
       requestId,
-      projectId: context.projectId ?? 'none',
-      recordId: context.recordId ?? 'none',
-      attachmentCount: context.attachments?.length ?? 0,
-      attachmentChars: context.attachments?.reduce((total, attachment) => total + attachment.content.length, 0) ?? 0,
-      toolCount: context.tools.length,
-      tools: context.tools.map((tool) => tool.name).join(',') || 'none',
-      externalMcpServers: context.mcpServers?.map((server) => server.id).join(',') || 'none',
+      projectId: contextWithSettings.projectId ?? 'none',
+      recordId: contextWithSettings.recordId ?? 'none',
+      attachmentCount: contextWithSettings.attachments?.length ?? 0,
+      attachmentChars: contextWithSettings.attachments?.reduce((total, attachment) => total + attachment.content.length, 0) ?? 0,
+      toolCount: contextWithSettings.tools.length,
+      tools: contextWithSettings.tools.map((tool) => tool.name).join(',') || 'none',
+      externalMcpServers: contextWithSettings.mcpServers?.map((server) => server.id).join(',') || 'none',
       statusCheckMs: Date.now() - startedAt
     });
-    setImmediate(() => child.send({ type: 'start', requestId, messageId, context } satisfies ProviderWorkerRequest));
+    setImmediate(() => child.send({ type: 'start', requestId, messageId, context: contextWithSettings } satisfies ProviderWorkerRequest));
     return { requestId, messageId };
   }
 
@@ -182,6 +197,7 @@ export class AgentRuntime {
     const runtimeArgs =
       this.options.commandArgs?.join('\n') ?? process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS;
     const providerModule = this.options.providerModule ?? process.env.REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE;
+    const agentSettings = JSON.stringify(this.agentSettings);
     return fork(this.options.workerPath, [], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       env: {
@@ -189,7 +205,8 @@ export class AgentRuntime {
         ...this.options.commandEnv,
         ...(runtimeCommand ? { REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND: runtimeCommand } : {}),
         ...(runtimeArgs ? { REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS: runtimeArgs } : {}),
-        ...(providerModule ? { REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE: providerModule } : {})
+        ...(providerModule ? { REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE: providerModule } : {}),
+        AGENT_SETTINGS: agentSettings
       }
     });
   }
@@ -342,8 +359,9 @@ export const normalizeProviderError = (error: unknown): AgentErrorEnvelope => {
   };
 };
 
-const unavailable = (error: AgentErrorEnvelope): AgentStatusSnapshot => ({
+const unavailable = (error: AgentErrorEnvelope, settings: AgentSettings = {}): AgentStatusSnapshot => ({
   provider,
   availability: 'unavailable',
-  error
+  error,
+  settings
 });

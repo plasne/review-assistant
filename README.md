@@ -60,6 +60,21 @@ Place `_prompt.md` next to the app `.env` to define default app instructions. A 
 
 The generated request still appends current project/record identifiers, selected attachments, local Review Assistant tools, plugin tools, and external MCP server metadata after the selected prompt text.
 
+## Agent settings
+
+Set optional agent parameters in the app-level `.env` next to `LOCAL_PATH` or Azure storage settings:
+
+```bash
+AGENT_MODEL=gpt-5.5
+REASONING_EFFORT=medium
+```
+
+`AGENT_MODEL` and `REASONING_EFFORT` are passed to the GitHub Copilot SDK session. Reasoning effort must be `low`, `medium`, `high`, or `xhigh`.
+
+Claude Sonnet 4.6 was used during testing and was reliable for Review Assistant agent workflows.
+
+Streaming is always enabled and is not configurable.
+
 ## Example agent requests
 
 You can ask the agent for focused tasks in plain language. Example prompts:

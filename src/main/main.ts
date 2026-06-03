@@ -62,6 +62,7 @@ const initializeBackend = (): void => {
     storage = createStorageAdapter(config);
     backendKind = config.backendKind;
     appConfigValues = config.values;
+    agent.setAgentSettings(config.agentSettings ?? {});
     appMcpConfigPath = path.join(path.dirname(config.appEnvPath), '_mcp.json');
     appPromptPath = path.join(path.dirname(config.appEnvPath), '_prompt.md');
   } catch (error) {
@@ -307,6 +308,7 @@ const registerIpc = (): void => {
           projectId: validProjectId,
           recordId: validRecordId,
           systemPrompt,
+          agentSettings: agent.getAgentSettings(),
           tools: toolList,
           mcpServers
         },

@@ -1,5 +1,6 @@
 import type {
   AgentErrorEnvelope,
+  AgentSettings,
   AgentStatusSnapshot,
   AppBootstrap,
   ChatAttachment,
@@ -301,6 +302,25 @@ export const assertAgentError = (value: unknown): AgentErrorEnvelope => {
   return value as AgentErrorEnvelope;
 };
 
+const assertAgentSettings = (value: unknown): AgentSettings => {
+  if (!isRecord(value)) {
+    throw new ValidationError('Invalid agent settings response.');
+  }
+  if (value.model !== undefined && !isString(value.model)) {
+    throw new ValidationError('Invalid agent model setting.');
+  }
+  if (
+    value.reasoningEffort !== undefined &&
+    value.reasoningEffort !== 'low' &&
+    value.reasoningEffort !== 'medium' &&
+    value.reasoningEffort !== 'high' &&
+    value.reasoningEffort !== 'xhigh'
+  ) {
+    throw new ValidationError('Invalid agent reasoning effort setting.');
+  }
+  return value as AgentSettings;
+};
+
 export const assertAgentStatus = (value: unknown): AgentStatusSnapshot => {
   if (!isRecord(value) || !isRecord(value.provider) || !isString(value.provider.id) || !isString(value.provider.name)) {
     throw new ValidationError('Invalid agent status response.');
@@ -310,6 +330,9 @@ export const assertAgentStatus = (value: unknown): AgentStatusSnapshot => {
   }
   if (value.error !== undefined) {
     assertAgentError(value.error);
+  }
+  if (value.settings !== undefined) {
+    assertAgentSettings(value.settings);
   }
   return value as AgentStatusSnapshot;
 };

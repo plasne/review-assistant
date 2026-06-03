@@ -21,6 +21,7 @@ Long-running chat and tool workflows should also include:
 - `attachmentCount`: number of selected chat attachments included in a request.
 - `attachmentChars`: total character count of selected chat attachment content; file content is never logged.
 - `externalMcpServers`: comma-separated external MCP server identifiers configured for a chat request, or `none`.
+- `agentSettings`: comma-separated configured agent setting keys, or `none`.
 - `elapsedMs`: elapsed duration for completed work.
 - `contextMs`: elapsed duration for main-process chat context assembly before the agent starts.
 - `code`: stable error code for failed work.

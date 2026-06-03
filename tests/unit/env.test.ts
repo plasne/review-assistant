@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseEnv, redactConfig, selectBackend } from '../../src/main/env';
+import { parseAgentSettings, parseEnv, redactConfig, selectBackend } from '../../src/main/env';
 
 describe('environment config', () => {
   it('parses env files without variable expansion', () => {
@@ -25,4 +25,21 @@ describe('environment config', () => {
     });
   });
 
+  it('parses agent settings from app env values', () => {
+    expect(
+      parseAgentSettings({
+        AGENT_MODEL: ' gpt-5.5 ',
+        REASONING_EFFORT: 'high'
+      })
+    ).toEqual({
+      model: 'gpt-5.5',
+      reasoningEffort: 'high'
+    });
+  });
+
+  it('rejects invalid agent settings with config errors', () => {
+    expect(() => parseAgentSettings({ REASONING_EFFORT: 'extreme' })).toThrow(
+      'REASONING_EFFORT must be one of: low, medium, high, xhigh.'
+    );
+  });
 });

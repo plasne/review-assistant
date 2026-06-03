@@ -4,6 +4,14 @@ export type AppConfig = {
   backendKind: BackendKind;
   values: Record<string, string>;
   appEnvPath: string;
+  agentSettings?: AgentSettings;
+};
+
+export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+export type AgentSettings = {
+  model?: string;
+  reasoningEffort?: AgentReasoningEffort;
 };
 
 export type ExternalMcpServerConfig = {
@@ -210,6 +218,7 @@ export type AgentStatusSnapshot = {
   provider: AgentProviderMetadata;
   availability: AgentAvailability;
   error?: AgentErrorEnvelope;
+  settings?: AgentSettings;
 };
 
 export type ChatStreamStartResult = {

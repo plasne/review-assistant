@@ -1,6 +1,7 @@
 import type {
   AgentErrorEnvelope,
   AgentProviderMetadata,
+  AgentSettings,
   AgentStatusSnapshot,
   ChatAttachmentContent,
   ChatMessage,
@@ -17,6 +18,7 @@ export type ChatContext = {
   projectId?: string;
   recordId?: string;
   systemPrompt?: string;
+  agentSettings?: AgentSettings;
   tools: LocalToolMetadata[];
   mcpServers?: ExternalMcpServerConfig[];
 };
@@ -49,6 +51,7 @@ export type AgentProvider = {
 
 export type AgentProviderFactoryDeps = {
   providerMetadata: AgentProviderMetadata;
+  agentSettings: AgentSettings;
   requestTool: (chatRequestId: string, toolRequest: ToolInvocationRequest) => Promise<ToolInvocationResponse>;
   normalizeProviderError: (error: unknown) => AgentErrorEnvelope;
   sendLog: (level: 'info' | 'error', event: string, fields?: Record<string, unknown>) => void;

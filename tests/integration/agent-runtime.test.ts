@@ -339,6 +339,43 @@ describe('agent runtime streaming pipeline', () => {
     ).rejects.toThrow('GitHub Copilot runtime was not found.');
   });
 
+  it('passes configured agent settings to the isolated provider worker', async () => {
+    const chunks: ChatStreamChunk[] = [];
+    const runtime = new AgentRuntime({
+      workerPath,
+      providerModule: fakeProviderModule,
+      agentSettings: {
+        model: 'gpt-5.5',
+        reasoningEffort: 'high'
+      },
+      commandEnv: { FAKE_COPILOT_REQUIRE_AGENT_SETTINGS: '1', FAKE_COPILOT_REQUIRE_AVAILABLE_TOOLS_NONE: '1' }
+    });
+
+    await expect(runtime.getStatus()).resolves.toMatchObject({
+      availability: 'ready',
+      settings: {
+        model: 'gpt-5.5',
+        reasoningEffort: 'high'
+      }
+    });
+    const complete = new Promise<string>((resolve, reject) => {
+      runtime
+        .start(
+          { message: 'answer with configured settings', tools: [] },
+          {
+            chunk: (chunk) => chunks.push(chunk),
+            complete: () => resolve(chunks.map((chunk) => chunk.content).join('')),
+            error: (event) => reject(new Error(event.error.message)),
+            canceled: () => reject(new Error('unexpected cancel'))
+          },
+          createFakeToolRuntime()
+        )
+        .catch(reject);
+    });
+
+    await expect(complete).resolves.toBe('Streamed Copilot response');
+  });
+
   it('maps SDK authentication failures to the existing auth-required status contract', async () => {
     const runtime = new AgentRuntime({
       workerPath,

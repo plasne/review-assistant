@@ -3,8 +3,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { CopilotClient, RuntimeConnection, ToolSet } from '@github/copilot-sdk';
-import type { MCPServerConfig, PermissionHandler, Tool, ToolResultObject } from '@github/copilot-sdk';
-import type { AgentErrorEnvelope, AgentStatusSnapshot, ExternalMcpServerConfig, LocalToolMetadata, ToolInvocationResponse } from '../shared/types';
+import type { MCPServerConfig, PermissionHandler, SessionConfig, Tool, ToolResultObject } from '@github/copilot-sdk';
+import { configuredAgentSettingKeys } from '../shared/agent-settings';
+import type { AgentErrorEnvelope, AgentSettings, AgentStatusSnapshot, ExternalMcpServerConfig, LocalToolMetadata, ToolInvocationResponse } from '../shared/types';
 import { resolveCopilotRuntimePath } from '../main/copilot-runtime';
 import type { ActiveProviderRun, AgentProvider, AgentProviderFactoryDeps, ChatContext, ProviderStartRequest } from './provider';
 
@@ -22,7 +23,11 @@ export const createCopilotSdkProvider = (deps: AgentProviderFactoryDeps): AgentP
           deps.normalizeProviderError(new Error(authStatus.statusMessage || 'Authentication required. Please login to GitHub Copilot.'))
         );
       }
-      return { provider: deps.providerMetadata, availability: 'ready' };
+      return {
+        provider: deps.providerMetadata,
+        availability: 'ready',
+        settings: deps.agentSettings
+      };
     } catch (error) {
       return unavailable(deps, deps.normalizeProviderError(error));
     } finally {
@@ -64,8 +69,10 @@ const startSdkChat = async (deps: AgentProviderFactoryDeps, request: ProviderSta
 
   try {
     await client.start();
+    const agentSettings = request.context.agentSettings ?? deps.agentSettings;
     session = await client.createSession({
       clientName: 'review-assistant',
+      ...toSdkSessionSettings(agentSettings),
       tools: createSdkTools(deps, request.requestId, request.context.tools),
       mcpServers: toSdkMcpServers(request.context.mcpServers ?? []),
       availableTools: toAvailableTools(request.context),
@@ -107,6 +114,7 @@ const startSdkChat = async (deps: AgentProviderFactoryDeps, request: ProviderSta
       pid: 'sdk',
       command: '@github/copilot-sdk',
       argCount: 0,
+      agentSettings: configuredAgentSettingKeys(agentSettings).join(',') || 'none',
       elapsedMs: Date.now() - request.startedAt
     });
     await session.send({ prompt: request.prompt, mode: 'immediate' });
@@ -140,6 +148,11 @@ export const toAvailableTools = (context: Pick<ChatContext, 'tools' | 'mcpServer
   }
   return toolSet.toArray();
 };
+
+export const toSdkSessionSettings = (settings: AgentSettings): Pick<SessionConfig, 'model' | 'reasoningEffort'> => ({
+  ...(settings.model === undefined ? {} : { model: settings.model }),
+  ...(settings.reasoningEffort === undefined ? {} : { reasoningEffort: settings.reasoningEffort })
+});
 
 export const toSdkMcpServers = (servers: ExternalMcpServerConfig[]): Record<string, MCPServerConfig> =>
   Object.fromEntries(
@@ -235,7 +248,8 @@ const cleanupTempDir = async (tempDir: string): Promise<void> => {
 const unavailable = (deps: AgentProviderFactoryDeps, error: AgentErrorEnvelope): AgentStatusSnapshot => ({
   provider: deps.providerMetadata,
   availability: 'unavailable',
-  error
+  error,
+  settings: deps.agentSettings
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);

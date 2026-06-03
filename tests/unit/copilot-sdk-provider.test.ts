@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createPermissionHandler, toAvailableTools, toSdkMcpServers, toSdkToolResult } from '../../src/agent/copilot-sdk-provider';
+import { createPermissionHandler, toAvailableTools, toSdkMcpServers, toSdkSessionSettings, toSdkToolResult } from '../../src/agent/copilot-sdk-provider';
 import type { ExternalMcpServerConfig, LocalToolMetadata, ToolInvocationResponse } from '../../src/shared/types';
 
 const tools: LocalToolMetadata[] = [
@@ -34,6 +34,18 @@ describe('copilot SDK provider mapping', () => {
         timeout: 5000,
         tools: ['search']
       }
+    });
+  });
+
+  it('maps supported agent settings to Copilot SDK session config', () => {
+    expect(
+      toSdkSessionSettings({
+        model: 'gpt-5.5',
+        reasoningEffort: 'high'
+      })
+    ).toEqual({
+      model: 'gpt-5.5',
+      reasoningEffort: 'high'
     });
   });
 

@@ -1,19 +1,22 @@
 import { randomUUID } from 'node:crypto';
 
-export const createAgentProvider = ({ providerMetadata, requestTool, normalizeProviderError }) => ({
+export const createAgentProvider = ({ providerMetadata, requestTool, normalizeProviderError, agentSettings }) => ({
   getStatus: async () => {
     if (process.env.FAKE_COPILOT_FAIL === 'auth') {
       return {
         provider: providerMetadata,
         availability: 'unavailable',
-        error: normalizeProviderError(new Error('Authentication required. Please login to GitHub Copilot.'))
+        error: normalizeProviderError(new Error('Authentication required. Please login to GitHub Copilot.')),
+        settings: agentSettings
       };
     }
-    return { provider: providerMetadata, availability: 'ready' };
+    assertAgentSettings(agentSettings);
+    return { provider: providerMetadata, availability: 'ready', settings: agentSettings };
   },
   startChat: async ({ requestId, prompt, context, callbacks }) => {
     assertPromptBoundary(prompt);
     assertToolConfiguration(context);
+    assertAgentSettings(context.agentSettings ?? agentSettings);
 
     let timer;
     const clear = () => {
@@ -42,6 +45,18 @@ export const createAgentProvider = ({ providerMetadata, requestTool, normalizePr
     };
   }
 });
+
+const assertAgentSettings = (settings) => {
+  if (process.env.FAKE_COPILOT_REQUIRE_AGENT_SETTINGS !== '1') {
+    return;
+  }
+  if (
+    settings?.model !== 'gpt-5.5' ||
+    settings?.reasoningEffort !== 'high'
+  ) {
+    throw new Error('Expected configured agent settings.');
+  }
+};
 
 const respond = async ({ requestId, prompt, callbacks, requestTool }) => {
   try {

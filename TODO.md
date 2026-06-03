@@ -1,4 +1,3 @@
-- how to configure the Copilot agent (model, thinking, etc.)
 - how to do plug-ins
 - tags
 - distributing ground truth via blob
