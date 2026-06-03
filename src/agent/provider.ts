@@ -2,6 +2,7 @@ import type {
   AgentErrorEnvelope,
   AgentProviderMetadata,
   AgentStatusSnapshot,
+  ChatMessage,
   ExternalMcpServerConfig,
   LocalToolMetadata,
   ToolInvocationRequest,
@@ -10,9 +11,10 @@ import type {
 
 export type ChatContext = {
   message: string;
+  history?: ChatMessage[];
   projectId?: string;
   recordId?: string;
-  projectPrompt?: string;
+  systemPrompt?: string;
   tools: LocalToolMetadata[];
   mcpServers?: ExternalMcpServerConfig[];
 };

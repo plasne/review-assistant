@@ -1,8 +1,8 @@
 import { pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import type {
   AgentErrorEnvelope,
   AgentStatusSnapshot,
+  ChatMessage,
   ToolInvocationRequest,
   ToolInvocationResponse
 } from '../shared/types';
@@ -31,6 +31,9 @@ type WorkerRequest =
     };
 
 const MAX_PROMPT_CHARS = 120000;
+const MAX_HISTORY_MESSAGES = 20;
+const MAX_HISTORY_CHARS = 40000;
+const MAX_HISTORY_MESSAGE_CHARS = 8000;
 const provider = { id: 'github-copilot' as const, name: 'GitHub Copilot' };
 let active:
   | {
@@ -194,15 +197,11 @@ const finish = async (requestId: string): Promise<void> => {
 
 const buildPrompt = (context: ChatContext): string => {
   const parts = [
-    'You are GitHub Copilot helping review inference records in Review Assistant.',
-    'Answer the user using only the supplied project prompt and Review Assistant local tools. Do not access files or infer hidden data.',
-    'Use the readRecord tool when the user asks about the displayed record. Use listTools when the user asks which Review Assistant tools are available.',
-    'Call readRecord before answering questions about record contents. If no record is displayed, readRecord returns a no-record response.',
+    context.systemPrompt ? `System prompt:\n${context.systemPrompt}` : 'System prompt: none',
     context.projectId
       ? `Selected project: ${context.projectId}`
       : 'Selected project: none. No project prompt, selected record, or project-scoped tools are available for this request.',
     context.recordId ? `Selected record: ${context.recordId}` : 'Selected record: none',
-    context.projectPrompt ? `Project prompt:\n${context.projectPrompt}` : 'Project prompt: none',
     `Review Assistant tools:\n${JSON.stringify(
       context.tools.map(({ name, description, source, pluginId }) => ({
         name,
@@ -221,9 +220,46 @@ const buildPrompt = (context: ChatContext): string => {
       null,
       2
     )}`,
+    `Conversation so far:\n${formatHistory(context.history ?? [])}`,
     `User message:\n${context.message}`
   ];
   return parts.join('\n\n');
+};
+
+const formatHistory = (history: ChatMessage[]): string => {
+  const eligible = history.filter((message) => (message.role === 'user' || message.role === 'assistant') && message.content.trim() !== '');
+  const recent = eligible.slice(-MAX_HISTORY_MESSAGES);
+  const selected: ChatMessage[] = [];
+  let remaining = MAX_HISTORY_CHARS;
+  for (const message of recent.slice().reverse()) {
+    const content = truncateText(message.content.trim(), MAX_HISTORY_MESSAGE_CHARS);
+    const chars = content.length;
+    if (chars > remaining && selected.length > 0) {
+      break;
+    }
+    selected.push({ ...message, content: truncateText(content, remaining) });
+    remaining -= Math.min(chars, remaining);
+    if (remaining <= 0) {
+      break;
+    }
+  }
+  if (selected.length === 0) {
+    return 'none';
+  }
+  return selected
+    .reverse()
+    .map((message) => `${message.role}: ${message.content}`)
+    .join('\n\n');
+};
+
+const truncateText = (value: string, maxChars: number): string => {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  if (maxChars <= 12) {
+    return value.slice(0, Math.max(0, maxChars));
+  }
+  return `${value.slice(0, maxChars - 12)}\n[truncated]`;
 };
 
 const getAgentProvider = async (): Promise<AgentProvider> => {

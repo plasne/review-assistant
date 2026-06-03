@@ -166,7 +166,7 @@ export class LocalStorageAdapter implements StorageAdapter {
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
     const project = this.projectPath(assertProjectId(projectId));
-    return readOptionalTextFile(path.join(project, '_prompt.txt'));
+    return readOptionalTextFile(path.join(project, '_prompt.md'));
   }
 
   async getProjectConfig(projectId: string): Promise<Record<string, string>> {
@@ -325,7 +325,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
     const id = assertProjectId(projectId);
-    return this.readOptionalBlob(this.client.getContainerClient(id), '_prompt.txt');
+    return this.readOptionalBlob(this.client.getContainerClient(id), '_prompt.md');
   }
 
   async getProjectConfig(projectId: string): Promise<Record<string, string>> {
@@ -472,7 +472,7 @@ const assertSubmissionAllowed = (config: FeedbackConfig, input: FeedbackSubmissi
   if (input.commentValue?.trim() && !entry.comments) {
     throw new Error('SME comments are not enabled for this property.');
   }
-  if (input.editValue?.trim() && !entry.editable) {
+  if (input.editValue?.trim() && entry.editMode !== 'logged') {
     throw new Error('Edits are not enabled for this property.');
   }
 };

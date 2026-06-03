@@ -6,16 +6,20 @@
 - Primary runtimes: TypeScript, Electron, React, Node.js
 - Main entrypoints: `src/main/main.ts`, `src/preload/preload.ts`, `src/renderer/main.tsx`, `src/agent/agent-process.ts`
 
+## Assumptions
+
+- Assume every project is greenfield with no users. I strive for a single source of truth: this means no fallbacks, no legacy code support, just one clean stream of information flow.
+
 ## Harness Commands
 
 Run from repository root:
 
-| Goal | Command |
-|---|---|
-| Fast sanity check | `make smoke` |
-| Static checks | `make check` |
-| Full test suite | `make test` |
-| CI-equivalent local run | `make ci` |
+| Goal                    | Command      |
+| ----------------------- | ------------ |
+| Fast sanity check       | `make smoke` |
+| Static checks           | `make check` |
+| Full test suite         | `make test`  |
+| CI-equivalent local run | `make ci`    |
 
 The underlying deterministic npm gates are:
 

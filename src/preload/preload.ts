@@ -13,6 +13,7 @@ import {
   assertRecordDetail,
   assertRecordId,
   assertChatMessage,
+  assertChatHistory,
   assertChatStreamChunk,
   assertChatStreamComplete,
   assertChatStreamError,
@@ -55,13 +56,14 @@ const api: Api = {
     ),
   getAgentStatus: () => invoke('agent:getStatus', assertAgentStatus),
   continueWithGitHub: () => invoke('auth:continueWithGitHub', assertContinueWithGitHubResult),
-  startChat: (projectId, recordId, message) =>
+  startChat: (projectId, recordId, message, history) =>
     invoke(
       'chat:start',
       assertChatStreamStart,
       projectId ? assertProjectId(projectId) : undefined,
       recordId ? assertRecordId(recordId) : undefined,
-      assertChatMessage(message)
+      assertChatMessage(message),
+      assertChatHistory(history)
     ),
   cancelChat: (requestId) => invoke('chat:cancel', assertChatCancelResult, requestId),
   onChatChunk: (listener) => onEvent('chat:chunk', assertChatStreamChunk, listener),

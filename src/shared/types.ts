@@ -103,6 +103,7 @@ export type RecordDetail = {
 };
 
 export type FeedbackMode = 'none' | 'good_fair_bad' | 'thumbs' | 'stars_5';
+export type FeedbackEditMode = 'none' | 'logged' | 'inline';
 
 export type FeedbackTarget = {
   path: string;
@@ -114,7 +115,7 @@ export type FeedbackTarget = {
 export type FeedbackConfigEntry = FeedbackTarget & {
   feedback: FeedbackMode;
   comments: boolean;
-  editable: boolean;
+  editMode: FeedbackEditMode;
 };
 
 export type FeedbackConfig = {
@@ -295,8 +296,13 @@ export type Api = {
   getProjectUser: (projectId: string) => Promise<ProjectUser>;
   submitFeedback: (projectId: string, recordId: string, input: FeedbackSubmissionInput) => Promise<FeedbackSubmissionResult>;
   getAgentStatus: () => Promise<AgentStatusSnapshot>;
+  startChat: (
+    projectId: string | undefined,
+    recordId: string | undefined,
+    message: string,
+    history?: ChatMessage[]
+  ) => Promise<ChatStreamStartResult>;
   continueWithGitHub: () => Promise<ContinueWithGitHubResult>;
-  startChat: (projectId: string | undefined, recordId: string | undefined, message: string) => Promise<ChatStreamStartResult>;
   cancelChat: (requestId: string) => Promise<ChatCancelResult>;
 } & AuthEventHandlers &
   ChatStreamEventHandlers;

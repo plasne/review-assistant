@@ -31,6 +31,82 @@ const storage: StorageAdapter = {
   })
 };
 
+const searchResultSchema = {
+  type: 'object',
+  properties: {
+    question: { type: 'string' },
+    evidence: {
+      type: 'array',
+      description: 'Evidence for the answer.',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          source: { type: 'string' },
+          uri: { type: 'string', format: 'uri' },
+          content: { type: 'string' }
+        },
+        required: ['id', 'source', 'uri', 'content'],
+        additionalProperties: false
+      }
+    },
+    turns: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          references: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                uri: { type: 'string', format: 'uri' }
+              },
+              required: ['title', 'uri'],
+              additionalProperties: false
+            }
+          }
+        }
+      }
+    }
+  },
+  required: ['question', 'evidence'],
+  additionalProperties: false
+};
+
+const createSearchResultStorage = (): { adapter: StorageAdapter; getData: () => unknown } => {
+  let data: unknown = {
+    question: 'How do I run the harness?',
+    evidence: [
+      {
+        id: 'doc-1',
+        source: 'README',
+        uri: 'https://example.com/readme',
+        content: 'Run npm run check.'
+      }
+    ],
+    turns: [{ references: [] }]
+  };
+  const adapter: StorageAdapter = {
+    ...storage,
+    getRecord: async (projectId, recordId) => ({
+      projectId,
+      recordId,
+      displayName: recordId,
+      data: clone(data),
+      schema: searchResultSchema,
+      validationIssues: [],
+      renderTree: { kind: 'object', label: 'record', children: [], validationIssues: [] }
+    }),
+    updateRecord: async (projectId, recordId, nextData) => {
+      data = clone(nextData);
+      return adapter.getRecord(projectId, recordId);
+    }
+  };
+  return { adapter, getData: () => clone(data) };
+};
+
 describe('local tool runtime', () => {
   it('reports built-in tool capabilities without active-state fields', () => {
     const runtime = createLocalToolRuntime({ storage, selectedProjectId: 'sample-project' });
@@ -70,6 +146,8 @@ describe('local tool runtime', () => {
       result: {
         tools: expect.arrayContaining([
           expect.objectContaining({ name: 'readRecord', source: 'built-in' }),
+          expect.objectContaining({ name: 'getRecordContainerSchema', source: 'built-in' }),
+          expect.objectContaining({ name: 'saveSearchResults', source: 'built-in' }),
           expect.objectContaining({ name: 'listTools', source: 'built-in' })
         ])
       }
@@ -134,4 +212,108 @@ describe('local tool runtime', () => {
       result: { value: 'hello' }
     });
   });
+
+  it('lists selected-record array containers and returns schema for a requested destination', async () => {
+    const { adapter } = createSearchResultStorage();
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(runtime.execute({ tool: 'getRecordContainerSchema', requestId: 'tool-request-1', arguments: {} })).resolves.toMatchObject({
+      requestId: 'tool-request-1',
+      ok: true,
+      result: {
+        containers: expect.arrayContaining([
+          expect.objectContaining({ path: '/evidence', itemCount: 1, description: 'Evidence for the answer.' }),
+          expect.objectContaining({ path: '/turns', itemCount: 1 }),
+          expect.objectContaining({ path: '/turns/0/references', itemCount: 0 })
+        ])
+      }
+    });
+
+    await expect(
+      runtime.execute({ tool: 'getRecordContainerSchema', requestId: 'tool-request-2', arguments: { containerPath: '/turns/0/references' } })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-2',
+      ok: true,
+      result: {
+        container: {
+          path: '/turns/0/references',
+          itemSchema: {
+            required: ['title', 'uri']
+          },
+          currentValue: []
+        }
+      }
+    });
+  });
+
+  it('saves valid search results into the selected record container after schema validation', async () => {
+    const { adapter, getData } = createSearchResultStorage();
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'saveSearchResults',
+        requestId: 'tool-request-1',
+        arguments: {
+          containerPath: '/evidence',
+          results: [
+            {
+              id: 'doc-2',
+              source: 'Docs',
+              uri: 'https://example.com/docs',
+              content: 'Use make check for local verification.'
+            }
+          ],
+          mode: 'append'
+        }
+      })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-1',
+      ok: true,
+      result: {
+        containerPath: '/evidence',
+        mode: 'append',
+        savedItemCount: 1,
+        containerItemCount: 2
+      }
+    });
+    expect(getData()).toMatchObject({
+      evidence: [
+        { id: 'doc-1' },
+        {
+          id: 'doc-2',
+          source: 'Docs',
+          uri: 'https://example.com/docs',
+          content: 'Use make check for local verification.'
+        }
+      ]
+    });
+  });
+
+  it('rejects search results that do not satisfy the destination container schema', async () => {
+    const { adapter, getData } = createSearchResultStorage();
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'saveSearchResults',
+        requestId: 'tool-request-1',
+        arguments: {
+          containerPath: '/evidence',
+          results: [{ id: 'doc-2', source: 'Docs', content: 'Missing uri.' }],
+          mode: 'append'
+        }
+      })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-1',
+      ok: false,
+      error: {
+        code: 'INVALID_TOOL_ARGUMENTS',
+        message: expect.stringContaining('must have required property')
+      }
+    });
+    expect(getData()).toMatchObject({ evidence: [{ id: 'doc-1' }] });
+  });
 });
+
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;

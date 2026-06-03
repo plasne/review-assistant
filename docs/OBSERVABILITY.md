@@ -16,6 +16,8 @@ Long-running chat and tool workflows should also include:
 - `provider`: active agent provider identifier when provider work is involved.
 - `projectId`: selected project identifier or `none`.
 - `recordId`: selected record identifier or `none`.
+- `systemPromptSource`: `app`, `project`, or `none` for the prompt selected for a chat request.
+- `systemPromptChars`: character count of the selected prompt.
 - `externalMcpServers`: comma-separated external MCP server identifiers configured for a chat request, or `none`.
 - `elapsedMs`: elapsed duration for completed work.
 - `code`: stable error code for failed work.
@@ -40,6 +42,15 @@ Long-running chat and tool workflows should also include:
 | `review-assistant.agent-provider-stop-failed` | SDK runtime stop returned cleanup errors. |
 | `review-assistant.agent-first-output` | Provider emitted the first streamed output. |
 | `review-assistant.agent-worker-completed` | Agent worker completed provider execution. |
+| `review-assistant.tool-bridge-ready` | MCP bridge server is ready for local tool calls. |
+| `review-assistant.mcp-server-started` | MCP server subprocess started. |
+| `review-assistant.mcp-tools-list` | MCP client listed Review Assistant tools. |
+| `review-assistant.mcp-tools-call` | MCP client requested a tool call. |
+| `review-assistant.external-mcp-started` | External MCP proxy started for a configured server. |
+| `review-assistant.external-mcp-tools-list-started` | Provider requested an external MCP server tool list. |
+| `review-assistant.external-mcp-tools-list-completed` | External MCP server returned tool metadata. |
+| `review-assistant.external-mcp-tool-call-started` | Provider called an external MCP tool. |
+| `review-assistant.external-mcp-tool-call-completed` | External MCP tool returned, with payload size metadata only. |
 | `review-assistant.auth-login-started` | Main process started the GitHub Copilot SDK-bundled login flow. |
 | `review-assistant.auth-device-code-ready` | Main process parsed a GitHub Copilot login device code and copied it for the renderer modal. |
 | `review-assistant.auth-login-completed` | Main process observed the GitHub Copilot login process complete after device authorization. |

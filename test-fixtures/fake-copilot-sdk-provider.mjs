@@ -51,6 +51,8 @@ const respond = async ({ requestId, prompt, callbacks, requestTool }) => {
     } else if (prompt.includes('persona and question')) {
       const result = await callTool(requestId, requestTool, 'readRecord', { includeSchema: false });
       callbacks.chunk(`Record persona: ${result.record.persona}\nRecord question: ${recordQuestion(result.record)}`);
+    } else if (prompt.includes('call external source')) {
+      callbacks.chunk('External result: found 2 fake external matches');
     } else {
       callbacks.chunk('Streamed ');
       callbacks.chunk('Copilot response');
@@ -80,6 +82,14 @@ const callTool = async (requestId, requestTool, tool, args) => {
 const assertPromptBoundary = (prompt) => {
   if (prompt.includes('Selected record JSON')) {
     throw new Error('Record JSON must not be included in the startup prompt.');
+  }
+  if (
+    process.env.FAKE_COPILOT_REQUIRE_CHAT_HISTORY === '1' &&
+    (!prompt.includes('Conversation so far:') ||
+      !prompt.includes('user: search for "configuration management"') ||
+      !prompt.includes('assistant: Found results: vinsol/nectarcommerce README.md'))
+  ) {
+    throw new Error('Expected chat history in provider prompt.');
   }
 };
 

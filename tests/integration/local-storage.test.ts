@@ -41,6 +41,10 @@ describe('local storage adapter', () => {
     expect(detail.renderTree.kind).toBe('object');
   });
 
+  it('loads project-level markdown prompts', async () => {
+    await expect(adapter.getProjectPrompt('sample-project')).resolves.toBe('You are a concise review assistant.\n');
+  });
+
   it('applies project display config to record render trees', async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
     await fs.mkdir(path.join(tempRoot, 'display-project'));
@@ -198,8 +202,8 @@ describe('local project creation', () => {
       path.join(tempRoot, 'feedback-project', '_feedback.json'),
       JSON.stringify({
         properties: {
-          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'good_fair_bad', comments: true, editable: false },
-          '/stale': { path: '/stale', target: 'Stale', tab: 'Main', feedback: 'stars_5', comments: true, editable: true }
+          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'good_fair_bad', comments: true, editMode: 'none' },
+          '/stale': { path: '/stale', target: 'Stale', tab: 'Main', feedback: 'stars_5', comments: true, editMode: 'logged' }
         }
       })
     );
@@ -217,10 +221,10 @@ describe('local project creation', () => {
     const saved = await tempAdapter.saveFeedbackConfig('feedback-project', {
       properties: {
         ...config.properties,
-        '/request/query': { ...config.properties['/request/query'], feedback: 'stars_5', editable: true }
+        '/request/query': { ...config.properties['/request/query'], feedback: 'stars_5', editMode: 'inline' }
       }
     });
-    expect(saved.properties['/request/query']).toMatchObject({ feedback: 'stars_5', editable: true });
+    expect(saved.properties['/request/query']).toMatchObject({ feedback: 'stars_5', editMode: 'inline' });
   });
 
   it('submits feedback with reloaded USERNAME and preserves feedback during core updates', async () => {
@@ -242,7 +246,7 @@ describe('local project creation', () => {
     await tempAdapter.saveFeedbackConfig('feedback-project', {
       properties: {
         ...config.properties,
-        '/answer': { ...config.properties['/answer'], feedback: 'good_fair_bad', comments: true, editable: true }
+        '/answer': { ...config.properties['/answer'], feedback: 'good_fair_bad', comments: true, editMode: 'logged' }
       }
     });
 
