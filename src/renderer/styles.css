@@ -308,12 +308,19 @@ section:focus-visible,
   margin: 0;
 }
 
-.error-panel {
+.error-panel,
+.warning-panel {
   background: #4d1f24;
   border-bottom: 1px solid #ff9aa8;
   color: #ffeef1;
   grid-area: error;
   padding: 0.75rem 1rem;
+}
+
+.warning-panel {
+  background: #3f2d12;
+  border-bottom-color: #ffc56e;
+  color: #fff4df;
 }
 
 .columns {
@@ -409,6 +416,64 @@ h3 {
 
 .details-header h2 {
   margin: 0;
+}
+
+.tags-presentation {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.35rem 0;
+}
+
+.tag-group {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.tag-group h4 {
+  color: #c8d4e3;
+  font-size: 0.8125rem;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.tag-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tag-chip {
+  align-items: center;
+  background: #27344d;
+  border: 1px solid #637897;
+  border-radius: 999px;
+  color: #f7fafc;
+  display: inline-flex;
+  gap: 0.4rem;
+  padding: 0.25rem 0.55rem;
+}
+
+.tag-chip button {
+  background: transparent;
+  border: 0;
+  color: #ffccd3;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tag-add-control {
+  color: #c8d4e3;
+  display: grid;
+  gap: 0.35rem;
+  max-width: 20rem;
+}
+
+.tag-add-control select {
+  background: #0d1320;
+  border: 1px solid #637897;
+  border-radius: 0.375rem;
+  color: #f7fafc;
+  padding: 0.35rem;
 }
 
 .details-toggle {

@@ -96,6 +96,35 @@ describe('local storage adapter', () => {
     expect(fields.find((field) => field.path === '/turns/0/evidence')).toMatchObject({ presentation: 'evidence-list' });
   });
 
+  it('loads merged manual tag definitions from project and app tags folders', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    const appRoot = path.join(tempRoot, 'app');
+    const projectsRoot = path.join(tempRoot, 'projects');
+    await fs.mkdir(path.join(appRoot, 'tags'), { recursive: true });
+    await fs.mkdir(path.join(projectsRoot, 'tag-project', 'tags'), { recursive: true });
+    const appEnvPath = path.join(appRoot, '.env');
+    await fs.writeFile(appEnvPath, `LOCAL_PATH=${projectsRoot}\n`);
+    await fs.writeFile(path.join(projectsRoot, 'tag-project', '_schema.json'), JSON.stringify({ type: 'object', properties: { tags: { type: 'array', items: { type: 'string' } } } }));
+    await fs.writeFile(path.join(projectsRoot, 'tag-project', 'record-1.json'), JSON.stringify({ tags: ['needs-review'] }));
+    await fs.writeFile(path.join(projectsRoot, 'tag-project', 'tags', 'manual.json'), JSON.stringify([{ name: 'needs-review', description: 'Project definition' }]));
+    await fs.writeFile(
+      path.join(appRoot, 'tags', 'manual.json'),
+      JSON.stringify([{ name: 'needs-review', description: 'App definition' }, { name: 'approved', description: 'Approved' }])
+    );
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath,
+      values: { LOCAL_PATH: projectsRoot }
+    });
+
+    await expect(tempAdapter.openProject('tag-project')).resolves.toMatchObject({
+      tagDefinitions: [
+        { name: 'needs-review', description: 'Project definition' },
+        { name: 'approved', description: 'Approved' }
+      ]
+    });
+  });
+
   it('rejects path traversal through IPC-facing identifiers', async () => {
     await expect(adapter.openProject('../sample-project')).rejects.toThrow('Invalid project identifier');
     await expect(adapter.getRecord('sample-project', '../valid-record')).rejects.toThrow('Invalid record identifier');

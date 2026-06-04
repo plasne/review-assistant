@@ -106,7 +106,7 @@ beforeEach(() => {
     validationIssues: [],
     renderTree: { kind: 'object', label: 'record', path: '', children: [], validationIssues: [] }
   }));
-  vi.mocked(api.saveRecordChanges).mockImplementation(async (projectId, recordId) => api.getRecord(projectId, recordId));
+  vi.mocked(api.saveRecordChanges).mockImplementation(async (projectId, recordId) => ({ record: await api.getRecord(projectId, recordId) }));
   vi.mocked(api.discardRecordChanges).mockResolvedValue({ hasUnsavedChanges: false });
   vi.mocked(api.saveFeedbackConfig).mockImplementation(async (_projectId, config) => config);
   vi.mocked(api.closeWindow).mockResolvedValue(undefined);
@@ -294,6 +294,66 @@ describe('review UI', () => {
     await userEvent.click((evidenceGroup as HTMLElement).querySelector('summary') as HTMLElement);
 
     expect(evidenceGroup).not.toHaveAttribute('open');
+  });
+
+  it('renders tags as computed and manual groups with manual edits gated by edit mode', () => {
+    const node: RenderNode = {
+      kind: 'array',
+      label: 'tags',
+      path: '/tags',
+      presentation: 'tags',
+      items: [
+        { kind: 'value', label: '0', path: '/tags/0', value: 'needs-review', type: 'string', validationIssues: [] },
+        { kind: 'value', label: '1', path: '/tags/1', value: 'computed-risk', type: 'string', validationIssues: [] }
+      ],
+      validationIssues: []
+    };
+    const feedbackConfig = {
+      properties: {
+        '/tags': {
+          path: '/tags',
+          target: 'Tags',
+          tab: 'Main',
+          feedback: 'none' as const,
+          comments: false,
+          editMode: 'inline' as const,
+          presentation: 'tags' as const,
+          mapping: 'tags' as const
+        }
+      }
+    };
+
+    const { rerender } = render(
+      <RenderTree
+        node={node}
+        feedbackConfig={feedbackConfig}
+        tagDefinitions={[{ name: 'needs-review', description: 'Needs review' }, { name: 'approved', description: 'Approved' }]}
+      />
+    );
+
+    expect(within(screen.getByLabelText('Manual tags')).getByText('needs-review')).toBeInTheDocument();
+    expect(within(screen.getByLabelText('Computed tags')).getByText('computed-risk')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove needs-review' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove computed-risk' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Add tags manual tag')).toBeEnabled();
+
+    rerender(
+      <RenderTree
+        node={node}
+        feedbackConfig={{
+          properties: {
+            '/tags': {
+              ...feedbackConfig.properties['/tags'],
+              editMode: 'none'
+            }
+          }
+        }}
+        tagDefinitions={[{ name: 'needs-review', description: 'Needs review' }]}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: 'Remove needs-review' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Add tags manual tag')).not.toBeInTheDocument();
   });
 
   it('renders whole-item feedback controls for generic array object items', () => {
@@ -1633,7 +1693,7 @@ describe('review UI', () => {
       stagedData = data as Record<string, unknown>;
       return recordDetail(stagedData);
     });
-    vi.mocked(api.saveRecordChanges).mockImplementation(async () => recordDetail(stagedData));
+    vi.mocked(api.saveRecordChanges).mockImplementation(async () => ({ record: recordDetail(stagedData) }));
 
     render(<App />);
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');

@@ -23,7 +23,9 @@ import type {
   ProjectSummary,
   RecordDraftStatus,
   RecordDetail,
-  RecordSummary
+  RecordSaveResult,
+  RecordSummary,
+  TagDefinition
 } from './types';
 import { CANONICAL_MAPPINGS, FEEDBACK_EDIT_MODES, FEEDBACK_MODES, FIELD_PRESENTATIONS } from './feedback';
 
@@ -189,16 +191,27 @@ const assertRecordSummary = (value: unknown): RecordSummary => {
   return { id: value.id, displayName: value.displayName };
 };
 
+const assertTagDefinition = (value: unknown): TagDefinition => {
+  if (!isRecord(value) || !isString(value.name) || !isString(value.description)) {
+    throw new ValidationError('Invalid tag definition response.');
+  }
+  return { name: value.name, description: value.description };
+};
+
 export const assertOpenProjectResult = (value: unknown): OpenProjectResult => {
   if (!isRecord(value) || !isRecord(value.projectConfig) || !Array.isArray(value.records)) {
     throw new ValidationError('Invalid open project response.');
+  }
+  if (value.tagDefinitions !== undefined && !Array.isArray(value.tagDefinitions)) {
+    throw new ValidationError('Invalid tag definitions response.');
   }
   return {
     project: assertProjectSummary(value.project),
     schema: value.schema,
     records: value.records.map(assertRecordSummary),
     projectConfig: Object.fromEntries(Object.entries(value.projectConfig).filter((entry): entry is [string, string] => isString(entry[1]))),
-    ...(value.feedbackConfig === undefined ? {} : { feedbackConfig: assertFeedbackConfig(value.feedbackConfig) })
+    ...(value.feedbackConfig === undefined ? {} : { feedbackConfig: assertFeedbackConfig(value.feedbackConfig) }),
+    ...(value.tagDefinitions === undefined ? {} : { tagDefinitions: value.tagDefinitions.map(assertTagDefinition) })
   };
 };
 
@@ -217,6 +230,19 @@ export const assertRecordDraftStatus = (value: unknown): RecordDraftStatus => {
     throw new ValidationError('Invalid record draft status response.');
   }
   return { hasUnsavedChanges: value.hasUnsavedChanges };
+};
+
+export const assertRecordSaveResult = (value: unknown): RecordSaveResult => {
+  if (!isRecord(value)) {
+    throw new ValidationError('Invalid record save response.');
+  }
+  if (value.tagPluginWarning !== undefined && !isString(value.tagPluginWarning)) {
+    throw new ValidationError('Invalid record save warning response.');
+  }
+  return {
+    record: assertRecordDetail(value.record),
+    ...(value.tagPluginWarning === undefined ? {} : { tagPluginWarning: value.tagPluginWarning })
+  };
 };
 
 export const assertFeedbackConfig = (value: unknown): FeedbackConfig => {

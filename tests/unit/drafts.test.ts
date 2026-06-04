@@ -69,6 +69,25 @@ describe('record draft store', () => {
     expect(drafts.getStatus('sample-project', 'new-record')).toEqual({ hasUnsavedChanges: false });
   });
 
+  it('persists reconciled tag mutations while returning aggregate plugin warnings', async () => {
+    let stored: unknown = { tags: ['manual'] };
+    const storage = createStorage(() => stored, (next) => {
+      stored = next;
+    });
+    storage.reconcileRecordTags = async (_projectId, data) => {
+      (data as { tags: string[] }).tags.push('computed');
+      return { data, pluginErrors: ['broken: boom'] };
+    };
+    const drafts = new RecordDraftStore(() => storage);
+
+    await drafts.updateRecord('sample-project', 'record-1', { tags: ['manual'] });
+    const result = await drafts.saveDraft('sample-project', 'record-1');
+
+    expect(stored).toEqual({ tags: ['manual', 'computed'] });
+    expect(result.record.data).toEqual({ tags: ['manual', 'computed'] });
+    expect(result.tagPluginWarning).toContain('Save succeeded, but 1 tag plugin failed.');
+  });
+
   it('rejects saving a draft when the persisted record changed after staging', async () => {
     let stored: unknown = { answer: 'Original' };
     const storage = createStorage(() => stored, (next) => {
@@ -173,7 +192,9 @@ const createStorage = (read: () => unknown, write: (value: unknown) => void): St
   },
   getProjectPrompt: async () => undefined,
   getProjectConfig: async () => ({}),
-  getProjectMcpConfig: async () => undefined
+  getProjectMcpConfig: async () => undefined,
+  getTagDefinitions: async () => [],
+  reconcileRecordTags: async (_projectId, data) => ({ data, pluginErrors: [] })
 });
 
 const createRecordDetail = (projectId: string, recordId: string, data: unknown) => ({

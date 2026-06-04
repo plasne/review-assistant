@@ -14,7 +14,7 @@ import type {
 
 export const FEEDBACK_MODES: FeedbackMode[] = ['none', 'good_fair_bad', 'thumbs', 'stars_5'];
 export const FEEDBACK_EDIT_MODES: FeedbackEditMode[] = ['none', 'logged', 'inline'];
-export const FIELD_PRESENTATIONS: FieldPresentation[] = ['chat-request', 'chat-response', 'evidence-list'];
+export const FIELD_PRESENTATIONS: FieldPresentation[] = ['chat-request', 'chat-response', 'evidence-list', 'tags'];
 export const CANONICAL_MAPPINGS: CanonicalMapping[] = ['turns', 'request', 'response', 'evidence', 'facts', 'tags'];
 export const USERNAME_VALIDATION_MESSAGE = 'USERNAME environment variable not configured. Please set USERNAME in your .env file.';
 

@@ -1,7 +1,8 @@
-import type { FeedbackSubmissionInput, FeedbackSubmissionResult, RecordDetail } from '../shared/types';
+import type { FeedbackSubmissionInput, FeedbackSubmissionResult, RecordDetail, RecordSaveResult } from '../shared/types';
 import { assertFeedbackSubmissionInput as assertNonEmptyFeedbackSubmission, mergeFeedbackEntries } from '../shared/feedback';
 import { assertProjectId, assertRecordId } from '../shared/validators';
 import { assertSubmissionAllowed, type StorageAdapter } from './storage';
+import { tagPluginWarning } from './tags';
 
 type DraftCapableStorage = StorageAdapter &
   Required<Pick<StorageAdapter, 'readRecordData' | 'renderRecordData' | 'writeRecordData' | 'writeRecordDataIfUnchanged'>>;
@@ -40,7 +41,9 @@ export class RecordDraftStore {
       updateRecord: (projectId, recordId, data) => store.updateRecord(projectId, recordId, data),
       getProjectPrompt: (projectId) => storage.getProjectPrompt(projectId),
       getProjectConfig: (projectId) => storage.getProjectConfig(projectId),
-      getProjectMcpConfig: (projectId) => storage.getProjectMcpConfig(projectId)
+      getProjectMcpConfig: (projectId) => storage.getProjectMcpConfig(projectId),
+      getTagDefinitions: (projectId) => storage.getTagDefinitions(projectId),
+      reconcileRecordTags: (projectId, data) => storage.reconcileRecordTags(projectId, data)
     };
   }
 
@@ -113,16 +116,17 @@ export class RecordDraftStore {
     return { username: user.username, record: await this.renderRecordData(projectId, recordId, data) };
   }
 
-  async saveDraft(projectId: string, recordId: string): Promise<RecordDetail> {
+  async saveDraft(projectId: string, recordId: string): Promise<RecordSaveResult> {
     const key = this.key(projectId, recordId);
     const draft = this.drafts.get(key);
     if (!draft) {
-      return this.getStorage().getRecord(projectId, recordId);
+      return { record: await this.getStorage().getRecord(projectId, recordId) };
     }
     const data = cloneJson(draft.data);
-    const record = await this.requireDraftCapableStorage().writeRecordDataIfUnchanged(projectId, recordId, data, draft.baseData);
+    const reconciled = await this.getStorage().reconcileRecordTags(projectId, data);
+    const record = await this.requireDraftCapableStorage().writeRecordDataIfUnchanged(projectId, recordId, reconciled.data, draft.baseData);
     this.drafts.delete(key);
-    return record;
+    return { record, ...(reconciled.pluginErrors.length > 0 ? { tagPluginWarning: tagPluginWarning(reconciled.pluginErrors) } : {}) };
   }
 
   discardDraft(projectId: string, recordId: string): RecordDraftStatus {

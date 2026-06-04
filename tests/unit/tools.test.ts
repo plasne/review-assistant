@@ -18,6 +18,8 @@ const storage: StorageAdapter = {
   updateRecord: async (projectId, recordId) => storage.getRecord(projectId, recordId),
   getProjectConfig: async () => ({}),
   getProjectMcpConfig: async () => undefined,
+  getTagDefinitions: async () => [],
+  reconcileRecordTags: async (_projectId, data) => ({ data, pluginErrors: [] }),
   getRecord: async (projectId, recordId) => ({
     projectId,
     recordId,
@@ -138,9 +140,24 @@ describe('local tool runtime', () => {
         expect.objectContaining({
           name: 'readRecord',
           source: 'built-in',
-          description: 'Read the record currently selected in the Review Assistant UI. Project and record identifiers always come from trusted UI state.'
+          description: expect.stringContaining('Use this before answering questions about selected-record content')
         }),
-        expect.objectContaining({ name: 'listTools', source: 'built-in', description: 'List Review Assistant local tools.' })
+        expect.objectContaining({
+          name: 'saveSearchResults',
+          source: 'built-in',
+          description: expect.stringContaining('do not use it for turn evidence when completeTurn can save evidence')
+        }),
+        expect.objectContaining({
+          name: 'startTurn',
+          source: 'built-in',
+          description: expect.stringContaining('after calling startTurn, call completeTurn before the final answer')
+        }),
+        expect.objectContaining({
+          name: 'completeTurn',
+          source: 'built-in',
+          description: expect.stringContaining('role/message history arrays it appends an assistant message')
+        }),
+        expect.objectContaining({ name: 'listTools', source: 'built-in', description: expect.stringContaining('input schemas') })
       ])
     );
   });
@@ -843,6 +860,118 @@ describe('local tool runtime', () => {
       turns: [
         { request: 'First question?', response: 'First answer.' },
         { request: 'Second question?', response: '' }
+      ]
+    });
+  });
+
+  it('appends assistant messages for role/message history arrays without overwriting the user message', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        history: {
+          type: 'array',
+          description: 'Conversation history turns',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['role', 'msg'],
+            properties: {
+              role: { type: 'string', enum: ['user', 'assistant', 'system'] },
+              msg: { type: 'string' }
+            }
+          }
+        }
+      },
+      required: ['history'],
+      additionalProperties: false
+    };
+    const { adapter, getData } = createRecordStorage(schema, { history: [] });
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'startTurn',
+        requestId: 'tool-request-1',
+        arguments: { targetPath: '/history', inquiry: 'Which services contain dial functionality?' }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        targetPath: '/history',
+        turnIndex: 0,
+        turn: { role: 'user', msg: 'Which services contain dial functionality?' }
+      }
+    });
+
+    await expect(
+      runtime.execute({
+        tool: 'completeTurn',
+        requestId: 'tool-request-2',
+        arguments: { targetPath: '/history', response: '4 services clearly contain dial functionality.' }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        targetPath: '/history',
+        responseField: 'msg',
+        turn: { role: 'assistant', msg: '4 services clearly contain dial functionality.' }
+      }
+    });
+    expect(getData()).toEqual({
+      history: [
+        { role: 'user', msg: 'Which services contain dial functionality?' },
+        { role: 'assistant', msg: '4 services clearly contain dial functionality.' }
+      ]
+    });
+  });
+
+  it('can complete a specific user message index in role/message history arrays', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        history: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['role', 'msg'],
+            properties: {
+              role: { type: 'string', enum: ['user', 'assistant', 'system'] },
+              msg: { type: 'string' }
+            }
+          }
+        }
+      },
+      required: ['history'],
+      additionalProperties: false
+    };
+    const { adapter, getData } = createRecordStorage(schema, {
+      history: [
+        { role: 'user', msg: 'First question?' },
+        { role: 'user', msg: 'Second question?' }
+      ]
+    });
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'completeTurn',
+        requestId: 'tool-request-1',
+        arguments: { targetPath: '/history', turnIndex: 0, response: 'First answer.' }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        targetPath: '/history',
+        turnIndex: 1,
+        turn: { role: 'assistant', msg: 'First answer.' }
+      }
+    });
+    expect(getData()).toEqual({
+      history: [
+        { role: 'user', msg: 'First question?' },
+        { role: 'assistant', msg: 'First answer.' },
+        { role: 'user', msg: 'Second question?' }
       ]
     });
   });

@@ -18,6 +18,7 @@ import type {
   ProjectUser,
   RecordDetail,
   RenderNode,
+  TagDefinition,
   ValidationIssue
 } from '../shared/types';
 import { CANONICAL_MAPPINGS, feedbackConfigEntryForPath, FEEDBACK_EDIT_MODES, FEEDBACK_MODES, FIELD_PRESENTATIONS } from '../shared/feedback';
@@ -48,6 +49,8 @@ type PendingNavigation =
 const MIN_COLUMN_PERCENT = 16;
 const NEW_RECORD_ID_BASE = 'new-record';
 const MAX_CHAT_ATTACHMENTS = 5;
+const MAX_TAGS_PER_RECORD = 100;
+const MAX_TAG_LENGTH = 100;
 const NOT_SET_LABEL = '(not set)';
 
 const nextNewRecordId = (existingIds: string[]): string => {
@@ -134,6 +137,7 @@ const App = () => {
   const [showExtraSchemaFields, setShowExtraSchemaFields] = useState(false);
   const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState<string | undefined>();
+  const [saveWarning, setSaveWarning] = useState<string | undefined>();
   const [columns, setColumns] = useState({ records: 22, details: 48, chat: 30 });
   const columnsRef = useRef<HTMLElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -349,6 +353,7 @@ const App = () => {
     }
     setStatus('loading');
     setError(undefined);
+    setSaveWarning(undefined);
     try {
       const result = await window.reviewAssistant.openProject(projectId);
       setProject(result);
@@ -368,6 +373,7 @@ const App = () => {
     }
     setStatus('loading');
     setError(undefined);
+    setSaveWarning(undefined);
     try {
       selectRecordDetail(await window.reviewAssistant.getRecord(selectedProjectId, recordId));
       updateFeedbackDrafts({});
@@ -590,7 +596,9 @@ const App = () => {
     setError(undefined);
     try {
       await submitPendingFeedbackDrafts();
-      selectRecordDetail(await window.reviewAssistant.saveRecordChanges(selectedProjectId, record.recordId));
+      const result = await window.reviewAssistant.saveRecordChanges(selectedProjectId, record.recordId);
+      selectRecordDetail(result.record);
+      setSaveWarning(result.tagPluginWarning);
       draftRecordIdsRef.current.delete(record.recordId);
       updateFeedbackDrafts({});
       updateUnsavedChanges(false);
@@ -600,6 +608,7 @@ const App = () => {
     } catch (caught) {
       setStatus('error');
       setError(caught instanceof Error ? caught.message : String(caught));
+      setSaveWarning(undefined);
       return false;
     }
   };
@@ -1156,6 +1165,11 @@ const App = () => {
           {error}
         </section>
       ) : null}
+      {saveWarning ? (
+        <section className="warning-panel" role="alert" tabIndex={0}>
+          {saveWarning}
+        </section>
+      ) : null}
 
       <main
         ref={columnsRef}
@@ -1256,6 +1270,7 @@ const App = () => {
               onInlineEdit={updateInlineRecordValue}
               feedbackDrafts={feedbackDrafts}
               onChangeFeedbackDraft={changeFeedbackDraft}
+              tagDefinitions={project?.tagDefinitions ?? []}
             />
           ) : (
             <p className="empty">Choose a record to inspect read-only details.</p>
@@ -1774,7 +1789,8 @@ const RecordDetails = ({
   onSubmitFeedback,
   onInlineEdit,
   feedbackDrafts,
-  onChangeFeedbackDraft
+  onChangeFeedbackDraft,
+  tagDefinitions
 }: {
   record: RecordDetail;
   feedbackConfig: FeedbackConfig | undefined;
@@ -1784,6 +1800,7 @@ const RecordDetails = ({
   onInlineEdit: (node: Extract<RenderNode, { kind: 'array' | 'value' | 'raw' }>, value: string) => Promise<void>;
   feedbackDrafts: FeedbackDrafts;
   onChangeFeedbackDraft: (path: string, draft: FeedbackDraft) => void;
+  tagDefinitions: TagDefinition[];
 }) => {
   const [activeTabId, setActiveTabId] = useState('overview');
   const history = record.feedbackHistory ?? {};
@@ -1852,6 +1869,7 @@ const RecordDetails = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            tagDefinitions={tagDefinitions}
           />
         ) : (
           <RenderTreeRoot
@@ -1863,6 +1881,7 @@ const RecordDetails = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            tagDefinitions={tagDefinitions}
             collapseEvidence
             omitArrayItemsForPath={showTurnTabs ? turnsPath : undefined}
           />
@@ -1926,6 +1945,7 @@ const RenderTreeRoot = ({
   onSubmitFeedback,
   feedbackDrafts,
   onChangeFeedbackDraft,
+  tagDefinitions = [],
   collapseEvidence = false,
   omitArrayItemsForPath
 }: {
@@ -1937,6 +1957,7 @@ const RenderTreeRoot = ({
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
+  tagDefinitions?: TagDefinition[];
   collapseEvidence?: boolean;
   omitArrayItemsForPath?: string;
 }) => {
@@ -1955,6 +1976,7 @@ const RenderTreeRoot = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            tagDefinitions={tagDefinitions}
             collapseEvidence={collapseEvidence}
             omitArrayItemsForPath={omitArrayItemsForPath}
           />
@@ -1972,6 +1994,7 @@ const RenderTreeRoot = ({
       onSubmitFeedback={onSubmitFeedback}
       feedbackDrafts={feedbackDrafts}
       onChangeFeedbackDraft={onChangeFeedbackDraft}
+      tagDefinitions={tagDefinitions}
       collapseEvidence={collapseEvidence}
       omitArrayItemsForPath={omitArrayItemsForPath}
     />
@@ -1988,6 +2011,7 @@ const RenderTree = ({
   onSubmitFeedback,
   feedbackDrafts,
   onChangeFeedbackDraft,
+  tagDefinitions = [],
   collapseEvidence = false,
   omitArrayItemsForPath
 }: {
@@ -2000,6 +2024,7 @@ const RenderTree = ({
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
+  tagDefinitions?: TagDefinition[];
   collapseEvidence?: boolean;
   omitArrayItemsForPath?: string;
 }) => {
@@ -2046,6 +2071,7 @@ const RenderTree = ({
               onSubmitFeedback={onSubmitFeedback}
               feedbackDrafts={feedbackDrafts}
               onChangeFeedbackDraft={onChangeFeedbackDraft}
+              tagDefinitions={tagDefinitions}
               collapseEvidence={collapseEvidence}
               omitArrayItemsForPath={omitArrayItemsForPath}
             />
@@ -2077,6 +2103,7 @@ const RenderTree = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            tagDefinitions={tagDefinitions}
             collapseEvidence={collapseEvidence}
             omitArrayItemsForPath={omitArrayItemsForPath}
           />
@@ -2125,6 +2152,15 @@ const RenderTree = ({
         />
         {node.path && node.path === omitArrayItemsForPath ? (
           <p className="array-items-omitted">(shown in tabs)</p>
+        ) : stringArray && node.presentation === 'tags' ? (
+          <TagsPresentation
+            node={node}
+            editMode={editMode}
+            tagDefinitions={tagDefinitions}
+            draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+            onChangeDraft={onChangeFeedbackDraft}
+            onChangeCount={setLocalStringArrayCount}
+          />
         ) : stringArray ? (
           <StringArrayRows
             node={node}
@@ -2148,6 +2184,7 @@ const RenderTree = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            tagDefinitions={tagDefinitions}
             collapseEvidence={collapseEvidence}
             omitArrayItemsForPath={omitArrayItemsForPath}
           />
@@ -2687,6 +2724,107 @@ const StringArrayRows = ({
     </div>
   );
 };
+
+const TagsPresentation = ({
+  node,
+  editMode,
+  tagDefinitions,
+  draft,
+  onChangeDraft,
+  onChangeCount
+}: {
+  node: Extract<RenderNode, { kind: 'array' }>;
+  editMode: FeedbackEditMode;
+  tagDefinitions: TagDefinition[];
+  draft?: FeedbackDraft;
+  onChangeDraft?: (path: string, draft: FeedbackDraft) => void;
+  onChangeCount?: (count: number) => void;
+}) => {
+  const initialValue = editableValue(node);
+  const draftValue = draft?.editValue;
+  const editable = editMode === 'inline' || editMode === 'logged';
+  const tagSource = editMode === 'logged' && draftValue !== undefined ? draftValue : initialValue;
+  const tags = useMemo(() => parseStringArrayEditValue(tagSource), [tagSource]);
+  const manualNames = useMemo(() => new Set(tagDefinitions.map((definition) => definition.name)), [tagDefinitions]);
+  const manualTags = tags.filter((tag) => manualNames.has(tag));
+  const computedTags = tags.filter((tag) => !manualNames.has(tag));
+  const availableDefinitions = tagDefinitions.filter((definition) => !tags.includes(definition.name));
+  const onInlineEdit = React.useContext(InlineEditContext);
+
+  useEffect(() => {
+    onChangeCount?.(tags.length);
+  }, [onChangeCount, tags.length]);
+
+  const applyTags = (nextTags: string[]) => {
+    const normalized = [...new Set(nextTags.map((tag) => tag.trim()).filter(Boolean))];
+    const nextValueText = normalized.join('\n');
+    onChangeCount?.(normalized.length);
+    if (editMode === 'inline' && onInlineEdit) {
+      void onInlineEdit(node, nextValueText);
+      return;
+    }
+    if (editMode === 'logged' && node.path && onChangeDraft) {
+      onChangeDraft(node.path, normalizeFeedbackDraft({ ...draft, editValue: nextValueText }, initialValue));
+    }
+  };
+
+  const addManualTag = (name: string) => {
+    if (!name || tags.length >= MAX_TAGS_PER_RECORD || name.length > MAX_TAG_LENGTH) {
+      return;
+    }
+    applyTags([...tags, name]);
+  };
+  const removeManualTag = (name: string) => applyTags(tags.filter((tag) => tag !== name));
+
+  return (
+    <div className="tags-presentation" aria-label={`${node.label} tags`}>
+      <TagGroup title="Computed tags" tags={computedTags} />
+      <TagGroup title="Manual tags" tags={manualTags} onRemove={editable ? removeManualTag : undefined} />
+      {editable ? (
+        <label className="tag-add-control">
+          <select
+            aria-label={`Add ${node.label} manual tag`}
+            value=""
+            onChange={(event) => {
+              addManualTag(event.target.value);
+              event.currentTarget.value = '';
+            }}
+            disabled={availableDefinitions.length === 0 || tags.length >= MAX_TAGS_PER_RECORD}
+          >
+            <option value="">Choose a tag</option>
+            {availableDefinitions.map((definition) => (
+              <option key={definition.name} value={definition.name}>
+                {definition.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+    </div>
+  );
+};
+
+const TagGroup = ({ title, tags, onRemove }: { title: string; tags: string[]; onRemove?: (tag: string) => void }) => (
+  <section className="tag-group" aria-label={title}>
+    <h4>{title}</h4>
+    {tags.length === 0 ? (
+      <output className="array-string-output">{NOT_SET_LABEL}</output>
+    ) : (
+      <div className="tag-chip-list">
+        {tags.map((tag) => (
+          <span key={tag} className="tag-chip">
+            <span>{tag}</span>
+            {onRemove ? (
+              <button type="button" aria-label={`Remove ${tag}`} onClick={() => onRemove(tag)}>
+                x
+              </button>
+            ) : null}
+          </span>
+        ))}
+      </div>
+    )}
+  </section>
+);
 
 const isHttpUrl = (value: string): boolean => {
   try {

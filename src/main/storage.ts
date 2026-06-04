@@ -28,6 +28,13 @@ import {
 import { assertNewProjectId, assertProjectId, assertRecordId } from '../shared/validators';
 import { buildRenderTree, validateRecord } from './schema';
 import { loadProjectEnv, readEnvFile, redactConfig } from './env';
+import {
+  discoverComputedTagPlugins,
+  loadManualTagDefinitionsFromDirectories,
+  loadManualTagDefinitionsFromValues,
+  reconcileComputedTags,
+  type ReconcileTagsResult
+} from './tags';
 
 export interface StorageAdapter {
   listProjects(): Promise<ProjectSummary[]>;
@@ -47,6 +54,8 @@ export interface StorageAdapter {
   getProjectPrompt(projectId: string): Promise<string | undefined>;
   getProjectConfig(projectId: string): Promise<Record<string, string>>;
   getProjectMcpConfig(projectId: string): Promise<string | undefined>;
+  getTagDefinitions(projectId: string): Promise<import('../shared/types').TagDefinition[]>;
+  reconcileRecordTags(projectId: string, data: unknown): Promise<ReconcileTagsResult>;
 }
 
 export type ProjectSchemaSaveResult = {
@@ -65,6 +74,7 @@ export const RECORD_DRAFT_CONFLICT_MESSAGE =
   'Record changed after this draft was staged. Refresh the record, review the latest changes, and stage your edits again.';
 const BACKEND_KEYS = new Set(['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'LOCAL_PATH']);
 const PROJECT_CONFIG_FILE = '_config.json';
+const TAGS_DIRECTORY = 'tags';
 
 export const createStorageAdapter = (config: AppConfig): StorageAdapter => {
   if (config.backendKind === 'local') {
@@ -108,12 +118,13 @@ export class LocalStorageAdapter implements StorageAdapter {
     const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
     const projectConfig = redactConfig(this.loadProjectConfig(project));
     const feedbackConfig = await this.readFeedbackConfig(project, schema);
+    const tagDefinitions = await this.getTagDefinitions(projectId);
     const entries = await fs.readdir(project, { withFileTypes: true });
     const records = entries
       .filter((entry) => entry.isFile() && isRecordFile(entry.name))
       .map((entry): RecordSummary => ({ id: path.basename(entry.name, '.json'), displayName: path.basename(entry.name, '.json') }))
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
-    return { project: { id: projectId, name: projectId }, schema, records, projectConfig, feedbackConfig };
+    return { project: { id: projectId, name: projectId }, schema, records, projectConfig, feedbackConfig, tagDefinitions };
   }
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
@@ -250,12 +261,30 @@ export class LocalStorageAdapter implements StorageAdapter {
     return readOptionalTextFile(path.join(this.projectPath(assertProjectId(projectId)), '_mcp.json'));
   }
 
+  async getTagDefinitions(projectId: string): Promise<import('../shared/types').TagDefinition[]> {
+    const project = this.projectPath(assertProjectId(projectId));
+    return loadManualTagDefinitionsFromDirectories([path.join(project, TAGS_DIRECTORY), this.appTagsPath()]);
+  }
+
+  async reconcileRecordTags(projectId: string, data: unknown): Promise<ReconcileTagsResult> {
+    const project = this.projectPath(assertProjectId(projectId));
+    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    const feedbackConfig = await this.readFeedbackConfig(project, schema);
+    const tagDefinitions = await this.getTagDefinitions(projectId);
+    const plugins = await discoverComputedTagPlugins([path.join(project, TAGS_DIRECTORY), this.appTagsPath()]);
+    return reconcileComputedTags(schema, feedbackConfig, data, tagDefinitions, plugins);
+  }
+
   private projectPath(projectId: string): string {
     return containedPath(this.root, projectId);
   }
 
   private loadProjectConfig(project: string, options?: { log?: boolean }): Record<string, string> {
     return loadProjectEnv(path.join(project, '.env'), { ...this.config.values, ...readRuntimeEnvValues(this.config.appEnvPath) }, options);
+  }
+
+  private appTagsPath(): string {
+    return path.join(path.dirname(this.config.appEnvPath), TAGS_DIRECTORY);
   }
 
   private async readFeedbackConfig(project: string, schema: unknown): Promise<FeedbackConfig> {
@@ -309,6 +338,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const projectEnv = await this.readOptionalBlob(container, '.env');
     const projectConfig = redactConfig(this.mergeAzureProjectConfig(projectEnv));
     const feedbackConfig = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE));
+    const tagDefinitions = await this.getTagDefinitions(id);
     const records: RecordSummary[] = [];
     for await (const blob of container.listBlobsFlat()) {
       if (isRecordFile(blob.name)) {
@@ -316,7 +346,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
         records.push({ id: recordId, displayName: recordId });
       }
     }
-    return { project: { id, name: id }, schema, records: records.sort((a, b) => a.displayName.localeCompare(b.displayName)), projectConfig, feedbackConfig };
+    return { project: { id, name: id }, schema, records: records.sort((a, b) => a.displayName.localeCompare(b.displayName)), projectConfig, feedbackConfig, tagDefinitions };
   }
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
@@ -481,6 +511,23 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   async getProjectMcpConfig(projectId: string): Promise<string | undefined> {
     const id = assertProjectId(projectId);
     return this.readOptionalBlob(this.client.getContainerClient(id), '_mcp.json');
+  }
+
+  async getTagDefinitions(projectId: string): Promise<import('../shared/types').TagDefinition[]> {
+    const id = assertProjectId(projectId);
+    const projectDefinitions = await this.readOptionalJsonBlob(this.client.getContainerClient(id), 'tags/manual.json');
+    const appDefinitions = await loadManualTagDefinitionsFromDirectories([path.join(path.dirname(this.config.appEnvPath), TAGS_DIRECTORY)]);
+    return loadManualTagDefinitionsFromValues([projectDefinitions, appDefinitions]);
+  }
+
+  async reconcileRecordTags(projectId: string, data: unknown): Promise<ReconcileTagsResult> {
+    const id = assertProjectId(projectId);
+    const container = this.client.getContainerClient(id);
+    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
+    const feedbackConfig = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE));
+    const tagDefinitions = await this.getTagDefinitions(id);
+    const plugins = await discoverComputedTagPlugins([path.join(path.dirname(this.config.appEnvPath), TAGS_DIRECTORY)]);
+    return reconcileComputedTags(schema, feedbackConfig, data, tagDefinitions, plugins);
   }
 
   private async readBlob(container: ReturnType<BlobServiceClient['getContainerClient']>, name: string, missingMessage: string): Promise<string> {

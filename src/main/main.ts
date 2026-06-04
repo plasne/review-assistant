@@ -27,6 +27,7 @@ import {
   assertProjectSummaries,
   assertRecordDraftStatus,
   assertRecordDetail,
+  assertRecordSaveResult,
   assertRecordId,
   assertChatAttachmentId
 } from '../shared/validators';
@@ -190,7 +191,7 @@ const registerIpc = (): void => {
     assertRecordDraftStatus(drafts.getStatus(assertProjectId(projectId), assertRecordId(recordId)))
   );
   ipcMain.handle('records:saveChanges', async (_event, projectId: unknown, recordId: unknown) =>
-    assertRecordDetail(await drafts.saveDraft(assertProjectId(projectId), assertRecordId(recordId)))
+    assertRecordSaveResult(await drafts.saveDraft(assertProjectId(projectId), assertRecordId(recordId)))
   );
   ipcMain.handle('records:discardChanges', async (_event, projectId: unknown, recordId: unknown) =>
     assertRecordDraftStatus(drafts.discardDraft(assertProjectId(projectId), assertRecordId(recordId)))
