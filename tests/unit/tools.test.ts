@@ -169,7 +169,7 @@ describe('local tool runtime', () => {
         tools: expect.arrayContaining([
           expect.objectContaining({ name: 'readRecord', source: 'built-in' }),
           expect.objectContaining({ name: 'getRecordSchema', source: 'built-in' }),
-          expect.objectContaining({ name: 'getRecordContainerSchema', source: 'built-in' }),
+          expect.objectContaining({ name: 'discoverCanonicalSchemaMappings', source: 'built-in' }),
           expect.objectContaining({ name: 'saveGeneratedSchema', source: 'built-in' }),
           expect.objectContaining({ name: 'saveSearchResults', source: 'built-in' }),
           expect.objectContaining({ name: 'startTurn', source: 'built-in' }),
@@ -302,35 +302,56 @@ describe('local tool runtime', () => {
     });
   });
 
-  it('lists selected-record array containers and returns schema for a requested destination', async () => {
+  it('discovers canonical mapping candidates from the selected record schema', async () => {
     const { adapter } = createSearchResultStorage();
     const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
 
-    await expect(runtime.execute({ tool: 'getRecordContainerSchema', requestId: 'tool-request-1', arguments: {} })).resolves.toMatchObject({
+    await expect(runtime.execute({ tool: 'discoverCanonicalSchemaMappings', requestId: 'tool-request-1', arguments: {} })).resolves.toMatchObject({
       requestId: 'tool-request-1',
       ok: true,
       result: {
-        containers: expect.arrayContaining([
-          expect.objectContaining({ path: '/evidence', itemCount: 1, description: 'Evidence for the answer.' }),
-          expect.objectContaining({ path: '/turns', itemCount: 1 }),
-          expect.objectContaining({ path: '/turns/0/references', itemCount: 0 })
-        ])
+        turns: { candidates: expect.arrayContaining([expect.objectContaining({ path: '/turns' })]) },
+        request: { candidates: expect.arrayContaining([expect.objectContaining({ path: '/question', schema: { type: 'string' } })]) },
+        response: { candidates: [] },
+        evidence: {
+          candidates: expect.arrayContaining([
+            expect.objectContaining({ path: '/evidence' }),
+            expect.objectContaining({ path: '/turns/*/references' })
+          ])
+        },
+        facts: { candidates: [] },
+        tags: { candidates: [] }
       }
     });
+  });
 
-    await expect(
-      runtime.execute({ tool: 'getRecordContainerSchema', requestId: 'tool-request-2', arguments: { containerPath: '/turns/0/references' } })
-    ).resolves.toMatchObject({
+  it('uses explicit canonical mappings to narrow discovery candidates', async () => {
+    const { adapter } = createSearchResultStorage();
+    const mappedAdapter: StorageAdapter = {
+      ...adapter,
+      getFeedbackConfig: async () => ({
+        properties: {
+          '/turns': { path: '/turns', target: 'Turns', tab: 'Main', feedback: 'none', comments: false, mapping: 'turns' },
+          '/turns/*/references': {
+            path: '/turns/*/references',
+            target: 'References',
+            tab: 'Main',
+            feedback: 'none',
+            comments: false,
+            mapping: 'evidence'
+          }
+        }
+      })
+    };
+    const runtime = createLocalToolRuntime({ storage: mappedAdapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(runtime.execute({ tool: 'discoverCanonicalSchemaMappings', requestId: 'tool-request-2', arguments: {} })).resolves.toMatchObject({
       requestId: 'tool-request-2',
       ok: true,
       result: {
-        container: {
-          path: '/turns/0/references',
-          itemSchema: {
-            required: ['title', 'uri']
-          },
-          currentValue: []
-        }
+        turns: { candidates: [{ path: '/turns', schema: expect.objectContaining({ type: 'array' }) }] },
+        evidence: { candidates: [{ path: '/turns/*/references', schema: expect.objectContaining({ type: 'array' }) }] },
+        request: { candidates: [] }
       }
     });
   });

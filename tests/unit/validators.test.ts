@@ -121,7 +121,7 @@ describe('IPC boundary validators', () => {
     expect(() => assertRecordDetail({ projectId: 'sample-project', recordId: 'valid-record' })).toThrow(ValidationError);
   });
 
-  it('preserves feedback edit modes across IPC boundaries', () => {
+  it('preserves unified config fields across IPC boundaries', () => {
     expect(
       assertFeedbackConfig({
         properties: {
@@ -129,26 +129,27 @@ describe('IPC boundary validators', () => {
             path: '/answer',
             target: 'Answer',
             tab: 'Main',
-            supportsEdit: true,
             feedback: 'none',
             comments: false,
+            presentation: 'chat-response',
+            mapping: 'response',
             editMode: 'inline'
           },
           '/evidence': {
             path: '/evidence',
             target: 'Evidence',
             tab: 'Main',
-            supportsEdit: false,
             feedback: 'none',
             comments: false,
-            editMode: 'logged'
+            presentation: 'evidence-list',
+            mapping: 'evidence'
           }
         }
       })
     ).toEqual({
       properties: {
-        '/answer': expect.objectContaining({ editMode: 'inline' }),
-        '/evidence': expect.objectContaining({ supportsEdit: false, editMode: 'none' })
+        '/answer': expect.objectContaining({ presentation: 'chat-response', mapping: 'response', editMode: 'inline' }),
+        '/evidence': expect.objectContaining({ presentation: 'evidence-list', mapping: 'evidence' })
       }
     });
     expect(() =>
@@ -158,11 +159,18 @@ describe('IPC boundary validators', () => {
             path: '/answer',
             target: 'Answer',
             tab: 'Main',
-            supportsEdit: true,
             feedback: 'none',
             comments: false,
             editMode: 'sideways'
           }
+        }
+      })
+    ).toThrow(ValidationError);
+    expect(() =>
+      assertFeedbackConfig({
+        properties: {
+          '/request': { path: '/request', target: 'Request', tab: 'Main', feedback: 'none', comments: false, mapping: 'request' },
+          '/question': { path: '/question', target: 'Question', tab: 'Main', feedback: 'none', comments: false, mapping: 'request' }
         }
       })
     ).toThrow(ValidationError);

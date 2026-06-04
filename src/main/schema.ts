@@ -1,7 +1,7 @@
 import Ajv2020, { type ErrorObject, type ValidateFunction } from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
-import { displayConfigEntryForPath } from '../shared/display';
-import type { DisplayConfig, FieldPresentation, RenderNode, ValidationIssue } from '../shared/types';
+import { feedbackConfigEntryForPath } from '../shared/feedback';
+import type { FeedbackConfig, FieldPresentation, RenderNode, ValidationIssue } from '../shared/types';
 
 type JsonSchema = Record<string, unknown>;
 
@@ -18,7 +18,7 @@ export const validateRecord = (schema: unknown, data: unknown): ValidationIssue[
   return (validate.errors ?? []).map(toValidationIssue);
 };
 
-export const buildRenderTree = (schema: unknown, data: unknown, issues: ValidationIssue[], label = 'record', displayConfig?: DisplayConfig): RenderNode => {
+export const buildRenderTree = (schema: unknown, data: unknown, issues: ValidationIssue[], label = 'record', displayConfig?: FeedbackConfig): RenderNode => {
   if (!isSchema(schema)) {
     return rawNode(label, undefined, data, 'Schema is not an object.', issues, '');
   }
@@ -33,10 +33,10 @@ const compileSchema = (schema: unknown): ValidateFunction => {
   return ajv.compile(schema);
 };
 
-const renderSchema = (label: string, schema: JsonSchema, data: unknown, issues: ValidationIssue[], path: string, displayConfig?: DisplayConfig): RenderNode => {
+const renderSchema = (label: string, schema: JsonSchema, data: unknown, issues: ValidationIssue[], path: string, displayConfig?: FeedbackConfig): RenderNode => {
   const localIssues = issues.filter((issue) => issue.path === path);
   const description = typeof schema.description === 'string' ? schema.description : undefined;
-  const presentation = displayConfig ? displayConfigEntryForPath(displayConfig, path)?.presentation : undefined;
+  const presentation = displayConfig ? feedbackConfigEntryForPath(displayConfig, path)?.presentation : undefined;
   const renderable = resolveRenderableSchema(schema);
   if (hasComplexConstruct(renderable)) {
     return rawNode(label, description, data, 'Complex JSON Schema construct is validated and displayed as read-only JSON.', localIssues, path, presentation);
@@ -59,7 +59,7 @@ const renderSchema = (label: string, schema: JsonSchema, data: unknown, issues: 
           'Field is present in data but not declared by schema.',
           issuesAt(issues, `${path}/${escapePointer(key)}`),
           `${path}/${escapePointer(key)}`,
-          displayConfig ? displayConfigEntryForPath(displayConfig, `${path}/${escapePointer(key)}`)?.presentation : undefined
+          displayConfig ? feedbackConfigEntryForPath(displayConfig, `${path}/${escapePointer(key)}`)?.presentation : undefined
         )
       );
     return { kind: 'object', label, path, description, presentation, children: [...children, ...extraChildren], validationIssues: localIssues };

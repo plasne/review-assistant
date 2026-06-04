@@ -12,9 +12,9 @@ Prefer scoped searches and concise tool results. Avoid broad, high-volume search
 
 ## Search result persistence
 
-When a selected record is available and the user asks to search external sources, inspect candidate containers with `getRecordContainerSchema` and ask where the search results should be saved before running the external search, unless the user already provided a destination or explicitly says not to save the results.
+When a selected record is available and the user asks to search external sources, use `discoverCanonicalSchemaMappings` to understand canonical destinations and ask where search results should be saved before running the external search, unless the user already provided a destination or explicitly says not to save the results.
 
-After the user identifies the destination, such as "turn 1 evidence" or "turn 2 references", use `getRecordContainerSchema` to inspect that destination, run or re-run the relevant external search if structured result entries are not available in the current turn, then call `saveSearchResults`.
+After the user identifies the destination, such as "turn 1 evidence" or "record evidence", run or re-run the relevant external search if structured result entries are not available in the current turn, then call `saveSearchResults` with the canonical destination path.
 
 When saving search results, the saved result content should be a relevant excerpt of actual source text returned by the MCP source. The excerpt should be long enough to support later fact extraction and review, but it does not need to be the entire file unless a useful excerpt cannot be isolated. Do not save a meta-summary such as the search query, why the result matched, or a sentence like "file X includes a section titled Y" in place of the source content. If the search result only provides metadata or a too-short snippet, call the appropriate MCP read/fetch content tool for that result before saving it.
 

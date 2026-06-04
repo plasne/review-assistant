@@ -148,8 +148,8 @@ test('workspace keeps filling the window after collapsible sections are toggled'
     await expect(page.getByText('How do I run the harness?')).toBeVisible();
     await page.getByRole('button', { name: 'Configure' }).click();
     await page.getByLabel('Evidence > Id feedback mode').selectOption('stars_5');
-    await page.getByRole('dialog', { name: 'Feedback configuration' }).getByRole('button', { name: 'Save' }).click();
-    await expect(page.getByRole('dialog', { name: 'Feedback configuration' })).toBeHidden();
+    await page.getByRole('dialog', { name: 'Project configuration' }).getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('dialog', { name: 'Project configuration' })).toBeHidden();
 
     const toggledCount = await page.locator('.details details').evaluateAll((items) => {
       for (const item of items) {
@@ -254,8 +254,8 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   await firstPage.getByRole('button', { name: 'Configure' }).click();
   await firstPage.getByLabel('Answer feedback mode').selectOption('good_fair_bad');
   await firstPage.getByLabel('Answer comment').check();
-  await firstPage.getByRole('dialog', { name: 'Feedback configuration' }).getByRole('button', { name: 'Save' }).click();
-  await expect(firstPage.getByRole('dialog', { name: 'Feedback configuration' })).toBeHidden();
+  await firstPage.getByRole('dialog', { name: 'Project configuration' }).getByRole('button', { name: 'Save' }).click();
+  await expect(firstPage.getByRole('dialog', { name: 'Project configuration' })).toBeHidden();
   await firstPage.getByRole('button', { name: 'record-1', exact: true }).click();
   await firstPage.locator('label.feedback-option').filter({ hasText: /^Good$/ }).click();
   await firstPage.getByLabel('Comment').fill('Looks good to me');
@@ -277,9 +277,9 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   await expect(secondPage.getByText('Looks good to me')).toBeVisible();
 
   await secondPage.getByRole('button', { name: 'Configure' }).click();
-  await secondPage.getByLabel('Answer editable').selectOption('logged');
-  await secondPage.getByRole('dialog', { name: 'Feedback configuration' }).getByRole('button', { name: 'Save' }).click();
-  await expect(secondPage.getByRole('dialog', { name: 'Feedback configuration' })).toBeHidden();
+  await secondPage.getByLabel('Answer edit mode').selectOption('logged');
+  await secondPage.getByRole('dialog', { name: 'Project configuration' }).getByRole('button', { name: 'Save' }).click();
+  await expect(secondPage.getByRole('dialog', { name: 'Project configuration' })).toBeHidden();
   await expect(secondPage.getByLabel('Edit')).toBeVisible();
   await secondPage.getByLabel('Edit').fill('Second user edit');
   await expect(secondPage.getByLabel('Edit')).toHaveValue('Second user edit');

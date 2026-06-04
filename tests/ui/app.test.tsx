@@ -188,7 +188,6 @@ describe('review UI', () => {
               path: '/turns/*/evidence/*',
               target: 'Evidence > *',
               tab: 'Evidence',
-              supportsEdit: true,
               feedback: 'thumbs',
               comments: false,
               editMode: 'none'
@@ -197,7 +196,6 @@ describe('review UI', () => {
               path: '/turns/*/evidence/*/id',
               target: 'Evidence > Id',
               tab: 'Evidence',
-              supportsEdit: true,
               feedback: 'none',
               comments: false,
               editMode: 'none'
@@ -206,7 +204,6 @@ describe('review UI', () => {
               path: '/turns/*/evidence/*/content',
               target: 'Evidence > Content',
               tab: 'Evidence',
-              supportsEdit: true,
               feedback: 'none',
               comments: true,
               editMode: 'logged'
@@ -285,7 +282,6 @@ describe('review UI', () => {
               path: '/turns/*/evidence/*',
               target: 'Evidence > *',
               tab: 'Evidence',
-              supportsEdit: true,
               feedback: 'thumbs',
               comments: false,
               editMode: 'none'
@@ -332,7 +328,6 @@ describe('review UI', () => {
             path: '/evidence/*',
             target: 'Evidence > *',
             tab: 'Main',
-            supportsEdit: true,
             feedback: 'thumbs',
             comments: false,
             editMode: 'none'
@@ -411,7 +406,6 @@ describe('review UI', () => {
               path: '/answer',
               target: 'Answer',
               tab: 'Main',
-              supportsEdit: true,
               feedback: 'thumbs',
               comments: true,
               editMode: 'none'
@@ -482,7 +476,7 @@ describe('review UI', () => {
     expect(await screen.findByRole('button', { name: 'Configure' })).toBeInTheDocument();
     const configureButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Configure' });
     expect(configureButton).toHaveClass('header-action-button', 'action-icon-button');
-    expect(configureButton).toHaveAttribute('data-tooltip', 'Configure feedback');
+    expect(configureButton).toHaveAttribute('data-tooltip', 'Configure project');
     const createRecordButton = getRecordCreateButton();
     const refreshRecordsButton = screen.getByRole('button', { name: 'Refresh records' });
     expect(createRecordButton).toBeEnabled();
@@ -811,7 +805,6 @@ describe('review UI', () => {
               path: '/answer',
               target: 'Answer',
               tab: 'Main',
-              supportsEdit: true,
               feedback: 'none',
               comments: false,
               editMode: 'none'
@@ -834,7 +827,7 @@ describe('review UI', () => {
 
     await waitFor(() => expect(api.openProject).toHaveBeenCalledTimes(2));
     await userEvent.click(screen.getByRole('button', { name: 'Configure' }));
-    expect(await screen.findByRole('dialog', { name: 'Feedback configuration' })).toBeVisible();
+    expect(await screen.findByRole('dialog', { name: 'Project configuration' })).toBeVisible();
     expect(screen.getByText('Answer')).toBeInTheDocument();
     expect(screen.getByLabelText('Answer feedback mode')).toBeInTheDocument();
   });
@@ -982,7 +975,7 @@ describe('review UI', () => {
 
     const working = await screen.findByText('Working');
     expect(working.closest('article')).toHaveClass('pending');
-    expect(screen.getByRole('status')).toHaveTextContent('Agent is still running...');
+    expect(screen.queryByText('Agent is still running...')).not.toBeInTheDocument();
     await waitFor(() => expect(messages.scrollTop).toBe(500));
 
     act(() => {
@@ -994,11 +987,11 @@ describe('review UI', () => {
     });
     expect(await screen.findByText('Partial answer')).toBeInTheDocument();
     expect(screen.getByText('Partial answer').closest('article')).toHaveClass('pending');
-    expect(screen.getByRole('status')).toHaveTextContent('Agent is still running...');
+    expect(screen.queryByText('Agent is still running...')).not.toBeInTheDocument();
     act(() => {
       listeners.complete.forEach((listener) => listener({ requestId: 'request-1', messageId: 'assistant-1' }));
     });
-    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Partial answer').closest('article')).not.toHaveClass('pending'));
   });
 
   it('refreshes the selected record after an agent run completes', async () => {
@@ -1153,7 +1146,7 @@ describe('review UI', () => {
     expect(screen.getAllByText('persona: Value must be one of: TPM, developer, SME').length).toBeGreaterThan(0);
     expect(screen.queryByText(/\(missing\)/)).not.toBeInTheDocument();
     expect(screen.queryByText(/\(not allowed\)/)).not.toBeInTheDocument();
-    expect((screen.getByLabelText('persona') as HTMLSelectElement).options[0]?.text).toBe('');
+    expect(screen.queryByRole('combobox', { name: 'persona' })).not.toBeInTheDocument();
   });
 
   it('preserves chat history across project changes and clears it only on request', async () => {
@@ -1388,17 +1381,16 @@ describe('review UI', () => {
     };
     const feedbackConfig = {
       properties: {
-        '/id': { path: '/id', target: 'ID', tab: 'Record', supportsEdit: true, feedback: 'none' as const, comments: false, editMode: 'inline' as const },
+        '/id': { path: '/id', target: 'ID', tab: 'Record', feedback: 'none' as const, comments: false, editMode: 'inline' as const },
         '/persona': {
           path: '/persona',
           target: 'Persona',
           tab: 'Record',
-          supportsEdit: true,
           feedback: 'none' as const,
           comments: false,
           editMode: 'inline' as const
         },
-        '/turns': { path: '/turns', target: 'Turns', tab: 'Record', supportsEdit: false, feedback: 'none' as const, comments: false, editMode: 'none' as const }
+        '/turns': { path: '/turns', target: 'Turns', tab: 'Record', feedback: 'none' as const, comments: false, editMode: 'none' as const }
       }
     };
     const recordDetail = (data: Record<string, unknown>) => {
@@ -1468,6 +1460,232 @@ describe('review UI', () => {
     expect(stagedData).toEqual({ id: 'q99', persona: 'developer' });
   });
 
+  it('stages inline edits for string arrays from the array field', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        tags: { type: 'array', items: { type: 'string' } }
+      }
+    };
+    const feedbackConfig = {
+      properties: {
+        '/tags': { path: '/tags', target: 'Tags', tab: 'Main', feedback: 'none' as const, comments: false, editMode: 'inline' as const }
+      }
+    };
+    const recordDetail = (tags: string[]) => ({
+      projectId: 'sample-project',
+      recordId: 'record-1',
+      displayName: 'record-1',
+      data: { tags },
+      schema,
+      validationIssues: [],
+      renderTree: {
+        kind: 'object' as const,
+        label: 'record',
+        path: '',
+        children: [
+          {
+            kind: 'array' as const,
+            label: 'tags',
+            path: '/tags',
+            items: tags.map((tag, index) => ({
+              kind: 'value' as const,
+              label: String(index),
+              path: `/tags/${index}`,
+              value: tag,
+              type: 'string',
+              validationIssues: []
+            })),
+            validationIssues: []
+          }
+        ],
+        validationIssues: []
+      },
+      feedbackHistory: {}
+    });
+    let stagedTags: string[] = ['domain:legal', 'turns:multi'];
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema,
+      records: [{ id: 'record-1', displayName: 'record-1' }],
+      feedbackConfig
+    });
+    vi.mocked(api.getRecord).mockResolvedValue(recordDetail(stagedTags));
+    vi.mocked(api.updateRecordData).mockImplementation(async (_projectId, _recordId, data) => {
+      stagedTags = (data as { tags: string[] }).tags;
+      return recordDetail(stagedTags);
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'record-1' }));
+    const tagsSection = (await screen.findByText('tags', { selector: '.field-label' })).closest('section') as HTMLElement;
+    expect(within(tagsSection).getByText('2 items')).toBeInTheDocument();
+    expect(within(tagsSection).queryByText('0')).not.toBeInTheDocument();
+    expect(within(tagsSection).queryByText('1')).not.toBeInTheDocument();
+    expect(tagsSection.querySelector('textarea')).toBeNull();
+    expect(await within(tagsSection).findByLabelText('tags item 1')).toHaveValue('domain:legal');
+    expect(within(tagsSection).getByLabelText('tags item 2')).toHaveValue('turns:multi');
+    const addTagInput = within(tagsSection).getByLabelText('tags new item');
+    expect(addTagInput).toHaveValue('');
+    expect(screen.queryByText('Tags > *')).not.toBeInTheDocument();
+    await userEvent.type(addTagInput, 'source:sme');
+
+    await waitFor(() => expect(api.updateRecordData).toHaveBeenLastCalledWith('sample-project', 'record-1', { tags: ['domain:legal', 'turns:multi', 'source:sme'] }));
+    expect(stagedTags).toEqual(['domain:legal', 'turns:multi', 'source:sme']);
+    await waitFor(() => expect(within(tagsSection).getByText('3 items')).toBeInTheDocument());
+    expect(within(tagsSection).getByLabelText('tags new item')).toHaveValue('');
+  });
+
+  it('renders string arrays without numeric labels in read-only mode', () => {
+    render(
+      <RenderTree
+        node={{
+          kind: 'array',
+          label: 'tags',
+          path: '/tags',
+          items: [
+            { kind: 'value', label: '0', path: '/tags/0', value: 'domain:legal', type: 'string', validationIssues: [] },
+            { kind: 'value', label: '1', path: '/tags/1', value: 'turns:multi', type: 'string', validationIssues: [] }
+          ],
+          validationIssues: []
+        }}
+        feedbackConfig={{
+          properties: {
+            '/tags': { path: '/tags', target: 'Tags', tab: 'Main', feedback: 'none', comments: false, editMode: 'none' }
+          }
+        }}
+        history={{}}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={vi.fn()}
+      />
+    );
+
+    const tagsSection = (screen.getByText('tags', { selector: '.field-label' })).closest('section') as HTMLElement;
+    expect(within(tagsSection).getByText('2 items')).toBeInTheDocument();
+    expect(within(tagsSection).queryByText('0')).not.toBeInTheDocument();
+    expect(within(tagsSection).queryByText('1')).not.toBeInTheDocument();
+    expect(tagsSection.querySelector('textarea')).toBeNull();
+    expect(within(tagsSection).getByText('domain:legal', { selector: 'output' })).toHaveClass('array-string-output');
+    expect(within(tagsSection).getByText('domain:legal', { selector: 'output' })).not.toHaveClass('inline-edit-value');
+    expect(within(tagsSection).getByText('turns:multi', { selector: 'output' })).toHaveClass('array-string-output');
+    expect(within(tagsSection).queryByLabelText('tags new item')).not.toBeInTheDocument();
+  });
+
+  it('stages logged string-array edits with row inputs instead of a textarea', async () => {
+    const onChangeFeedbackDraft = vi.fn();
+    render(
+      <RenderTree
+        node={{
+          kind: 'array',
+          label: 'tags',
+          path: '/tags',
+          items: [{ kind: 'value', label: '0', path: '/tags/0', value: 'domain:legal', type: 'string', validationIssues: [] }],
+          validationIssues: []
+        }}
+        feedbackConfig={{
+          properties: {
+            '/tags': { path: '/tags', target: 'Tags', tab: 'Main', feedback: 'none', comments: false, editMode: 'logged' }
+          }
+        }}
+        history={{}}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={vi.fn()}
+        feedbackDrafts={{}}
+        onChangeFeedbackDraft={onChangeFeedbackDraft}
+      />
+    );
+
+    const tagsSection = (screen.getByText('tags', { selector: '.field-label' })).closest('section') as HTMLElement;
+    expect(within(tagsSection).queryByText('0')).not.toBeInTheDocument();
+    expect(tagsSection.querySelector('textarea')).toBeNull();
+    await userEvent.type(within(tagsSection).getByLabelText('tags new item'), 'source:sme');
+
+    expect(onChangeFeedbackDraft).toHaveBeenLastCalledWith('/tags', expect.objectContaining({ editValue: 'domain:legal\nsource:sme' }));
+    expect(within(tagsSection).getByText('2 items')).toBeInTheDocument();
+  });
+
+  it('formats string-array history values as comma-delimited lists', async () => {
+    render(
+      <RenderTree
+        node={{
+          kind: 'array',
+          label: 'tags',
+          path: '/tags',
+          items: [
+            { kind: 'value', label: '0', path: '/tags/0', value: 'domain:legal', type: 'string', validationIssues: [] },
+            { kind: 'value', label: '1', path: '/tags/1', value: 'source:sme', type: 'string', validationIssues: [] }
+          ],
+          validationIssues: []
+        }}
+        feedbackConfig={{
+          properties: {
+            '/tags': { path: '/tags', target: 'Tags', tab: 'Main', feedback: 'none', comments: false, editMode: 'logged' }
+          }
+        }}
+        history={{
+          '/tags': {
+            feedback: [],
+            comments: [],
+            edits: [{ value: 'domain:legal\nsource:sme', username: 'sme@example.com', timestamp: '2026-06-01T20:00:00.000Z' }],
+            original: '["domain:legal","turns:multi"]'
+          }
+        }}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={vi.fn()}
+        feedbackDrafts={{}}
+        onChangeFeedbackDraft={vi.fn()}
+      />
+    );
+
+    await userEvent.click(screen.getByText('History (2)'));
+    const historyLines = screen.getAllByText(/^(original:|edit:)$/).map((element) => element.closest('.history-line')?.textContent);
+    expect(historyLines).toEqual(['edit:domain:legal, source:sme', 'original:domain:legal, turns:multi']);
+  });
+
+  it('renders empty original values in history', async () => {
+    render(
+      <RenderTree
+        node={{
+          kind: 'value',
+          label: 'bucket',
+          path: '/bucket',
+          value: 'new bucket value',
+          type: 'string',
+          validationIssues: []
+        }}
+        feedbackConfig={{
+          properties: {
+            '/bucket': { path: '/bucket', target: 'Bucket', tab: 'Main', feedback: 'none', comments: false, editMode: 'logged' }
+          }
+        }}
+        history={{
+          '/bucket': {
+            feedback: [],
+            comments: [],
+            edits: [
+              { value: 'new bucket value', username: 'sme@example.com', timestamp: '2026-06-01T20:00:00.000Z' },
+              { value: 'one more change', username: 'sme@example.com', timestamp: '2026-06-01T20:01:00.000Z' }
+            ],
+            original: ''
+          }
+        }}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={vi.fn()}
+      />
+    );
+
+    await userEvent.click(screen.getByText('History (3)'));
+    const historyLines = screen.getAllByText(/^(original:|edit:)$/).map((element) => element.closest('.history-line')?.textContent);
+    expect(historyLines).toEqual(['edit:one more change', 'edit:new bucket value', 'original:(empty)']);
+  });
+
   it('serializes inline edit staging so older responses cannot overwrite newer draft data', async () => {
     const schema = {
       type: 'object',
@@ -1477,7 +1695,7 @@ describe('review UI', () => {
     };
     const feedbackConfig = {
       properties: {
-        '/answer': { path: '/answer', target: 'Answer', tab: 'Record', supportsEdit: true, feedback: 'none' as const, comments: false, editMode: 'inline' as const }
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Record', feedback: 'none' as const, comments: false, editMode: 'inline' as const }
       }
     };
     const recordDetail = (answer: string) => ({
@@ -1645,7 +1863,7 @@ describe('review UI', () => {
   it('warns before refreshing records when the selected record has unsaved changes', async () => {
     const feedbackConfig = {
       properties: {
-        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'good_fair_bad' as const, comments: false, editMode: 'none' as const }
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'good_fair_bad' as const, comments: false, editMode: 'none' as const }
       }
     };
     const recordDetail = {
@@ -1743,7 +1961,7 @@ describe('review UI', () => {
   it('warns before opening a newly created project with unsaved changes', async () => {
     const feedbackConfig = {
       properties: {
-        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'good_fair_bad' as const, comments: false, editMode: 'none' as const }
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'good_fair_bad' as const, comments: false, editMode: 'none' as const }
       }
     };
     const recordDetail = {
@@ -1824,7 +2042,7 @@ describe('review UI', () => {
       records: [{ id: 'valid-record', displayName: 'valid-record' }],
       feedbackConfig: {
         properties: {
-          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none', comments: false, editMode: 'none' }
+          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'none', comments: false, editMode: 'none' }
         }
       }
     });
@@ -1862,7 +2080,7 @@ describe('review UI', () => {
   it('applies saved feedback configuration to the currently displayed record', async () => {
     const feedbackConfig = {
       properties: {
-        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none' as const, comments: false, editMode: 'none' as const }
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'none' as const, comments: false, editMode: 'none' as const }
       }
     };
     const configuredFeedbackConfig = {
@@ -1909,8 +2127,8 @@ describe('review UI', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Configure' }));
     await userEvent.selectOptions(await screen.findByLabelText('Answer feedback mode'), 'good_fair_bad');
     await userEvent.click(screen.getByLabelText('Answer comment'));
-    await userEvent.selectOptions(screen.getByLabelText('Answer editable'), 'logged');
-    await userEvent.click(within(screen.getByRole('dialog', { name: 'Feedback configuration' })).getByRole('button', { name: 'Save' }));
+    await userEvent.selectOptions(screen.getByLabelText('Answer edit mode'), 'logged');
+    await userEvent.click(within(screen.getByRole('dialog', { name: 'Project configuration' })).getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(api.saveFeedbackConfig).toHaveBeenCalledWith('sample-project', configuredFeedbackConfig));
     expect(await screen.findByRole('radio', { name: 'Good' })).toBeInTheDocument();
@@ -1923,9 +2141,11 @@ describe('review UI', () => {
   it('configures feedback, submits, and toggles history', async () => {
     const feedbackConfig = {
       properties: {
-        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'none' as const, comments: false, editMode: 'none' as const },
-        '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', supportsEdit: false, feedback: 'none' as const, comments: false, editMode: 'none' as const },
-        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true, feedback: 'none' as const, comments: false, editMode: 'none' as const }
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'none' as const, comments: false, editMode: 'none' as const },
+        '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', feedback: 'none' as const, comments: false },
+        '/evidence/*': { path: '/evidence/*', target: 'Evidence > *', tab: 'inherit', feedback: 'none' as const, comments: false },
+        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', feedback: 'none' as const, comments: false, editMode: 'none' as const },
+        '/tags': { path: '/tags', target: 'Tags', tab: 'Main', feedback: 'none' as const, comments: false, editMode: 'none' as const }
       }
     };
     vi.mocked(api.getBootstrap).mockResolvedValue({
@@ -1940,7 +2160,8 @@ describe('review UI', () => {
         type: 'object',
         properties: {
           answer: { type: 'string' },
-          evidence: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' } } } }
+          evidence: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' } } } },
+          tags: { type: 'array' }
         }
       },
       records: [{ id: 'valid-record', displayName: 'valid-record' }],
@@ -1996,16 +2217,25 @@ describe('review UI', () => {
     render(<App />);
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
     await userEvent.click(await screen.findByRole('button', { name: 'Configure' }));
-    expect(await screen.findByRole('dialog', { name: 'Feedback configuration' })).toBeInTheDocument();
+    const configDialog = await screen.findByRole('dialog', { name: 'Project configuration' });
+    expect(configDialog).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'TAB' })).not.toBeInTheDocument();
+    expect(within(configDialog).getAllByRole('columnheader').map((header) => header.textContent)).toEqual(['TARGET', 'FEEDBACK', 'COMMENT', 'EDIT MODE', 'PRESENTATION', 'MAPPING']);
     expect(screen.getByLabelText('Evidence feedback mode')).toBeInTheDocument();
+    expect(screen.getByLabelText('Evidence > * feedback mode')).toBeInTheDocument();
     expect(screen.getByLabelText('Evidence > Id feedback mode')).toBeInTheDocument();
-    expect(screen.getByLabelText('Evidence editable')).toBeDisabled();
-    expect(screen.getByLabelText('Evidence > Id editable')).not.toBeDisabled();
-    expect(screen.getByLabelText('Answer editable')).toHaveDisplayValue('none');
+    expect(screen.getByLabelText('Tags feedback mode')).toBeInTheDocument();
+    expect(screen.getByLabelText('Tags edit mode')).not.toBeDisabled();
+    expect(screen.queryByText('Tags > *')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Evidence edit mode')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Evidence > * edit mode')).not.toBeInTheDocument();
+    expect(screen.queryByText('array')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Evidence > * canonical mapping')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Evidence > Id edit mode')).not.toBeDisabled();
+    expect(screen.getByLabelText('Answer edit mode')).toHaveDisplayValue('none');
     expect(screen.queryByRole('option', { name: 'text_only' })).not.toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('Answer feedback mode'), 'good_fair_bad');
-    await userEvent.selectOptions(screen.getByLabelText('Answer editable'), 'logged');
+    await userEvent.selectOptions(screen.getByLabelText('Answer edit mode'), 'logged');
     await userEvent.click(screen.getByLabelText('Answer comment'));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
@@ -2046,7 +2276,7 @@ describe('review UI', () => {
   it('warns before closing or switching records with unsaved changes', async () => {
     const feedbackConfig = {
       properties: {
-        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true, feedback: 'good_fair_bad' as const, comments: false, editMode: 'none' as const }
+        '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'good_fair_bad' as const, comments: false, editMode: 'none' as const }
       }
     };
     const recordDetail = (recordId: string, answer: string) => ({
@@ -2186,7 +2416,7 @@ describe('review UI', () => {
     expect(await screen.findByText('Second answer')).toBeInTheDocument();
   });
 
-  it('renders schema descriptions inline, enum values as drop-downs, and array objects collapsed with counts', async () => {
+  it('renders schema descriptions inline, enum values as plain read-only text, and array objects collapsed with counts', async () => {
     const node: RenderNode = {
       kind: 'object',
       label: 'record',
@@ -2233,7 +2463,8 @@ describe('review UI', () => {
 
     const personaHeading = screen.getByRole('heading', { name: 'persona The persona that might ask this question.' });
     expect(personaHeading).toBeInTheDocument();
-    expect(screen.getByLabelText('persona')).toHaveDisplayValue('developer');
+    expect(screen.queryByRole('combobox', { name: 'persona' })).not.toBeInTheDocument();
+    expect(screen.getByText('developer', { selector: 'output' })).toBeInTheDocument();
     expect(screen.getByText('evidence')).toBeInTheDocument();
     expect(screen.getByText('2 items')).toBeInTheDocument();
     expect(screen.queryByText('0')).not.toBeInTheDocument();
@@ -2243,6 +2474,27 @@ describe('review UI', () => {
 
     await userEvent.click(screen.getByText('doc-1', { selector: '.array-item-identifier' }));
     expect(screen.getByText('README')).toBeVisible();
+  });
+
+  it('renders not-set placeholders for schema-backed empty and missing values', () => {
+    const node: RenderNode = {
+      kind: 'object',
+      label: 'record',
+      children: [
+        { kind: 'value', label: 'missingField', value: undefined, validationIssues: [] },
+        { kind: 'value', label: 'emptyField', value: '', validationIssues: [] },
+        { kind: 'value', label: 'nullField', value: null, validationIssues: [] },
+        { kind: 'array', label: 'emptyArray', items: [], validationIssues: [] }
+      ],
+      validationIssues: []
+    };
+
+    render(<RenderTree node={node} />);
+
+    expect(screen.getByRole('heading', { name: 'missingField' }).closest('section')).toHaveTextContent('(not set)');
+    expect(screen.getByRole('heading', { name: 'emptyField' }).closest('section')).toHaveTextContent('(not set)');
+    expect(screen.getByRole('heading', { name: 'nullField' }).closest('section')).toHaveTextContent('(not set)');
+    expect(screen.getByRole('heading', { name: 'emptyArray 0 items' }).closest('section')).toHaveTextContent('(not set)');
   });
 
   it('renders editable enum feedback as a drop-down', async () => {
@@ -2265,7 +2517,6 @@ describe('review UI', () => {
               path: '/persona',
               target: 'Persona',
               tab: 'Main',
-              supportsEdit: true,
               feedback: 'none',
               comments: false,
               editMode: 'logged'
@@ -2278,6 +2529,7 @@ describe('review UI', () => {
     );
 
     expect(screen.getByLabelText('Edit')).toHaveDisplayValue('developer');
+    expect(screen.getByText('logged')).toHaveClass('field-edit-mode-logged');
     expect(screen.queryByRole('option', { name: 'Choose edit' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Stage feedback' })).not.toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText('Edit'), 'SME');
@@ -2304,7 +2556,6 @@ describe('review UI', () => {
               path: '/answer',
               target: 'Answer',
               tab: 'Main',
-              supportsEdit: true,
               feedback: 'none',
               comments: false,
               editMode: 'inline'
@@ -2313,7 +2564,6 @@ describe('review UI', () => {
               path: '/persona',
               target: 'Persona',
               tab: 'Main',
-              supportsEdit: true,
               feedback: 'none',
               comments: false,
               editMode: 'inline'
@@ -2329,6 +2579,7 @@ describe('review UI', () => {
     const answer = screen.getByLabelText('answer');
     expect(answer).toHaveAttribute('rows', '1');
     expect(answer).toHaveValue('Original answer');
+    expect(screen.getAllByText('inline').length).toBeGreaterThan(0);
     await userEvent.clear(answer);
     await userEvent.type(answer, 'Inline draft');
     expect(answer).toHaveValue('Inline draft');
@@ -2357,7 +2608,6 @@ describe('review UI', () => {
               path: '/persona',
               target: 'Persona',
               tab: 'Main',
-              supportsEdit: true,
               feedback: 'none',
               comments: false,
               editMode: 'logged'
@@ -2380,8 +2630,9 @@ describe('review UI', () => {
       />
     );
 
-    expect(screen.getByLabelText('persona')).toHaveDisplayValue('SME');
-    expect(screen.getByLabelText('persona')).not.toHaveClass('edited-value');
+    expect(screen.queryByLabelText('persona')).not.toBeInTheDocument();
+    expect(screen.getByText('SME', { selector: 'output' })).toBeInTheDocument();
+    expect(screen.getByText('logged', { selector: '.field-edit-mode' })).toBeInTheDocument();
     expect(screen.getByLabelText('Edit')).toHaveDisplayValue('SME');
     expect(screen.queryByRole('button', { name: 'Stage feedback' })).not.toBeInTheDocument();
 

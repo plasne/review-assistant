@@ -40,15 +40,7 @@ export type ValidationIssue = {
 };
 
 export type FieldPresentation = 'chat-request' | 'chat-response' | 'evidence-list';
-
-export type DisplayConfigEntry = {
-  path: string;
-  presentation: FieldPresentation;
-};
-
-export type DisplayConfig = {
-  properties: Record<string, DisplayConfigEntry>;
-};
+export type CanonicalMapping = 'turns' | 'request' | 'response' | 'evidence' | 'facts' | 'tags';
 
 export type RenderNode =
   | {
@@ -121,13 +113,14 @@ export type FeedbackTarget = {
   path: string;
   target: string;
   tab: string;
-  supportsEdit: boolean;
+  editMode?: FeedbackEditMode;
 };
 
 export type FeedbackConfigEntry = FeedbackTarget & {
   feedback: FeedbackMode;
   comments: boolean;
-  editMode: FeedbackEditMode;
+  presentation?: FieldPresentation;
+  mapping?: CanonicalMapping;
 };
 
 export type FeedbackConfig = {

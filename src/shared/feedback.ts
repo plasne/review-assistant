@@ -1,9 +1,11 @@
 import type {
+  CanonicalMapping,
   FeedbackConfig,
   FeedbackEditMode,
   FeedbackConfigEntry,
   FeedbackEntry,
   FeedbackHistory,
+  FieldPresentation,
   FeedbackMode,
   FeedbackSubmissionInput,
   FeedbackTarget,
@@ -12,6 +14,8 @@ import type {
 
 export const FEEDBACK_MODES: FeedbackMode[] = ['none', 'good_fair_bad', 'thumbs', 'stars_5'];
 export const FEEDBACK_EDIT_MODES: FeedbackEditMode[] = ['none', 'logged', 'inline'];
+export const FIELD_PRESENTATIONS: FieldPresentation[] = ['chat-request', 'chat-response', 'evidence-list'];
+export const CANONICAL_MAPPINGS: CanonicalMapping[] = ['turns', 'request', 'response', 'evidence', 'facts', 'tags'];
 export const USERNAME_VALIDATION_MESSAGE = 'USERNAME environment variable not configured. Please set USERNAME in your .env file.';
 
 const FEEDBACK_SUFFIXES = ['_feedback', '_edits', '_comments'];
@@ -81,18 +85,28 @@ export const deriveFeedbackTargets = (schema: unknown): FeedbackTarget[] => {
 
 export const normalizeFeedbackConfig = (schema: unknown, config: unknown): FeedbackConfig => {
   const existing = readConfigEntries(config);
+  const assignedMappings = new Set<CanonicalMapping>();
   const properties: Record<string, FeedbackConfigEntry> = {};
-  for (const target of deriveFeedbackTargets(schema)) {
+  const targets = deriveFeedbackTargets(schema);
+  for (const target of targets) {
     const current = existing[target.path];
-    properties[target.path] = {
+    const mapping =
+      current?.mapping && supportsCanonicalMapping(target) && !assignedMappings.has(current.mapping) ? current.mapping : undefined;
+    if (mapping) {
+      assignedMappings.add(mapping);
+    }
+    const supportsEditMode = target.editMode !== undefined || isCanonicalStringArrayTarget(target, targets, mapping);
+    const entry: FeedbackConfigEntry = {
       path: target.path,
       target: target.target,
       tab: current?.tab && current.tab.trim() ? current.tab : target.tab,
       feedback: current && FEEDBACK_MODES.includes(current.feedback) ? current.feedback : 'none',
       comments: current?.comments === true,
-      supportsEdit: target.supportsEdit,
-      editMode: target.supportsEdit && current && FEEDBACK_EDIT_MODES.includes(current.editMode) ? current.editMode : 'none'
+      ...(current?.presentation ? { presentation: current.presentation } : {}),
+      ...(mapping ? { mapping } : {}),
+      ...(supportsEditMode ? { editMode: current && FEEDBACK_EDIT_MODES.includes(current.editMode ?? 'none') ? (current.editMode ?? 'none') : 'none' } : {})
     };
+    properties[target.path] = entry;
   }
   return { properties };
 };
@@ -110,6 +124,24 @@ export const feedbackTargetMatchesPath = (targetPath: string, propertyPath: stri
     )
   );
 };
+
+export const toPersistedFeedbackConfig = (config: FeedbackConfig): unknown => ({
+  properties: Object.fromEntries(
+    Object.entries(config.properties).map(([path, entry]) => [
+      path,
+      {
+        path: entry.path,
+        target: entry.target,
+        tab: entry.tab,
+        feedback: entry.feedback,
+        comments: entry.comments,
+        ...(entry.presentation ? { presentation: entry.presentation } : {}),
+        ...(entry.mapping ? { mapping: entry.mapping } : {}),
+        ...(entry.editMode !== undefined ? { edit_mode: entry.editMode } : {})
+      }
+    ])
+  )
+});
 
 export const feedbackPropertyBase = (propertyPath: string): string => {
   const parts = propertyPath.split('/').filter(Boolean).map(unescapePointer);
@@ -183,10 +215,11 @@ export const mergeFeedbackEntries = (
   };
   const existingRecords = readFeedbackRecordsForStorage(record[names.feedback]);
   const current = existingRecords.length > 0 ? existingRecords : feedbackHistoryToRecords(readFeedbackHistory(record, input.propertyPath));
-  const original = readFeedbackOriginal(record[names.feedback]) ?? (edit ? formatStoredValue(readPropertyValue(record, input.propertyPath)) : undefined);
+  const currentValue = readPropertyValue(record, input.propertyPath);
+  const original = readFeedbackOriginal(record[names.feedback]) ?? (edit ? formatStoredValue(currentValue) : undefined);
   record[names.feedback] = [...(original !== undefined ? [{ original }] : []), ...current, entry];
   if (edit) {
-    writePropertyValue(record, input.propertyPath, edit);
+    writePropertyValue(record, input.propertyPath, coerceStoredEditValue(currentValue, edit));
   }
   delete record[names.comments];
   delete record[names.edits];
@@ -200,14 +233,19 @@ export const mergeFeedbackEntries = (
 export const isFeedbackPropertyName = (key: string): boolean => FEEDBACK_SUFFIXES.some((suffix) => key.endsWith(suffix));
 
 const collectTarget = (label: string, schema: JsonSchema, segments: string[], targets: FeedbackTarget[], tab: string): void => {
-  const path = `/${segments.map((segment) => (segment === ARRAY_ITEM_PATH_SEGMENT ? segment : escapePointer(segment))).join('/')}`;
+  const path = feedbackTargetPath(segments);
   const resolved = resolveSchema(schema);
   const type = inferSchemaType(resolved);
-  targets.push({ path, target: formatTarget(segments), tab, supportsEdit: type !== 'array' });
+  const scalarStringArray = type === 'array' && isScalarStringArraySchema(resolved);
+  targets.push({ path, target: formatTarget(segments), tab, ...(type !== 'array' || scalarStringArray ? { editMode: 'none' as const } : {}) });
   if (type === 'array') {
     const itemSchema = isSchema(resolved.items) ? resolveSchema(resolved.items) : undefined;
     if (itemSchema && inferSchemaType(itemSchema) === 'object' && isSchemaMap(itemSchema.properties)) {
-      collectTarget(ARRAY_ITEM_PATH_SEGMENT, itemSchema, [...segments, ARRAY_ITEM_PATH_SEGMENT], targets, 'inherit');
+      const itemSegments = [...segments, ARRAY_ITEM_PATH_SEGMENT];
+      targets.push({ path: feedbackTargetPath(itemSegments), target: formatTarget(itemSegments), tab: 'inherit' });
+      for (const [childLabel, childSchema] of Object.entries(itemSchema.properties)) {
+        collectTarget(childLabel, childSchema, [...itemSegments, childLabel], targets, 'inherit');
+      }
     }
     return;
   }
@@ -217,6 +255,13 @@ const collectTarget = (label: string, schema: JsonSchema, segments: string[], ta
   for (const [childLabel, childSchema] of Object.entries(resolved.properties)) {
     collectTarget(childLabel, childSchema, [...segments, childLabel], targets, 'inherit');
   }
+};
+
+const feedbackTargetPath = (segments: string[]): string => `/${segments.map((segment) => (segment === ARRAY_ITEM_PATH_SEGMENT ? segment : escapePointer(segment))).join('/')}`;
+
+const isScalarStringArraySchema = (schema: JsonSchema): boolean => {
+  const itemSchema = isSchema(schema.items) ? resolveSchema(schema.items) : undefined;
+  return itemSchema ? inferSchemaType(itemSchema) === 'string' : false;
 };
 
 const readConfigEntries = (config: unknown): Record<string, FeedbackConfigEntry> => {
@@ -230,14 +275,22 @@ const readConfigEntries = (config: unknown): Record<string, FeedbackConfigEntry>
           path,
           target: typeof entry.target === 'string' ? entry.target : path,
           tab: typeof entry.tab === 'string' ? entry.tab : 'inherit',
-          supportsEdit: entry.supportsEdit !== false,
           feedback: FEEDBACK_MODES.includes(entry.feedback as FeedbackMode) ? (entry.feedback as FeedbackMode) : 'none',
           comments: entry.comments === true,
-          editMode: FEEDBACK_EDIT_MODES.includes(entry.editMode as FeedbackEditMode) ? (entry.editMode as FeedbackEditMode) : 'none'
+          ...(FIELD_PRESENTATIONS.includes(entry.presentation as FieldPresentation) ? { presentation: entry.presentation as FieldPresentation } : {}),
+          ...(CANONICAL_MAPPINGS.includes(entry.mapping as CanonicalMapping) ? { mapping: entry.mapping as CanonicalMapping } : {}),
+          ...(FEEDBACK_EDIT_MODES.includes((entry.editMode ?? entry.edit_mode) as FeedbackEditMode)
+            ? { editMode: (entry.editMode ?? entry.edit_mode) as FeedbackEditMode }
+            : {})
         }
       ])
   );
 };
+
+const supportsCanonicalMapping = (target: FeedbackTarget): boolean => !target.target.endsWith(' > *');
+
+const isCanonicalStringArrayTarget = (target: FeedbackTarget, targets: FeedbackTarget[], mapping: CanonicalMapping | undefined): boolean =>
+  mapping === 'tags' && !targets.some((candidate) => candidate.path === `${target.path}/${ARRAY_ITEM_PATH_SEGMENT}`);
 
 const collectWildcardFeedbackHistory = (record: Record<string, unknown>, targetPath: string, history: Record<string, FeedbackHistory>): void => {
   const targetSegments = targetPath.split('/').filter(Boolean);
@@ -363,7 +416,7 @@ const readPropertyValue = (record: Record<string, unknown>, propertyPath: string
   return current;
 };
 
-const writePropertyValue = (record: Record<string, unknown>, propertyPath: string, value: string): void => {
+const writePropertyValue = (record: Record<string, unknown>, propertyPath: string, value: unknown): void => {
   const segments = propertyPath.split('/').filter(Boolean).map(unescapePointer);
   let current: unknown = record;
   for (const segment of segments.slice(0, -1)) {
@@ -378,6 +431,11 @@ const writePropertyValue = (record: Record<string, unknown>, propertyPath: strin
   }
   (current as Record<string, unknown>)[leaf] = value;
 };
+
+const coerceStoredEditValue = (currentValue: unknown, edit: string): string | string[] =>
+  Array.isArray(currentValue) && currentValue.every((item) => typeof item === 'string') ? parseStringArrayEditValue(edit) : edit;
+
+const parseStringArrayEditValue = (value: string): string[] => value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
 
 const formatStoredValue = (value: unknown): string => {
   if (value === undefined) {

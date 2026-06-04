@@ -71,12 +71,12 @@ describe('local storage adapter', () => {
     );
     await fs.writeFile(path.join(tempRoot, 'display-project', 'record-1.json'), JSON.stringify({ turns: [{ request: 'Question', response: 'Answer', evidence: [{ content: 'Source' }] }] }));
     await fs.writeFile(
-      path.join(tempRoot, 'display-project', '_display.json'),
+      path.join(tempRoot, 'display-project', '_config.json'),
       JSON.stringify({
         properties: {
-          '/turns/*/request': { path: '/turns/*/request', presentation: 'chat-request' },
-          '/turns/*/response': { path: '/turns/*/response', presentation: 'chat-response' },
-          '/turns/*/evidence': { path: '/turns/*/evidence', presentation: 'evidence-list' }
+          '/turns/*/request': { path: '/turns/*/request', target: 'Request', tab: 'Main', feedback: 'none', comments: false, presentation: 'chat-request', edit_mode: 'none' },
+          '/turns/*/response': { path: '/turns/*/response', target: 'Response', tab: 'Main', feedback: 'none', comments: false, presentation: 'chat-response', edit_mode: 'none' },
+          '/turns/*/evidence': { path: '/turns/*/evidence', target: 'Evidence', tab: 'Main', feedback: 'none', comments: false, presentation: 'evidence-list' }
         }
       })
     );
@@ -179,11 +179,11 @@ describe('local project creation', () => {
       JSON.stringify({ type: 'object', properties: { answer: { type: 'string' }, stale: { type: 'string' } } })
     );
     await fs.writeFile(
-      path.join(tempRoot, 'feedback-schema-project', '_feedback.json'),
+      path.join(tempRoot, 'feedback-schema-project', '_config.json'),
       JSON.stringify({
         properties: {
-          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'thumbs', comments: true, editMode: 'none' },
-          '/stale': { path: '/stale', target: 'Stale', tab: 'Main', feedback: 'stars_5', comments: true, editMode: 'logged' }
+          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'thumbs', comments: true, edit_mode: 'none' },
+          '/stale': { path: '/stale', target: 'Stale', tab: 'Main', feedback: 'stars_5', comments: true, edit_mode: 'logged' }
         }
       })
     );
@@ -297,11 +297,11 @@ describe('local project creation', () => {
       JSON.stringify({ type: 'object', properties: { answer: { type: 'string' }, request: { type: 'object', properties: { query: { type: 'string' } } } } })
     );
     await fs.writeFile(
-      path.join(tempRoot, 'feedback-project', '_feedback.json'),
+      path.join(tempRoot, 'feedback-project', '_config.json'),
       JSON.stringify({
         properties: {
-          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'good_fair_bad', comments: true, editMode: 'none' },
-          '/stale': { path: '/stale', target: 'Stale', tab: 'Main', feedback: 'stars_5', comments: true, editMode: 'logged' }
+          '/answer': { path: '/answer', target: 'Answer', tab: 'Main', feedback: 'good_fair_bad', comments: true, edit_mode: 'none' },
+          '/stale': { path: '/stale', target: 'Stale', tab: 'Main', feedback: 'stars_5', comments: true, edit_mode: 'logged' }
         }
       })
     );

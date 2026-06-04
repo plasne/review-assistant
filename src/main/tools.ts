@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentErrorEnvelope, LocalToolMetadata, ToolInvocationRequest, ToolInvocationResponse } from '../shared/types';
-import { stripFeedbackProperties } from '../shared/feedback';
+import type { AgentErrorEnvelope, CanonicalMapping, FeedbackConfig, LocalToolMetadata, ToolInvocationRequest, ToolInvocationResponse } from '../shared/types';
+import { CANONICAL_MAPPINGS, stripFeedbackProperties } from '../shared/feedback';
 import { validateRecord } from './schema';
 import type { StorageAdapter } from './storage';
 
@@ -37,13 +37,6 @@ type RegisteredTool = LocalToolDefinition & {
 };
 
 type JsonSchema = Record<string, unknown>;
-type ContainerCandidate = {
-  path: string;
-  description?: string;
-  itemCount: number | undefined;
-  containerSchema: JsonSchema;
-  itemSchema?: unknown;
-};
 type TurnTargetMode = 'append-array' | 'merge-object';
 type TurnTargetCandidate = {
   path: string;
@@ -116,18 +109,21 @@ const readRecordTool: LocalToolDefinition = {
   }
 };
 
-const getRecordContainerSchemaTool: LocalToolDefinition = {
-  name: 'getRecordContainerSchema',
+type CanonicalCandidate = {
+  path: string;
+  schema: JsonSchema;
+};
+type SchemaNodeCandidate = CanonicalCandidate & {
+  type: string | undefined;
+};
+
+const discoverCanonicalSchemaMappingsTool: LocalToolDefinition = {
+  name: 'discoverCanonicalSchemaMappings',
   description:
-    'List or inspect array containers in the currently selected record schema before saving search results. The optional containerPath is a JSON Pointer such as /evidence or /turns/0/references.',
+    'Discover schema paths that can be mapped to Review Assistant canonical record elements. Returns turns, request, response, evidence, facts, and tags candidates from the selected record schema, honoring explicit project _config.json mappings.',
   inputSchema: {
     type: 'object',
-    properties: {
-      containerPath: {
-        type: 'string',
-        description: 'Optional JSON Pointer to an array container in the selected record, for example /evidence or /turns/0/references.'
-      }
-    },
+    properties: {},
     additionalProperties: false
   },
   execute: async (request, context) => {
@@ -137,44 +133,16 @@ const getRecordContainerSchemaTool: LocalToolDefinition = {
     if (!context.selectedProjectId || !context.selectedRecordId) {
       return toolError(request.requestId, 'NO_RECORD_SELECTED', 'No record is currently displayed in the UI.', false);
     }
-    const containerPath = request.arguments.containerPath;
-    if (containerPath !== undefined && typeof containerPath !== 'string') {
-      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'containerPath must be a JSON Pointer string when provided.', false);
-    }
-
     try {
       const record = await context.storage.getRecord(context.selectedProjectId, context.selectedRecordId);
-      if (containerPath === undefined || containerPath.trim() === '') {
-        return {
-          requestId: request.requestId,
-          ok: true,
-          result: {
-            projectId: record.projectId,
-            recordId: record.recordId,
-            containers: listContainerCandidates(record.schema, record.data)
-          }
-        };
-      }
-      const path = assertJsonPointer(containerPath);
-      const containerSchema = schemaAtPointer(record.schema, path);
-      if (!isArraySchema(containerSchema)) {
-        return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', `Schema at ${path || '/'} is not an array container.`, false);
-      }
-      const currentValue = valueAtPointer(record.data, path);
+      const config = await context.storage.getFeedbackConfig(context.selectedProjectId);
       return {
         requestId: request.requestId,
         ok: true,
         result: {
           projectId: record.projectId,
           recordId: record.recordId,
-          container: {
-            path,
-            description: typeof containerSchema.description === 'string' ? containerSchema.description : undefined,
-            itemCount: Array.isArray(currentValue) ? currentValue.length : undefined,
-            containerSchema,
-            itemSchema: containerSchema.items,
-            currentValue
-          }
+          ...discoverCanonicalSchemaMappings(record.schema, config)
         }
       };
     } catch (error) {
@@ -642,7 +610,7 @@ const listToolsTool: LocalToolDefinition = {
 const builtInTools = [
   readRecordTool,
   getRecordSchemaTool,
-  getRecordContainerSchemaTool,
+  discoverCanonicalSchemaMappingsTool,
   saveGeneratedSchemaTool,
   saveSearchResultsTool,
   startTurnTool,
@@ -705,45 +673,116 @@ const toolError = (
   error: { code, message, retryable }
 });
 
-const listContainerCandidates = (schema: unknown, data: unknown): ContainerCandidate[] => {
-  if (!isSchema(schema)) {
-    return [];
+const discoverCanonicalSchemaMappings = (schema: unknown, config: FeedbackConfig): Record<CanonicalMapping, { candidates: CanonicalCandidate[] }> => {
+  const explicitMappings = new Map<CanonicalMapping, CanonicalCandidate>();
+  const explicitlyMappedPaths = new Set<string>();
+  for (const entry of Object.values(config.properties)) {
+    if (!entry.mapping || explicitMappings.has(entry.mapping)) {
+      continue;
+    }
+    const candidateSchema = schemaAtPointer(schema, entry.path);
+    explicitMappings.set(entry.mapping, { path: entry.path, schema: candidateSchema });
+    explicitlyMappedPaths.add(entry.path);
   }
-  return collectContainers(resolveSchema(schema), data, '');
+  const allCandidates = isSchema(schema) ? collectSchemaNodeCandidates(resolveSchema(schema), '') : [];
+  return Object.fromEntries(
+    CANONICAL_MAPPINGS.map((mapping) => {
+      const explicit = explicitMappings.get(mapping);
+      return [
+        mapping,
+        {
+          candidates: explicit ? [explicit] : implicitCanonicalCandidates(mapping, allCandidates, explicitMappings, explicitlyMappedPaths)
+        }
+      ];
+    })
+  ) as Record<CanonicalMapping, { candidates: CanonicalCandidate[] }>;
 };
 
-const collectContainers = (schema: JsonSchema, data: unknown, path: string): ContainerCandidate[] => {
+const collectSchemaNodeCandidates = (schema: JsonSchema, path: string): SchemaNodeCandidate[] => {
   const resolved = resolveSchema(schema);
-  const type = schemaType(resolved, data);
-  const current: ContainerCandidate[] =
-    type === 'array'
-      ? [
-          {
-            path,
-            description: typeof resolved.description === 'string' ? resolved.description : undefined,
-            itemCount: Array.isArray(data) ? data.length : undefined,
-            containerSchema: resolved,
-            itemSchema: resolved.items
-          }
-        ]
-      : [];
+  const type = schemaType(resolved, undefined);
+  const current: SchemaNodeCandidate[] = [{ path, schema: resolved, type }];
   if (type === 'object') {
     const properties = isSchemaMap(resolved.properties) ? resolved.properties : {};
-    const value = isPlainRecord(data) ? data : {};
     return [
       ...current,
       ...Object.entries(properties).flatMap(([key, childSchema]) =>
-        collectContainers(childSchema, value[key], `${path}/${escapePointer(key)}`)
+        collectSchemaNodeCandidates(childSchema, `${path}/${escapePointer(key)}`)
       )
     ];
   }
-  if (type === 'array' && isSchema(resolved.items) && Array.isArray(data)) {
-    return [
-      ...current,
-      ...data.flatMap((item, index) => collectContainers(resolved.items as JsonSchema, item, `${path}/${index}`))
-    ];
+  if (type === 'array' && isSchema(resolved.items)) {
+    return [...current, ...collectSchemaNodeCandidates(resolved.items, `${path}/*`)];
   }
   return current;
+};
+
+const implicitCanonicalCandidates = (
+  mapping: CanonicalMapping,
+  candidates: SchemaNodeCandidate[],
+  explicitMappings: Map<CanonicalMapping, CanonicalCandidate>,
+  explicitlyMappedPaths: Set<string>
+): CanonicalCandidate[] => {
+  const narrowed = narrowCandidatesByExplicitTurns(mapping, candidates, explicitMappings);
+  return narrowed
+    .filter((candidate) => !explicitlyMappedPaths.has(candidate.path))
+    .filter((candidate) => canonicalShapeMatches(mapping, candidate))
+    .filter((candidate) => canonicalNameMatches(mapping, candidate.path))
+    .map(({ path, schema }) => ({ path, schema }));
+};
+
+const narrowCandidatesByExplicitTurns = (
+  mapping: CanonicalMapping,
+  candidates: SchemaNodeCandidate[],
+  explicitMappings: Map<CanonicalMapping, CanonicalCandidate>
+): SchemaNodeCandidate[] => {
+  if (mapping === 'turns') {
+    return candidates;
+  }
+  const turns = explicitMappings.get('turns');
+  if (!turns) {
+    return candidates;
+  }
+  const prefix = turns.path.endsWith('/*') ? turns.path : `${turns.path}/*`;
+  return candidates.filter((candidate) => candidate.path.startsWith(`${prefix}/`));
+};
+
+const canonicalShapeMatches = (mapping: CanonicalMapping, candidate: SchemaNodeCandidate): boolean => {
+  if (mapping === 'request' || mapping === 'response') {
+    return candidate.type === 'string';
+  }
+  if (mapping === 'turns') {
+    return candidate.type === 'array' && isSchema(resolveSchema(candidate.schema).items) && schemaType(resolveSchema(resolveSchema(candidate.schema).items as JsonSchema), undefined) === 'object';
+  }
+  if (mapping === 'evidence') {
+    return candidate.type === 'array' && isSchema(resolveSchema(candidate.schema).items) && schemaType(resolveSchema(resolveSchema(candidate.schema).items as JsonSchema), undefined) === 'object';
+  }
+  if (mapping === 'facts' || mapping === 'tags') {
+    if (candidate.type !== 'array' || !isSchema(resolveSchema(candidate.schema).items)) {
+      return false;
+    }
+    const itemType = schemaType(resolveSchema(resolveSchema(candidate.schema).items as JsonSchema), undefined);
+    return itemType === 'object' || itemType === 'string';
+  }
+  return false;
+};
+
+const canonicalNameMatches = (mapping: CanonicalMapping, path: string): boolean => {
+  const normalizedSegments = pointerSegments(path).map(normalizeTurnField);
+  const last = normalizedSegments.at(-1) ?? '';
+  if (mapping === 'turns') {
+    return ['turn', 'turns', 'conversation', 'conversations', 'message', 'messages', 'history'].includes(last);
+  }
+  if (mapping === 'request') {
+    return inquiryFieldAliases.map(normalizeTurnField).includes(last);
+  }
+  if (mapping === 'response') {
+    return responseFieldAliases.map(normalizeTurnField).includes(last);
+  }
+  if (mapping === 'evidence') {
+    return evidenceFieldAliases.map(normalizeTurnField).includes(last);
+  }
+  return last === mapping;
 };
 
 const resolveTurnTarget = (schema: unknown, data: unknown, targetPath: string | undefined): TurnTargetCandidate => {

@@ -25,7 +25,7 @@ import type {
   RecordDetail,
   RecordSummary
 } from './types';
-import { FEEDBACK_EDIT_MODES, FEEDBACK_MODES } from './feedback';
+import { CANONICAL_MAPPINGS, FEEDBACK_EDIT_MODES, FEEDBACK_MODES, FIELD_PRESENTATIONS } from './feedback';
 
 export class ValidationError extends Error {
   constructor(message: string) {
@@ -223,6 +223,7 @@ export const assertFeedbackConfig = (value: unknown): FeedbackConfig => {
   if (!isRecord(value) || !isRecord(value.properties)) {
     throw new ValidationError('Invalid feedback configuration response.');
   }
+  const assignedMappings = new Set<string>();
   const properties = Object.fromEntries(
     Object.entries(value.properties).map(([path, entry]) => {
       if (!isRecord(entry) || !isString(entry.path) || !isString(entry.target) || !isString(entry.tab)) {
@@ -231,8 +232,20 @@ export const assertFeedbackConfig = (value: unknown): FeedbackConfig => {
       if (entry.path !== path || !FEEDBACK_MODES.includes(entry.feedback as FeedbackConfig['properties'][string]['feedback'])) {
         throw new ValidationError('Invalid feedback mode.');
       }
-      if (typeof entry.comments !== 'boolean' || !FEEDBACK_EDIT_MODES.includes(entry.editMode as FeedbackConfig['properties'][string]['editMode'])) {
+      if (typeof entry.comments !== 'boolean') {
         throw new ValidationError('Invalid feedback configuration flags.');
+      }
+      if (entry.editMode !== undefined && (!isString(entry.editMode) || !FEEDBACK_EDIT_MODES.includes(entry.editMode as NonNullable<FeedbackConfig['properties'][string]['editMode']>))) {
+        throw new ValidationError('Invalid feedback configuration flags.');
+      }
+      if (entry.presentation !== undefined && (!isString(entry.presentation) || !FIELD_PRESENTATIONS.includes(entry.presentation as NonNullable<FeedbackConfig['properties'][string]['presentation']>))) {
+        throw new ValidationError('Invalid field presentation.');
+      }
+      if (entry.mapping !== undefined) {
+        if (!isString(entry.mapping) || !CANONICAL_MAPPINGS.includes(entry.mapping as NonNullable<FeedbackConfig['properties'][string]['mapping']>) || assignedMappings.has(entry.mapping)) {
+          throw new ValidationError('Invalid canonical mapping.');
+        }
+        assignedMappings.add(entry.mapping);
       }
       return [
         path,
@@ -240,10 +253,11 @@ export const assertFeedbackConfig = (value: unknown): FeedbackConfig => {
           path,
           target: entry.target,
           tab: entry.tab,
-          supportsEdit: entry.supportsEdit !== false,
           feedback: entry.feedback,
           comments: entry.comments,
-          editMode: entry.supportsEdit === false ? 'none' : entry.editMode
+          ...(entry.presentation === undefined ? {} : { presentation: entry.presentation }),
+          ...(entry.mapping === undefined ? {} : { mapping: entry.mapping }),
+          ...(entry.editMode === undefined ? {} : { editMode: entry.editMode })
         }
       ];
     })

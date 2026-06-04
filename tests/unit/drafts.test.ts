@@ -157,7 +157,6 @@ const createStorage = (read: () => unknown, write: (value: unknown) => void): St
         path: '/answer',
         target: 'Answer',
         tab: 'Main',
-        supportsEdit: true,
         feedback: 'good_fair_bad',
         comments: false,
         editMode: 'logged'

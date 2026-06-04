@@ -131,7 +131,7 @@ section:focus-visible,
   display: flex;
   grid-area: 1 / 1 / -1 / -1;
   justify-content: center;
-  z-index: 10;
+  z-index: 100;
 }
 
 .login-modal {
@@ -196,7 +196,7 @@ section:focus-visible,
   inset: 0;
   justify-content: center;
   position: fixed;
-  z-index: 10;
+  z-index: 100;
 }
 
 .modal {
@@ -211,8 +211,10 @@ section:focus-visible,
 }
 
 .feedback-config-modal {
-  max-width: 62rem;
-  width: min(62rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  max-width: 72rem;
+  overflow: auto;
+  width: min(72rem, calc(100vw - 2rem));
 }
 
 .modal-help {
@@ -271,6 +273,9 @@ section:focus-visible,
 
 .feedback-config-table th {
   background: #27344d;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .feedback-config-table .checkbox-cell {
@@ -286,6 +291,21 @@ section:focus-visible,
   color: #f7fafc;
   padding: 0.35rem;
   width: 100%;
+}
+
+.array-string-editor {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.35rem 0;
+}
+
+.array-string-editor span {
+  color: #c8d4e3;
+  font-size: 0.8125rem;
+}
+
+.array-string-editor .inline-edit-value {
+  margin: 0;
 }
 
 .error-panel {
@@ -626,10 +646,30 @@ ul {
   padding: 0.0625rem 0.5rem;
 }
 
-.field output,
+.field-edit-mode {
+  border: 1px solid #6c89ad;
+  border-radius: 999px;
+  color: #d7e4f5;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 0.15rem 0.4rem;
+  text-transform: uppercase;
+}
+
+.field-edit-mode-inline {
+  background: #173a2a;
+  border-color: #4fb477;
+}
+
+.field-edit-mode-logged {
+  background: #3a2f17;
+  border-color: #d3a43d;
+}
+
 .enum-select,
-.inline-edit-value,
-pre {
+.inline-edit-value {
   background: #0d1320;
   border: 1px solid #30415f;
   border-radius: 0.375rem;
@@ -641,9 +681,29 @@ pre {
   white-space: pre-wrap;
 }
 
+.field output,
+pre {
+  color: #f7fafc;
+  display: block;
+  margin: 0.25rem 0 0.5rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+pre {
+  background: #111a2b;
+  border-left: 3px solid #637897;
+  border-radius: 0.25rem;
+  padding: 0.5rem 0.75rem;
+}
+
 .inline-edit-value {
   resize: vertical;
   width: 100%;
+}
+
+.array-string-output {
+  padding: 0.125rem 0;
 }
 
 .field output a,

@@ -30,6 +30,10 @@ const schema = {
           source: { type: 'string' }
         }
       }
+    },
+    tags: {
+      type: 'array',
+      items: { type: 'string' }
     }
   }
 };
@@ -37,14 +41,15 @@ const schema = {
 describe('feedback helpers', () => {
   it('derives schema-backed feedback targets and ignores stale config entries', () => {
     expect(deriveFeedbackTargets(schema)).toEqual([
-      { path: '/question', target: 'Question', tab: 'Main', supportsEdit: true },
-      { path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true },
-      { path: '/request', target: 'Request', tab: 'Main', supportsEdit: true },
-      { path: '/request/original_query', target: 'Request > Original Query', tab: 'inherit', supportsEdit: true },
-      { path: '/evidence', target: 'Evidence', tab: 'Main', supportsEdit: false },
-      { path: '/evidence/*', target: 'Evidence > *', tab: 'inherit', supportsEdit: true },
-      { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true },
-      { path: '/evidence/*/source', target: 'Evidence > Source', tab: 'inherit', supportsEdit: true }
+      { path: '/question', target: 'Question', tab: 'Main', editMode: 'none' },
+      { path: '/answer', target: 'Answer', tab: 'Main', editMode: 'none' },
+      { path: '/request', target: 'Request', tab: 'Main', editMode: 'none' },
+      { path: '/request/original_query', target: 'Request > Original Query', tab: 'inherit', editMode: 'none' },
+      { path: '/evidence', target: 'Evidence', tab: 'Main' },
+      { path: '/evidence/*', target: 'Evidence > *', tab: 'inherit' },
+      { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', editMode: 'none' },
+      { path: '/evidence/*/source', target: 'Evidence > Source', tab: 'inherit', editMode: 'none' },
+      { path: '/tags', target: 'Tags', tab: 'Main', editMode: 'none' }
     ]);
 
     expect(
@@ -82,16 +87,96 @@ describe('feedback helpers', () => {
     expect(feedbackConfigEntryForPath(config, '/evidence/not-a-number/id')).toBeUndefined();
   });
 
-  it('does not allow array targets to be configured as editable', () => {
+  it('keeps object array containers read-only but allows string arrays to be editable', () => {
     const config = normalizeFeedbackConfig(schema, {
       properties: {
         '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', feedback: 'none', comments: false, editMode: 'inline' },
-        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', feedback: 'none', comments: false, editMode: 'inline' }
+        '/evidence/*': { path: '/evidence/*', target: 'Evidence > *', tab: 'inherit', feedback: 'none', comments: false, editMode: 'inline' },
+        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', feedback: 'none', comments: false, editMode: 'inline' },
+        '/tags': { path: '/tags', target: 'Tags', tab: 'Main', feedback: 'none', comments: false, editMode: 'inline' }
       }
     });
 
-    expect(config.properties['/evidence']).toMatchObject({ supportsEdit: false, editMode: 'none' });
-    expect(config.properties['/evidence/*/id']).toMatchObject({ supportsEdit: true, editMode: 'inline' });
+    expect(config.properties['/evidence'].editMode).toBeUndefined();
+    expect(config.properties['/evidence/*'].editMode).toBeUndefined();
+    expect(config.properties['/evidence/*/id']).toMatchObject({ editMode: 'inline' });
+    expect(config.properties['/tags']).toMatchObject({ editMode: 'inline' });
+    expect(config.properties['/tags/*']).toBeUndefined();
+  });
+
+  it('allows canonical tags arrays without item schemas to be editable when mapped as tags', () => {
+    const config = normalizeFeedbackConfig(
+      {
+        type: 'object',
+        properties: {
+          tags: { type: 'array' }
+        }
+      },
+      {
+        properties: {
+          '/tags': { path: '/tags', target: 'Tags', tab: 'Main', feedback: 'none', comments: false, mapping: 'tags' }
+        }
+      }
+    );
+
+    expect(config.properties['/tags']).toMatchObject({ mapping: 'tags', editMode: 'none' });
+  });
+
+  it('keeps canonical tags object arrays non-editable when mapped as tags', () => {
+    const config = normalizeFeedbackConfig(
+      {
+        type: 'object',
+        properties: {
+          tags: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string' }
+              }
+            }
+          }
+        }
+      },
+      {
+        properties: {
+          '/tags': { path: '/tags', target: 'Tags', tab: 'Main', feedback: 'none', comments: false, mapping: 'tags', editMode: 'inline' }
+        }
+      }
+    );
+
+    expect(config.properties['/tags']).toMatchObject({ mapping: 'tags' });
+    expect(config.properties['/tags'].editMode).toBeUndefined();
+    expect(config.properties['/tags/*']).toBeDefined();
+  });
+
+  it('drops canonical mappings from whole array item targets', () => {
+    const config = normalizeFeedbackConfig(schema, {
+      properties: {
+        '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', feedback: 'none', comments: false, mapping: 'evidence' },
+        '/evidence/*': { path: '/evidence/*', target: 'Evidence > *', tab: 'inherit', feedback: 'none', comments: false, mapping: 'tags' },
+        '/evidence/*/id': { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', feedback: 'none', comments: false, mapping: 'facts' }
+      }
+    });
+
+    expect(config.properties['/evidence'].mapping).toBe('evidence');
+    expect(config.properties['/evidence/*'].mapping).toBeUndefined();
+    expect(config.properties['/evidence/*/id'].mapping).toBe('facts');
+  });
+
+  it('writes logged edits for string arrays as arrays', () => {
+    const record: Record<string, unknown> = {
+      tags: []
+    };
+    mergeFeedbackEntries(
+      record,
+      { propertyPath: '/tags', editValue: 'intent:greetings\nsource:sme' },
+      'alice@example.com',
+      new Date('2026-06-01T15:00:00.000Z')
+    );
+
+    expect(record.tags).toEqual(['intent:greetings', 'source:sme']);
+    expect(record.tags_feedback).toMatchObject([{ original: '[]' }, { edit: 'intent:greetings\nsource:sme', username: 'alice@example.com' }]);
   });
 
   it('validates USERNAME and creates attributed timestamped entries', () => {
@@ -124,7 +209,7 @@ describe('feedback helpers', () => {
     expect(record.answer_comments).toBeUndefined();
     expect(record.answer_edits).toBeUndefined();
     expect(stripFeedbackProperties(record)).toEqual({ question: 'What?', answer: 'Better answer', nested: {} });
-    const history = extractFeedbackHistory(record, [{ path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true }]);
+    const history = extractFeedbackHistory(record, [{ path: '/answer', target: 'Answer', tab: 'Main', editMode: 'none' }]);
     expect(history['/answer'].original).toBe('Answer');
     expect(history['/answer'].feedback[0]).toMatchObject({ value: 'good', username: 'alice@example.com' });
     expect(history['/answer'].comments[0]).toMatchObject({ value: 'Useful', username: 'alice@example.com' });
@@ -152,8 +237,8 @@ describe('feedback helpers', () => {
     };
 
     const history = extractFeedbackHistory(record, [
-      { path: '/evidence/*', target: 'Evidence > *', tab: 'inherit', supportsEdit: true },
-      { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', supportsEdit: true }
+      { path: '/evidence/*', target: 'Evidence > *', tab: 'inherit', editMode: 'none' },
+      { path: '/evidence/*/id', target: 'Evidence > Id', tab: 'inherit', editMode: 'none' }
     ]);
     expect(history['/evidence/0'].feedback[0]).toMatchObject({ value: 'fair', username: 'alice@example.com' });
     expect(history['/evidence/0'].comments[0]).toMatchObject({ value: 'Partially relevant', username: 'alice@example.com' });
@@ -168,7 +253,7 @@ describe('feedback helpers', () => {
       answer_edits: [{ value: 'Better answer', username: 'alice@example.com', timestamp: '2026-06-01T15:02:00.000Z' }]
     };
 
-    const history = extractFeedbackHistory(record, [{ path: '/answer', target: 'Answer', tab: 'Main', supportsEdit: true }]);
+    const history = extractFeedbackHistory(record, [{ path: '/answer', target: 'Answer', tab: 'Main', editMode: 'none' }]);
     expect(history['/answer'].feedback[0]).toMatchObject({ value: 'good', username: 'alice@example.com' });
     expect(history['/answer'].comments[0]).toMatchObject({ value: 'Useful', username: 'alice@example.com' });
     expect(history['/answer'].edits[0]).toMatchObject({ value: 'Better answer', username: 'alice@example.com' });
