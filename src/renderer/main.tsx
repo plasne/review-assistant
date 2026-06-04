@@ -26,6 +26,11 @@ import './styles.css';
 type Status = 'idle' | 'loading' | 'error';
 type ChatState = 'ready' | 'streaming' | 'canceled' | 'error';
 type ColumnKey = 'records' | 'details' | 'chat';
+type NodeTab = {
+  id: string;
+  label: string;
+  node: RenderNode;
+};
 type FeedbackDraft = {
   feedbackValue?: string;
   commentValue?: string;
@@ -1779,36 +1784,138 @@ const RecordDetails = ({
   onInlineEdit: (node: Extract<RenderNode, { kind: 'array' | 'value' | 'raw' }>, value: string) => Promise<void>;
   feedbackDrafts: FeedbackDrafts;
   onChangeFeedbackDraft: (path: string, draft: FeedbackDraft) => void;
-}) => (
-  <InlineEditContext.Provider value={onInlineEdit}>
-    {record.validationIssues.length > 0 ? (
-      <section className="validation" aria-label="Validation errors">
-        <h3>Validation errors</h3>
-        <ul>
-          {record.validationIssues.map((issue, index) => (
-            <li key={`${issue.path}-${issue.keyword}-${index}`}>{formatValidationIssue(issue)}</li>
+}) => {
+  const [activeTabId, setActiveTabId] = useState('overview');
+  const history = record.feedbackHistory ?? {};
+  const nodeTabs = useMemo(() => collectTurnNodeTabs(record.renderTree, feedbackConfig), [record.renderTree, feedbackConfig]);
+  const activeNodeTab = nodeTabs.find((tab) => tab.id === activeTabId);
+  const turnsPath = turnsMappingPath(feedbackConfig);
+  const showTurnTabs = nodeTabs.length > 0;
+
+  useEffect(() => {
+    setActiveTabId('overview');
+  }, [record.projectId, record.recordId]);
+
+  useEffect(() => {
+    if (activeTabId !== 'overview' && !activeNodeTab) {
+      setActiveTabId('overview');
+    }
+  }, [activeNodeTab, activeTabId]);
+
+  return (
+    <InlineEditContext.Provider value={onInlineEdit}>
+      {record.validationIssues.length > 0 ? (
+        <section className="validation" aria-label="Validation errors">
+          <h3>Validation errors</h3>
+          <ul>
+            {record.validationIssues.map((issue, index) => (
+              <li key={`${issue.path}-${issue.keyword}-${index}`}>{formatValidationIssue(issue)}</li>
+            ))}
+          </ul>
+        </section>
+      ) : (
+        <p className="valid">Record passes schema validation.</p>
+      )}
+      {showTurnTabs ? (
+        <div className="node-tabs" role="tablist" aria-label="Record detail tabs">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTabId === 'overview'}
+            className={activeTabId === 'overview' ? 'node-tab active' : 'node-tab'}
+            onClick={() => setActiveTabId('overview')}
+          >
+            Overview
+          </button>
+          {nodeTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTabId === tab.id}
+              className={activeTabId === tab.id ? 'node-tab active' : 'node-tab'}
+              onClick={() => setActiveTabId(tab.id)}
+            >
+              {tab.label}
+            </button>
           ))}
-        </ul>
-      </section>
-    ) : (
-      <p className="valid">Record passes schema validation.</p>
-    )}
-    <RenderTreeRoot
-      node={record.renderTree}
-      feedbackConfig={feedbackConfig}
-      history={record.feedbackHistory ?? {}}
-      projectUser={projectUser}
-      showExtraSchemaFields={showExtraSchemaFields}
-      onSubmitFeedback={onSubmitFeedback}
-      feedbackDrafts={feedbackDrafts}
-      onChangeFeedbackDraft={onChangeFeedbackDraft}
-    />
-  </InlineEditContext.Provider>
-);
+        </div>
+      ) : null}
+      <div className={showTurnTabs ? 'node-tab-panel' : undefined} role={showTurnTabs ? 'tabpanel' : undefined}>
+        {showTurnTabs && activeNodeTab ? (
+          <RenderTreeRoot
+            node={activeNodeTab.node}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            showExtraSchemaFields={showExtraSchemaFields}
+            onSubmitFeedback={onSubmitFeedback}
+            feedbackDrafts={feedbackDrafts}
+            onChangeFeedbackDraft={onChangeFeedbackDraft}
+          />
+        ) : (
+          <RenderTreeRoot
+            node={record.renderTree}
+            feedbackConfig={feedbackConfig}
+            history={history}
+            projectUser={projectUser}
+            showExtraSchemaFields={showExtraSchemaFields}
+            onSubmitFeedback={onSubmitFeedback}
+            feedbackDrafts={feedbackDrafts}
+            onChangeFeedbackDraft={onChangeFeedbackDraft}
+            collapseEvidence
+            omitArrayItemsForPath={showTurnTabs ? turnsPath : undefined}
+          />
+        )}
+      </div>
+    </InlineEditContext.Provider>
+  );
+};
 
 const InlineEditContext = React.createContext<((node: Extract<RenderNode, { kind: 'array' | 'value' | 'raw' }>, value: string) => Promise<void>) | undefined>(
   undefined
 );
+
+const collectTurnNodeTabs = (node: RenderNode, feedbackConfig?: FeedbackConfig): NodeTab[] => {
+  const turnsPath = turnsMappingPath(feedbackConfig);
+  const turnsNode = turnsPath ? findArrayNodeByPath(node, turnsPath) : undefined;
+  if (!turnsNode) {
+    return [];
+  }
+  return turnsNode.items.map((item, index) => ({
+    id: nodeTabId(item),
+    label: `Turn ${index}`,
+    node: item
+  }));
+};
+
+const nodeTabId = (node: RenderNode): string => `node:${node.path ?? node.label}`;
+
+const turnsMappingPath = (feedbackConfig?: FeedbackConfig): string | undefined =>
+  Object.values(feedbackConfig?.properties ?? {}).find((entry) => entry.mapping === 'turns')?.path;
+
+const findArrayNodeByPath = (node: RenderNode, path: string): Extract<RenderNode, { kind: 'array' }> | undefined => {
+  if (node.kind === 'array' && node.path === path) {
+    return node;
+  }
+  if (node.kind === 'object') {
+    for (const child of node.children) {
+      const match = findArrayNodeByPath(child, path);
+      if (match) {
+        return match;
+      }
+    }
+  }
+  if (node.kind === 'array') {
+    for (const item of node.items) {
+      const match = findArrayNodeByPath(item, path);
+      if (match) {
+        return match;
+      }
+    }
+  }
+  return undefined;
+};
 
 const RenderTreeRoot = ({
   node,
@@ -1818,7 +1925,9 @@ const RenderTreeRoot = ({
   showExtraSchemaFields,
   onSubmitFeedback,
   feedbackDrafts,
-  onChangeFeedbackDraft
+  onChangeFeedbackDraft,
+  collapseEvidence = false,
+  omitArrayItemsForPath
 }: {
   node: RenderNode;
   feedbackConfig?: FeedbackConfig;
@@ -1828,6 +1937,8 @@ const RenderTreeRoot = ({
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
+  collapseEvidence?: boolean;
+  omitArrayItemsForPath?: string;
 }) => {
   if (node.kind === 'object') {
     return (
@@ -1844,6 +1955,8 @@ const RenderTreeRoot = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            collapseEvidence={collapseEvidence}
+            omitArrayItemsForPath={omitArrayItemsForPath}
           />
         ))}
       </>
@@ -1859,6 +1972,8 @@ const RenderTreeRoot = ({
       onSubmitFeedback={onSubmitFeedback}
       feedbackDrafts={feedbackDrafts}
       onChangeFeedbackDraft={onChangeFeedbackDraft}
+      collapseEvidence={collapseEvidence}
+      omitArrayItemsForPath={omitArrayItemsForPath}
     />
   );
 };
@@ -1872,7 +1987,9 @@ const RenderTree = ({
   showExtraSchemaFields = true,
   onSubmitFeedback,
   feedbackDrafts,
-  onChangeFeedbackDraft
+  onChangeFeedbackDraft,
+  collapseEvidence = false,
+  omitArrayItemsForPath
 }: {
   node: RenderNode;
   collapseObject?: boolean;
@@ -1883,6 +2000,8 @@ const RenderTree = ({
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
+  collapseEvidence?: boolean;
+  omitArrayItemsForPath?: string;
 }) => {
   const issues = node.validationIssues.length > 0 ? (
     <ul className="field-errors">
@@ -1927,6 +2046,8 @@ const RenderTree = ({
               onSubmitFeedback={onSubmitFeedback}
               feedbackDrafts={feedbackDrafts}
               onChangeFeedbackDraft={onChangeFeedbackDraft}
+              collapseEvidence={collapseEvidence}
+              omitArrayItemsForPath={omitArrayItemsForPath}
             />
           ))}
         </details>
@@ -1956,6 +2077,8 @@ const RenderTree = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            collapseEvidence={collapseEvidence}
+            omitArrayItemsForPath={omitArrayItemsForPath}
           />
         ))}
       </section>
@@ -1977,6 +2100,7 @@ const RenderTree = ({
           onSubmitFeedback={onSubmitFeedback}
           feedbackDrafts={feedbackDrafts}
           onChangeFeedbackDraft={onChangeFeedbackDraft}
+          omitArrayItemsForPath={omitArrayItemsForPath}
         />
       );
     }
@@ -1999,7 +2123,9 @@ const RenderTree = ({
           onChangeDraft={onChangeFeedbackDraft}
           suppressLoggedEdit={stringArray}
         />
-        {stringArray ? (
+        {node.path && node.path === omitArrayItemsForPath ? (
+          <p className="array-items-omitted">(shown in tabs)</p>
+        ) : stringArray ? (
           <StringArrayRows
             node={node}
             editMode={editMode}
@@ -2022,6 +2148,8 @@ const RenderTree = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            collapseEvidence={collapseEvidence}
+            omitArrayItemsForPath={omitArrayItemsForPath}
           />
           ))
         )}
@@ -2144,7 +2272,9 @@ const EvidenceList = ({
   showExtraSchemaFields,
   onSubmitFeedback,
   feedbackDrafts,
-  onChangeFeedbackDraft
+  onChangeFeedbackDraft,
+  collapseItems = true,
+  omitArrayItemsForPath
 }: {
   node: Extract<RenderNode, { kind: 'array' }>;
   issues: React.ReactNode;
@@ -2155,9 +2285,13 @@ const EvidenceList = ({
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
+  collapseItems?: boolean;
+  omitArrayItemsForPath?: string;
 }) => (
-  <section className="node array-node evidence-list">
-    <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
+  <details className="node array-node evidence-list" open>
+    <summary>
+      <FieldHeading label={node.label} description={node.description} meta={formatItemCount(node.items.length)} />
+    </summary>
     {issues}
     <FeedbackPanel
       node={node}
@@ -2182,6 +2316,9 @@ const EvidenceList = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            collapseEvidence={collapseItems}
+            collapsed={collapseItems}
+            omitArrayItemsForPath={omitArrayItemsForPath}
           />
         ) : (
           <RenderTree
@@ -2194,11 +2331,13 @@ const EvidenceList = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            collapseEvidence={collapseItems}
+            omitArrayItemsForPath={omitArrayItemsForPath}
           />
         )
       )}
     </div>
-  </section>
+  </details>
 );
 
 const EvidenceCard = ({
@@ -2210,7 +2349,10 @@ const EvidenceCard = ({
   showExtraSchemaFields,
   onSubmitFeedback,
   feedbackDrafts,
-  onChangeFeedbackDraft
+  onChangeFeedbackDraft,
+  collapseEvidence = false,
+  collapsed = false,
+  omitArrayItemsForPath
 }: {
   node: Extract<RenderNode, { kind: 'object' }>;
   index: number;
@@ -2221,22 +2363,23 @@ const EvidenceCard = ({
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
+  collapseEvidence?: boolean;
+  collapsed?: boolean;
+  omitArrayItemsForPath?: string;
 }) => {
-  const source = evidenceChildText(node, 'source');
-  const id = evidenceChildText(node, 'id');
   const fields = visibleRenderNodes(node.children, showExtraSchemaFields).map((child) => ({ node: child, editMode: editModeForNode(child, feedbackConfig) }));
   const readonlyFields = fields.filter((field) => field.editMode === 'none');
   const editableFields = fields.filter((field) => field.editMode !== 'none');
-  const feedbackNode = { ...node, label: source ?? `Evidence ${index + 1}` };
+  const title = getObjectIdentifier(node) ?? `Item ${index}`;
+  const feedbackNode = { ...node, label: title };
   const summaryFeedbackRatings = feedbackRatingsForNodeSummary(node.path, history, feedbackDrafts);
   return (
-    <details className="evidence-card" open>
+    <details className="evidence-card" open={!collapsed}>
       <summary className="evidence-card-header">
         <span className="evidence-card-title">
-          <h4>{source ?? `Evidence ${index + 1}`}</h4>
+          <h4>{title}</h4>
           <RatingSummary ratings={summaryFeedbackRatings} />
         </span>
-        {id ? <span className="evidence-id">{id}</span> : null}
       </summary>
       <FeedbackPanel
         node={feedbackNode}
@@ -2261,6 +2404,8 @@ const EvidenceCard = ({
              onSubmitFeedback={onSubmitFeedback}
              feedbackDrafts={feedbackDrafts}
              onChangeFeedbackDraft={onChangeFeedbackDraft}
+             collapseEvidence={collapseEvidence}
+             omitArrayItemsForPath={omitArrayItemsForPath}
            />
           ))}
         </dl>
@@ -2279,6 +2424,8 @@ const EvidenceCard = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            collapseEvidence={collapseEvidence}
+            omitArrayItemsForPath={omitArrayItemsForPath}
           />
           ))}
         </dl>
@@ -2296,7 +2443,9 @@ const EvidenceField = ({
   showExtraSchemaFields,
   onSubmitFeedback,
   feedbackDrafts,
-  onChangeFeedbackDraft
+  onChangeFeedbackDraft,
+  collapseEvidence = false,
+  omitArrayItemsForPath
 }: {
   node: RenderNode;
   editMode: FeedbackEditMode;
@@ -2307,9 +2456,11 @@ const EvidenceField = ({
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
+  collapseEvidence?: boolean;
+  omitArrayItemsForPath?: string;
 }) => {
   return (
-    <div className={`evidence-field ${editMode !== 'none' ? 'editable' : 'readonly'}`}>
+    <div className={`evidence-field ${editMode !== 'none' ? 'editable' : 'readonly'} ${isEvidenceContentField(node) ? 'evidence-field-content' : ''}`}>
       <dt>
         <span>{node.label}</span>
         <span className={`editability-badge ${editMode !== 'none' ? 'editable' : 'readonly'}`}>{editabilityLabel(editMode)}</span>
@@ -2319,7 +2470,7 @@ const EvidenceField = ({
           {editMode === 'inline' && (node.kind === 'value' || node.kind === 'raw') ? (
             <InlineEditableValue node={node} />
           ) : node.kind === 'value' || node.kind === 'raw' ? (
-            formatDisplayValue(node.value)
+            <DisplayValue value={node.value} linkClassName="evidence-value-link" />
           ) : (
             <RenderTree
               node={node}
@@ -2330,6 +2481,8 @@ const EvidenceField = ({
               onSubmitFeedback={onSubmitFeedback}
               feedbackDrafts={feedbackDrafts}
               onChangeFeedbackDraft={onChangeFeedbackDraft}
+              collapseEvidence={collapseEvidence}
+              omitArrayItemsForPath={omitArrayItemsForPath}
             />
           )}
         </dd>
@@ -2356,6 +2509,8 @@ const editModeForNode = (node: RenderNode, feedbackConfig?: FeedbackConfig): Fee
 const editabilityLabel = (editMode: FeedbackEditMode): string =>
   editMode === 'inline' ? 'Inline' : editMode === 'logged' ? 'Logged' : 'Read-only';
 
+const isEvidenceContentField = (node: RenderNode): boolean => node.label.toLowerCase() === 'content';
+
 const EXTRA_SCHEMA_FIELD_REASON = 'Field is present in data but not declared by schema.';
 
 const isExtraSchemaField = (node: RenderNode): boolean => node.kind === 'raw' && node.reason === EXTRA_SCHEMA_FIELD_REASON;
@@ -2365,11 +2520,6 @@ const visibleRenderNodes = <Node extends RenderNode>(nodes: Node[], showExtraSch
 
 const isStringArrayNode = (node: Extract<RenderNode, { kind: 'array' }>): boolean =>
   node.items.every((item) => item.kind === 'value' && (item.type === 'string' || typeof item.value === 'string' || item.value === undefined));
-
-const evidenceChildText = (node: Extract<RenderNode, { kind: 'object' }>, label: string): string | undefined => {
-  const child = node.children.find((item) => item.label === label);
-  return child && (child.kind === 'value' || child.kind === 'raw') ? formatValue(child.value) : undefined;
-};
 
 const FieldHeading = ({ label, description, meta, editMode }: { label: string; description?: string; meta?: string; editMode?: FeedbackEditMode }) => (
   <h3 className="field-heading">
@@ -2394,17 +2544,18 @@ const formatValidationPath = (path: string): string => {
 };
 
 const ValueOutput = ({ value, className }: { value: unknown; className?: string }) => {
+  return <output className={className}><DisplayValue value={value} /></output>;
+};
+
+const DisplayValue = ({ value, linkClassName }: { value: unknown; linkClassName?: string }) => {
   const formatted = formatDisplayValue(value);
-  if (typeof value === 'string' && isHttpUrl(value)) {
-    return (
-      <output className={className}>
-        <a href={value} target="_blank" rel="noreferrer">
-          {formatted}
-        </a>
-      </output>
-    );
-  }
-  return <output className={className}>{formatted}</output>;
+  return typeof value === 'string' && isHttpUrl(value) ? (
+    <a href={value} target="_blank" rel="noreferrer" className={linkClassName}>
+      {formatted}
+    </a>
+  ) : (
+    <>{formatted}</>
+  );
 };
 
 const InlineEditableValue = ({ node, className }: { node: Extract<RenderNode, { kind: 'value' | 'raw' }>; className?: string }) => {

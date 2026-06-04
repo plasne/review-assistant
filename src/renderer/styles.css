@@ -592,6 +592,52 @@ ul {
   color: #b7f7c1;
 }
 
+.node-tabs {
+  align-items: stretch;
+  background: #15191f;
+  border-bottom: 1px solid #2b3442;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0;
+  margin: 0 0 1rem;
+  min-height: 2.75rem;
+  overflow-x: auto;
+}
+
+.node-tab {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid #2b3442;
+  border-top: 2px solid transparent;
+  color: #aeb6c2;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.95rem;
+  min-height: 2.75rem;
+  padding: 0 0.95rem;
+  white-space: nowrap;
+}
+
+.node-tab:first-child {
+  border-left: 0;
+}
+
+.node-tab.active {
+  background: #101419;
+  border-top-color: #55b7e8;
+  color: #f3f6fa;
+}
+
+.node-tab:focus-visible {
+  outline: 2px solid #8bb6ff;
+  outline-offset: -2px;
+}
+
+.node-tab-panel {
+  min-width: 0;
+}
+
 .node,
 .field {
   border-left: 3px solid #52698a;
@@ -758,9 +804,54 @@ pre {
   border-left-color: #8bb6ff;
 }
 
+.evidence-list > summary,
+.evidence-card > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 0.4rem;
+  list-style: none;
+}
+
+.evidence-list > summary::-webkit-details-marker,
+.evidence-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.evidence-list > summary::before,
+.evidence-card > summary::before {
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  color: #8a93a0;
+  content: "";
+  flex: 0 0 auto;
+  height: 0;
+  transition: transform 0.15s ease;
+  width: 0;
+}
+
+.evidence-list[open] > summary::before,
+.evidence-card[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.evidence-list > summary .field-heading {
+  flex: 1 1 auto;
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.array-items-omitted {
+  color: #aebbd0;
+  font-size: 0.875rem;
+  margin: 0.5rem 0 0;
+}
+
 .evidence-items {
   display: grid;
   gap: 0.75rem;
+  margin-top: 0.85rem;
 }
 
 .evidence-card {
@@ -777,7 +868,7 @@ pre {
   cursor: pointer;
   display: flex;
   gap: 0.5rem;
-  justify-content: space-between;
+  justify-content: flex-start;
   list-style-position: outside;
 }
 
@@ -792,6 +883,7 @@ pre {
   align-items: baseline;
   display: inline-flex;
   flex-wrap: wrap;
+  gap: 0.35rem;
 }
 
 .evidence-id {
@@ -824,6 +916,10 @@ pre {
   gap: 0.15rem;
   min-width: 11rem;
   padding: 0.4rem 0.5rem;
+}
+
+.evidence-readonly-grid .evidence-field-content {
+  flex-basis: 100%;
 }
 
 .evidence-editable-fields {
@@ -861,6 +957,10 @@ pre {
   margin: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.evidence-field dd .evidence-value-link {
+  color: #f7fafc;
 }
 
 .evidence-readonly-grid .evidence-field dd {

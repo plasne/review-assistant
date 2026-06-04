@@ -175,6 +175,7 @@ describe('review UI', () => {
               children: [
                 { kind: 'value', label: 'id', path: '/turns/0/evidence/0/id', value: 'doc-1', validationIssues: [] },
                 { kind: 'value', label: 'source', path: '/turns/0/evidence/0/source', value: 'Architecture Notes', validationIssues: [] },
+                { kind: 'value', label: 'uri', path: '/turns/0/evidence/0/uri', value: 'https://github.com/example/repo/blob/main/README.md', validationIssues: [] },
                 { kind: 'value', label: 'content', path: '/turns/0/evidence/0/content', value: 'The dial path enters through Dial Gateway.', validationIssues: [] }
               ],
               validationIssues: []
@@ -225,32 +226,74 @@ describe('review UI', () => {
       />
     );
 
-    expect(screen.getByRole('heading', { name: 'Architecture Notes' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Architecture Notes' }).closest('details')).toHaveAttribute('open');
+    expect(screen.getByRole('heading', { name: 'doc-1' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'doc-1' }).closest('details')).not.toHaveAttribute('open');
     expect(screen.getByLabelText('Read-only evidence fields')).toBeInTheDocument();
     expect(screen.getByLabelText('Editable evidence fields')).toBeInTheDocument();
     expect(screen.getAllByText('doc-1').find((element) => element.closest('.evidence-field'))?.closest('.evidence-field')).toHaveClass('readonly');
+    const uriLink = screen.getByRole('link', { name: 'https://github.com/example/repo/blob/main/README.md' });
+    expect(uriLink).toHaveAttribute('target', '_blank');
+    expect(uriLink).toHaveClass('evidence-value-link');
     expect(screen.getByText('No edits yet.')).toBeInTheDocument();
     expect(screen.queryByText('The dial path enters through Dial Gateway.', { selector: 'dd' })).not.toBeInTheDocument();
     expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0);
     expect(screen.getByText('Logged')).toBeInTheDocument();
-    expect(screen.getByLabelText('Architecture Notes feedback')).toBeInTheDocument();
-    expect(screen.getByLabelText('Architecture Notes feedback value')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Architecture Notes' }).closest('summary')).toHaveAccessibleName(
-      'Architecture Notes Feedback ratings: thumbs down, thumbs up doc-1'
+    expect(screen.getByLabelText('doc-1 feedback')).toBeInTheDocument();
+    expect(screen.getByLabelText('doc-1 feedback value')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'doc-1' }).closest('summary')).toHaveAccessibleName(
+      'doc-1 Feedback ratings: thumbs down, thumbs up'
     );
-    expect(screen.getByRole('heading', { name: 'Architecture Notes' }).closest('summary')?.querySelector('.history-rating-summary')?.textContent).toBe('👎,👍');
+    expect(screen.getByRole('heading', { name: 'doc-1' }).closest('summary')?.querySelector('.history-rating-summary')?.textContent).toBe('👎,👍');
     const contentFeedback = screen.getByLabelText('content feedback');
     expect(contentFeedback).toBeInTheDocument();
     expect(contentFeedback.textContent?.indexOf('Edit')).toBeLessThan(contentFeedback.textContent?.indexOf('Comment') ?? 0);
     expect(screen.queryByLabelText('id feedback')).not.toBeInTheDocument();
     const editableField = screen.getByText('content').closest('.evidence-field');
     expect(editableField).not.toBeNull();
+    expect(editableField).toHaveClass('evidence-field-content');
     const editInput = within(editableField as HTMLElement).getByLabelText('Edit');
     await userEvent.clear(editInput);
     await userEvent.type(editInput, 'Edited evidence content');
     expect(within(editableField as HTMLElement).getByLabelText('Edit')).toHaveValue('Edited evidence content');
     expect(onSubmitFeedback).not.toHaveBeenCalled();
+  });
+
+  it('renders evidence lists as open disclosure groups without open-tab actions', async () => {
+    render(
+      <RenderTree
+        node={{
+          kind: 'array',
+          label: 'evidence',
+          path: '/turns/0/evidence',
+          presentation: 'evidence-list',
+          items: [
+            {
+              kind: 'object',
+              label: '0',
+              path: '/turns/0/evidence/0',
+              children: [
+                { kind: 'value', label: 'id', path: '/turns/0/evidence/0/id', value: 'doc-1', validationIssues: [] },
+                { kind: 'value', label: 'source', path: '/turns/0/evidence/0/source', value: 'Architecture Notes', validationIssues: [] }
+              ],
+              validationIssues: []
+            }
+          ],
+          validationIssues: []
+        }}
+      />
+    );
+
+    const evidenceGroup = screen.getByText('evidence', { selector: '.field-label' }).closest('details');
+    expect(evidenceGroup).not.toBeNull();
+    expect(evidenceGroup).toHaveClass('evidence-list');
+    expect(evidenceGroup).toHaveAttribute('open');
+    expect(within(evidenceGroup as HTMLElement).queryByRole('button', { name: 'Open in tab' })).not.toBeInTheDocument();
+    const evidenceCard = within(evidenceGroup as HTMLElement).getByRole('heading', { name: 'doc-1' }).closest('details');
+    expect(evidenceCard).not.toHaveAttribute('open');
+
+    await userEvent.click((evidenceGroup as HTMLElement).querySelector('summary') as HTMLElement);
+
+    expect(evidenceGroup).not.toHaveAttribute('open');
   });
 
   it('renders whole-item feedback controls for generic array object items', () => {
@@ -388,6 +431,160 @@ describe('review UI', () => {
     expect(summary?.querySelector('.history-rating-summary')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     expect(api.submitFeedback).not.toHaveBeenCalled();
+  });
+
+  it('opens mapped turn items in dedicated tabs while keeping the turns container in the overview', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [{ id: 'valid-record', displayName: 'valid-record' }],
+      feedbackConfig: {
+        properties: {
+          '/conversation/turns': {
+            path: '/conversation/turns',
+            target: 'Turns',
+            tab: 'Main',
+            feedback: 'thumbs',
+            comments: true,
+            editMode: 'none',
+            mapping: 'turns'
+          }
+        }
+      }
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'valid-record',
+      displayName: 'valid-record',
+      data: { conversation: { turns: [{ prompt: 'How?', answer: 'Use the harness.' }, { prompt: 'Why?', answer: 'It is deterministic.' }] } },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        path: '',
+        children: [
+          {
+            kind: 'object',
+            label: 'conversation',
+            path: '/conversation',
+            children: [
+              {
+                kind: 'array',
+                label: 'turns',
+                path: '/conversation/turns',
+                description: 'Conversation turns for this review.',
+                items: [
+                  {
+                    kind: 'object',
+                    label: '0',
+                    path: '/conversation/turns/0',
+                    children: [
+                      { kind: 'value', label: 'prompt', path: '/conversation/turns/0/prompt', value: 'How?', validationIssues: [] },
+                      { kind: 'value', label: 'answer', path: '/conversation/turns/0/answer', value: 'Use the harness.', validationIssues: [] }
+                    ],
+                    validationIssues: []
+                  },
+                  {
+                    kind: 'object',
+                    label: '1',
+                    path: '/conversation/turns/1',
+                    children: [
+                      { kind: 'value', label: 'prompt', path: '/conversation/turns/1/prompt', value: 'Why?', validationIssues: [] },
+                      { kind: 'value', label: 'answer', path: '/conversation/turns/1/answer', value: 'It is deterministic.', validationIssues: [] }
+                    ],
+                    validationIssues: []
+                  }
+                ],
+                validationIssues: []
+              }
+            ],
+            validationIssues: []
+          }
+        ],
+        validationIssues: []
+      }
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+
+    expect(await screen.findByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Turn 0' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: 'Turn 1' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('heading', { name: 'turns Conversation turns for this review. 2 items' })).toBeInTheDocument();
+    expect(screen.getByText('(shown in tabs)')).toBeInTheDocument();
+    expect(screen.queryByText('Use the harness.')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Turn 1' }));
+
+    expect(screen.getByRole('tab', { name: 'Turn 1' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Why?');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('It is deterministic.');
+    expect(within(screen.getByRole('tabpanel')).queryByRole('heading', { name: '1' })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('tabpanel')).queryByRole('heading', { name: 'turns Conversation turns for this review. 2 items' })).not.toBeInTheDocument();
+  });
+
+  it('does not show turn tabs when the turns mapping is not configured', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [{ id: 'valid-record', displayName: 'valid-record' }]
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'valid-record',
+      displayName: 'valid-record',
+      data: { turns: [{ prompt: 'How?', answer: 'Inline answer.' }] },
+      schema: {},
+      validationIssues: [],
+      renderTree: {
+        kind: 'object',
+        label: 'record',
+        path: '',
+        children: [
+          {
+            kind: 'array',
+            label: 'turns',
+            path: '/turns',
+            items: [
+              {
+                kind: 'object',
+                label: '0',
+                path: '/turns/0',
+                children: [
+                  { kind: 'value', label: 'prompt', path: '/turns/0/prompt', value: 'How?', validationIssues: [] },
+                  { kind: 'value', label: 'answer', path: '/turns/0/answer', value: 'Inline answer.', validationIssues: [] }
+                ],
+                validationIssues: []
+              }
+            ],
+            validationIssues: []
+          }
+        ],
+        validationIssues: []
+      }
+    });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
+
+    expect(screen.queryByRole('tablist', { name: 'Record detail tabs' })).not.toBeInTheDocument();
+    expect(await screen.findByText('Inline answer.')).toBeInTheDocument();
   });
 
   it('shows submitted ratings in the collapsed history summary', () => {
