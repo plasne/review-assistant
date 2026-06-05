@@ -157,6 +157,11 @@ describe('local tool runtime', () => {
           source: 'built-in',
           description: expect.stringContaining('role/message history arrays it appends an assistant message')
         }),
+        expect.objectContaining({
+          name: 'reviseTurn',
+          source: 'built-in',
+          description: expect.stringContaining('without creating a new user turn')
+        }),
         expect.objectContaining({ name: 'listTools', source: 'built-in', description: expect.stringContaining('input schemas') })
       ])
     );
@@ -191,6 +196,7 @@ describe('local tool runtime', () => {
           expect.objectContaining({ name: 'saveSearchResults', source: 'built-in' }),
           expect.objectContaining({ name: 'startTurn', source: 'built-in' }),
           expect.objectContaining({ name: 'completeTurn', source: 'built-in' }),
+          expect.objectContaining({ name: 'reviseTurn', source: 'built-in' }),
           expect.objectContaining({ name: 'listTools', source: 'built-in' })
         ])
       }
@@ -229,7 +235,7 @@ describe('local tool runtime', () => {
     expect(savedSchemas).toEqual([schema]);
   });
 
-  it('rejects generated schema saves without a selected project or with invalid schema input', async () => {
+  it('rejects generated schema saves without a selected project or non-object schema input', async () => {
     await expect(createLocalToolRuntime({ storage }).execute({ tool: 'saveGeneratedSchema', requestId: 'tool-request-1', arguments: { schema: {} } })).resolves.toEqual({
       requestId: 'tool-request-1',
       ok: false,
@@ -252,10 +258,11 @@ describe('local tool runtime', () => {
     });
     await expect(runtime.execute({ tool: 'saveGeneratedSchema', requestId: 'tool-request-3', arguments: { schema: { type: 123 } } })).resolves.toMatchObject({
       requestId: 'tool-request-3',
-      ok: false,
-      error: {
-        code: 'INVALID_TOOL_ARGUMENTS',
-        retryable: false
+      ok: true,
+      result: {
+        projectId: 'sample-project',
+        schemaPath: 'config/schema.json',
+        schema: { type: 123 }
       }
     });
   });
@@ -373,7 +380,38 @@ describe('local tool runtime', () => {
     });
   });
 
-  it('saves valid search results into the selected record container after schema validation', async () => {
+  it('uses the first explicit canonical mapping and suppresses implicit candidates for that mapping', async () => {
+    const { adapter } = createSearchResultStorage();
+    const mappedAdapter: StorageAdapter = {
+      ...adapter,
+      getFeedbackConfig: async () => ({
+        properties: {
+          '/evidence': { path: '/evidence', target: 'Evidence', tab: 'Main', feedback: 'none', comments: false, mapping: 'evidence' },
+          '/turns/*/references': {
+            path: '/turns/*/references',
+            target: 'Turn References',
+            tab: 'Main',
+            feedback: 'none',
+            comments: false,
+            mapping: 'evidence'
+          }
+        }
+      })
+    };
+    const runtime = createLocalToolRuntime({ storage: mappedAdapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(runtime.execute({ tool: 'discoverCanonicalSchemaMappings', requestId: 'tool-request-3', arguments: {} })).resolves.toMatchObject({
+      requestId: 'tool-request-3',
+      ok: true,
+      result: {
+        evidence: {
+          candidates: [{ path: '/evidence', schema: expect.objectContaining({ type: 'array' }) }]
+        }
+      }
+    });
+  });
+
+  it('saves search results into the selected record container', async () => {
     const { adapter, getData } = createSearchResultStorage();
     const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
 
@@ -417,7 +455,7 @@ describe('local tool runtime', () => {
     });
   });
 
-  it('rejects search results that do not satisfy the destination container schema', async () => {
+  it('saves search results without enforcing required destination container item fields', async () => {
     const { adapter, getData } = createSearchResultStorage();
     const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
 
@@ -433,13 +471,55 @@ describe('local tool runtime', () => {
       })
     ).resolves.toMatchObject({
       requestId: 'tool-request-1',
+      ok: true,
+      result: {
+        containerPath: '/evidence',
+        savedItemCount: 1,
+        containerItemCount: 2
+      }
+    });
+    expect(getData()).toMatchObject({
+      evidence: [{ id: 'doc-1' }, { id: 'doc-2', source: 'Docs', content: 'Missing uri.' }]
+    });
+  });
+
+  it('rejects search results with enum values that fail the destination item schema', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        evidence: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              source: { type: 'string', enum: ['Docs'] },
+              content: { type: 'string' }
+            }
+          }
+        }
+      }
+    };
+    const { adapter, getData } = createRecordStorage(schema, { evidence: [] });
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'saveSearchResults',
+        requestId: 'tool-request-1',
+        arguments: {
+          containerPath: '/evidence',
+          results: [{ source: 'GitHub', content: 'Outside the enum.' }]
+        }
+      })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-1',
       ok: false,
       error: {
         code: 'INVALID_TOOL_ARGUMENTS',
-        message: expect.stringContaining('Missing required field: uri')
+        message: expect.stringContaining('/0/source Value must be one of: Docs')
       }
     });
-    expect(getData()).toMatchObject({ evidence: [{ id: 'doc-1' }] });
+    expect(getData()).toEqual({ evidence: [] });
   });
 
   it('saves search results without being blocked by unrelated root validation issues', async () => {
@@ -712,7 +792,7 @@ describe('local tool runtime', () => {
         turnIndex: 0
       }
     });
-    expect(getData()).toEqual({ turns: [{ humanSaid: 'Can we ship?', machineSaid: '', reviewed: false }] });
+    expect(getData()).toEqual({ turns: [{ humanSaid: 'Can we ship?', reviewed: false }] });
   });
 
   it('sets a response on an existing pending turn after the agent computes it', async () => {
@@ -810,6 +890,175 @@ describe('local tool runtime', () => {
     });
   });
 
+  it('uses an explicit canonical evidence path to save turn evidence with non-standard field names', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        turns: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              request: { type: 'string' },
+              response: { type: 'string' },
+              proof: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    ref: { type: 'string' },
+                    text: { type: 'string' }
+                  },
+                  required: ['ref', 'text'],
+                  additionalProperties: false
+                }
+              }
+            },
+            required: ['request', 'response', 'proof'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['turns'],
+      additionalProperties: false
+    };
+    const { adapter, getData } = createRecordStorage(schema, { turns: [{ request: 'What changed?', response: '', proof: [] }] });
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'completeTurn',
+        requestId: 'tool-request-1',
+        arguments: {
+          targetPath: '/turns',
+          turnIndex: 0,
+          response: 'The explicit evidence path was used.',
+          evidenceContainerPath: '/turns/*/proof',
+          evidence: [{ ref: 'tool-contract', text: 'discoverCanonicalSchemaMappings returned /turns/*/proof.' }]
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        targetPath: '/turns/0',
+        evidenceField: 'proof',
+        savedEvidenceCount: 1,
+        turn: {
+          request: 'What changed?',
+          response: 'The explicit evidence path was used.',
+          proof: [{ ref: 'tool-contract', text: 'discoverCanonicalSchemaMappings returned /turns/*/proof.' }]
+        }
+      }
+    });
+    expect(getData()).toEqual({
+      turns: [
+        {
+          request: 'What changed?',
+          response: 'The explicit evidence path was used.',
+          proof: [{ ref: 'tool-contract', text: 'discoverCanonicalSchemaMappings returned /turns/*/proof.' }]
+        }
+      ]
+    });
+  });
+
+  it('validates completeTurn evidence fields without considering unrelated schema branches', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        bucket: { type: 'string', enum: ['TPM', 'developer', 'SME'] },
+        turns: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              request: { type: 'string' },
+              response: { type: 'string' },
+              evidence: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    source: { type: 'string', enum: ['Docs'] },
+                    content: { type: 'string' }
+                  },
+                  required: ['source', 'content'],
+                  additionalProperties: false
+                }
+              }
+            },
+            required: ['request', 'response', 'evidence'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['bucket', 'turns'],
+      additionalProperties: false
+    };
+    const { adapter, getData } = createRecordStorage(schema, {
+      bucket: 'analyst',
+      turns: [{ request: 'What changed?' }]
+    });
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'completeTurn',
+        requestId: 'tool-request-1',
+        arguments: {
+          targetPath: '/turns',
+          turnIndex: 0,
+          response: 'The evidence source is invalid.',
+          evidence: [{ source: 'GitHub', content: 'Outside the enum.' }]
+        }
+      })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-1',
+      ok: false,
+      error: {
+        code: 'INVALID_TOOL_ARGUMENTS',
+        message: expect.stringContaining('/evidence/0/source Value must be one of: Docs')
+      }
+    });
+    expect(getData()).toEqual({
+      bucket: 'analyst',
+      turns: [{ request: 'What changed?' }]
+    });
+
+    await expect(
+      runtime.execute({
+        tool: 'completeTurn',
+        requestId: 'tool-request-2',
+        arguments: {
+          targetPath: '/turns',
+          turnIndex: 0,
+          response: 'The evidence source is valid.',
+          evidence: [{ source: 'Docs', content: 'Inside the enum.' }]
+        }
+      })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-2',
+      ok: true,
+      result: {
+        targetPath: '/turns/0',
+        turn: {
+          request: 'What changed?',
+          response: 'The evidence source is valid.',
+          evidence: [{ source: 'Docs', content: 'Inside the enum.' }]
+        }
+      }
+    });
+    expect(getData()).toEqual({
+      bucket: 'analyst',
+      turns: [
+        {
+          request: 'What changed?',
+          response: 'The evidence source is valid.',
+          evidence: [{ source: 'Docs', content: 'Inside the enum.' }]
+        }
+      ]
+    });
+  });
+
   it('sets a response on a specific turn in a multi-turn conversation', async () => {
     const schema = {
       type: 'object',
@@ -860,6 +1109,88 @@ describe('local tool runtime', () => {
       turns: [
         { request: 'First question?', response: 'First answer.' },
         { request: 'Second question?', response: '' }
+      ]
+    });
+  });
+
+  it('revises an existing object turn without creating a new turn', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        turns: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              request: { type: 'string' },
+              response: { type: 'string' },
+              evidence: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    source: { type: 'string' },
+                    uri: { type: 'string' },
+                    content: { type: 'string' }
+                  },
+                  required: ['id', 'source', 'uri', 'content'],
+                  additionalProperties: false
+                }
+              }
+            },
+            required: ['request', 'response', 'evidence'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['turns'],
+      additionalProperties: false
+    };
+    const { adapter, getData } = createRecordStorage(schema, {
+      turns: [
+        {
+          request: 'Which services contain dial functionality?',
+          response: 'Old answer.',
+          evidence: [{ id: 'old', source: 'GitHub', uri: 'https://example.com/old', content: 'Old evidence.' }]
+        }
+      ]
+    });
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'reviseTurn',
+        requestId: 'tool-request-1',
+        arguments: {
+          targetPath: '/turns',
+          turnIndex: 0,
+          response: 'Revised answer.',
+          evidence: [{ id: 'new', source: 'GitHub', uri: 'https://example.com/new', content: 'New evidence.' }]
+        }
+      })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-1',
+      ok: true,
+      result: {
+        targetPath: '/turns/0',
+        responseField: 'response',
+        evidenceField: 'evidence',
+        savedEvidenceCount: 1,
+        turn: {
+          request: 'Which services contain dial functionality?',
+          response: 'Revised answer.',
+          evidence: [{ id: 'new', source: 'GitHub', uri: 'https://example.com/new', content: 'New evidence.' }]
+        }
+      }
+    });
+    expect(getData()).toEqual({
+      turns: [
+        {
+          request: 'Which services contain dial functionality?',
+          response: 'Revised answer.',
+          evidence: [{ id: 'new', source: 'GitHub', uri: 'https://example.com/new', content: 'New evidence.' }]
+        }
       ]
     });
   });
@@ -925,6 +1256,266 @@ describe('local tool runtime', () => {
     });
   });
 
+  it('revises an existing assistant message in role/message history arrays', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        refs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'source', 'uri', 'body'],
+            properties: {
+              id: { type: 'string' },
+              source: { type: 'string' },
+              uri: { type: 'string' },
+              body: { type: 'string' }
+            }
+          }
+        },
+        history: {
+          type: 'array',
+          description: 'Conversation history turns',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['role', 'msg'],
+            properties: {
+              role: { type: 'string', enum: ['user', 'assistant', 'system'] },
+              msg: { type: 'string' }
+            }
+          }
+        }
+      },
+      required: ['refs', 'history'],
+      additionalProperties: false
+    };
+    const { adapter, getData } = createRecordStorage(schema, {
+      refs: [],
+      history: [
+        { role: 'user', msg: 'Which services contain dial functionality?' },
+        { role: 'assistant', msg: 'Old answer.' }
+      ]
+    });
+    const mappedAdapter: StorageAdapter = {
+      ...adapter,
+      getFeedbackConfig: async () => ({
+        properties: {
+          '/refs': { path: '/refs', target: 'Refs', tab: 'Main', feedback: 'none', comments: false, mapping: 'evidence' }
+        }
+      })
+    };
+    const runtime = createLocalToolRuntime({ storage: mappedAdapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'reviseTurn',
+        requestId: 'tool-request-1',
+        arguments: {
+          targetPath: '/history',
+          response: 'Revised answer.',
+          evidence: [
+            {
+              id: 'dial-service',
+              source: 'GitHub',
+              uri: 'https://github.com/example/repo/blob/main/service.go',
+              body: 'DialService exposes dial().'
+            }
+          ]
+        }
+      })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-1',
+      ok: true,
+      result: {
+        targetPath: '/history',
+        turnIndex: 1,
+        responseField: 'msg',
+        evidenceContainerPath: '/refs',
+        savedEvidenceCount: 1,
+        turn: { role: 'assistant', msg: 'Revised answer.' }
+      }
+    });
+    expect(getData()).toEqual({
+      refs: [
+        {
+          id: 'dial-service',
+          source: 'GitHub',
+          uri: 'https://github.com/example/repo/blob/main/service.go',
+          body: 'DialService exposes dial().'
+        }
+      ],
+      history: [
+        { role: 'user', msg: 'Which services contain dial functionality?' },
+        { role: 'assistant', msg: 'Revised answer.' }
+      ]
+    });
+  });
+
+  it('saves evidence to the standalone canonical evidence container when completing role/message history turns', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        refs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'source', 'uri', 'body'],
+            properties: {
+              id: { type: 'string' },
+              source: { type: 'string' },
+              uri: { type: 'string' },
+              body: { type: 'string' }
+            }
+          }
+        },
+        history: {
+          type: 'array',
+          description: 'Conversation history turns',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['role', 'msg'],
+            properties: {
+              role: { type: 'string', enum: ['user', 'assistant', 'system'] },
+              msg: { type: 'string' }
+            }
+          }
+        }
+      },
+      required: ['refs', 'history'],
+      additionalProperties: false
+    };
+    const { adapter, getData } = createRecordStorage(schema, {
+      refs: [],
+      history: [{ role: 'user', msg: 'Which services contain dial functionality?' }]
+    });
+    const mappedAdapter: StorageAdapter = {
+      ...adapter,
+      getFeedbackConfig: async () => ({
+        properties: {
+          '/refs': { path: '/refs', target: 'Refs', tab: 'Main', feedback: 'none', comments: false, mapping: 'evidence' }
+        }
+      })
+    };
+    const runtime = createLocalToolRuntime({ storage: mappedAdapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'completeTurn',
+        requestId: 'tool-request-1',
+        arguments: {
+          targetPath: '/history',
+          response: 'DialService contains dial functionality.',
+          evidence: [
+            {
+              id: 'dial-service',
+              source: 'GitHub',
+              uri: 'https://github.com/example/repo/blob/main/service.go',
+              body: 'DialService exposes dial().'
+            }
+          ]
+        }
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      result: {
+        targetPath: '/history',
+        evidenceContainerPath: '/refs',
+        savedEvidenceCount: 1,
+        turn: { role: 'assistant', msg: 'DialService contains dial functionality.' }
+      }
+    });
+    expect(getData()).toEqual({
+      refs: [
+        {
+          id: 'dial-service',
+          source: 'GitHub',
+          uri: 'https://github.com/example/repo/blob/main/service.go',
+          body: 'DialService exposes dial().'
+        }
+      ],
+      history: [
+        { role: 'user', msg: 'Which services contain dial functionality?' },
+        { role: 'assistant', msg: 'DialService contains dial functionality.' }
+      ]
+    });
+  });
+
+  it('rejects empty standalone evidence objects when completing role/message history turns', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        refs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string' },
+              source: { type: 'string' },
+              uri: { type: 'string' },
+              body: { type: 'string' }
+            }
+          }
+        },
+        history: {
+          type: 'array',
+          description: 'Conversation history turns',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['role', 'msg'],
+            properties: {
+              role: { type: 'string', enum: ['user', 'assistant', 'system'] },
+              msg: { type: 'string' }
+            }
+          }
+        }
+      },
+      required: ['refs', 'history'],
+      additionalProperties: false
+    };
+    const { adapter, getData } = createRecordStorage(schema, {
+      refs: [],
+      history: [{ role: 'user', msg: 'Which services contain dial functionality?' }]
+    });
+    const mappedAdapter: StorageAdapter = {
+      ...adapter,
+      getFeedbackConfig: async () => ({
+        properties: {
+          '/refs': { path: '/refs', target: 'Refs', tab: 'Main', feedback: 'none', comments: false, mapping: 'evidence' }
+        }
+      })
+    };
+    const runtime = createLocalToolRuntime({ storage: mappedAdapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'completeTurn',
+        requestId: 'tool-request-1',
+        arguments: {
+          targetPath: '/history',
+          response: 'Dial functionality lives in three services.',
+          evidence: [{}, { id: '', source: ' ', uri: '', body: '' }]
+        }
+      })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-1',
+      ok: false,
+      error: {
+        code: 'INVALID_TOOL_ARGUMENTS',
+        message: 'Evidence entries must not be empty objects. Entry 0 has no populated values.'
+      }
+    });
+    expect(getData()).toEqual({
+      refs: [],
+      history: [{ role: 'user', msg: 'Which services contain dial functionality?' }]
+    });
+  });
+
   it('can complete a specific user message index in role/message history arrays', async () => {
     const schema = {
       type: 'object',
@@ -976,7 +1567,7 @@ describe('local tool runtime', () => {
     });
   });
 
-  it('rejects a turn that does not satisfy required schema fields without saving', async () => {
+  it('saves a turn without enforcing required schema fields', async () => {
     const schema = {
       type: 'object',
       properties: {
@@ -1008,13 +1599,90 @@ describe('local tool runtime', () => {
       })
     ).resolves.toMatchObject({
       requestId: 'tool-request-1',
+      ok: true,
+      result: {
+        targetPath: '/turns',
+        turnIndex: 0,
+        turn: { request: 'What changed?', response: 'A turn tool was added.' }
+      }
+    });
+    expect(getData()).toEqual({ turns: [{ request: 'What changed?', response: 'A turn tool was added.' }] });
+  });
+
+  it('rejects a turn enum violation in the fields being written', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        turns: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              request: { type: 'string' },
+              response: { type: 'string', enum: ['approved'] }
+            }
+          }
+        }
+      }
+    };
+    const { adapter, getData } = createRecordStorage(schema, { turns: [] });
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(
+      runtime.execute({
+        tool: 'startTurn',
+        requestId: 'tool-request-1',
+        arguments: { targetPath: '/turns', inquiry: 'What changed?', response: 'rejected' }
+      })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-1',
       ok: false,
       error: {
         code: 'INVALID_TOOL_ARGUMENTS',
-        message: expect.stringContaining('Missing required field: source')
+        message: expect.stringContaining('/response Value must be one of: approved')
       }
     });
     expect(getData()).toEqual({ turns: [] });
+  });
+
+  it('starts a root-level turn without validating unrelated sibling fields', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        bucket: { type: 'string', enum: ['TPM', 'developer', 'SME'] },
+        question: { type: 'string' },
+        answer: { type: 'string' }
+      },
+      required: ['bucket', 'question', 'answer'],
+      additionalProperties: false
+    };
+    const { adapter, getData } = createRecordStorage(schema, { bucket: 'analyst' });
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'q101' });
+
+    await expect(
+      runtime.execute({
+        tool: 'startTurn',
+        requestId: 'tool-request-1',
+        arguments: {
+          inquiry: 'What is Dracula trying to do in Fury of Dracula?',
+          fieldMapping: {
+            inquiryField: 'question',
+            responseField: 'answer'
+          }
+        }
+      })
+    ).resolves.toMatchObject({
+      requestId: 'tool-request-1',
+      ok: true,
+      result: {
+        targetPath: '',
+        turn: { question: 'What is Dracula trying to do in Fury of Dracula?' }
+      }
+    });
+    expect(getData()).toEqual({
+      bucket: 'analyst',
+      question: 'What is Dracula trying to do in Fury of Dracula?'
+    });
   });
 
   it('creates a valid turn without being blocked by unrelated root validation issues', async () => {
@@ -1054,10 +1722,10 @@ describe('local tool runtime', () => {
       result: {
         targetPath: '/turns',
         turnIndex: 0,
-        turn: { request: '', response: '' }
+        turn: { request: '' }
       }
     });
-    expect(getData()).toEqual({ id: 'q101', turns: [{ request: '', response: '' }] });
+    expect(getData()).toEqual({ id: 'q101', turns: [{ request: '' }] });
   });
 });
 

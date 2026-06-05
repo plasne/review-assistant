@@ -1,0 +1,30 @@
+{
+  "properties": {
+    "/question": {
+      "path": "/question",
+      "target": "Question",
+      "tab": "Main",
+      "feedback": "none",
+      "comments": false,
+      "mapping": "request",
+      "edit_mode": "none"
+    },
+    "/evidence": {
+      "path": "/evidence",
+      "target": "Evidence",
+      "tab": "Main",
+      "feedback": "none",
+      "comments": false,
+      "mapping": "evidence"
+    },
+    "/answer": {
+      "path": "/answer",
+      "target": "Answer",
+      "tab": "Main",
+      "feedback": "none",
+      "comments": false,
+      "mapping": "response",
+      "edit_mode": "none"
+    }
+  }
+}

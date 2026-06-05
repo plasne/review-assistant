@@ -14,7 +14,7 @@ describe('external MCP config', () => {
             github: {
               command: 'docker',
               args: ['run', '--rm', '-i', '-e', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'ghcr.io/github/github-mcp-server'],
-              env: { GITHUB_PERSONAL_ACCESS_TOKEN: '${GITHUB_TOKEN}' },
+              env: { GITHUB_PERSONAL_ACCESS_TOKEN: '${COPILOT_GITHUB_TOKEN}' },
               allowedTools: ['search_code', 'get_file_contents']
             },
             docs: {
@@ -24,7 +24,7 @@ describe('external MCP config', () => {
             }
           }
         }),
-        { GITHUB_TOKEN: 'secret-token' }
+        { COPILOT_GITHUB_TOKEN: 'secret-token' }
       )
     ).toEqual([
       {

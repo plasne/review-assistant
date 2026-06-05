@@ -1,0 +1,33 @@
+{
+  "ref": "a00",
+  "description": "A simple single-turn question about Dracula's objective that stores the question, evidence, and answer at the record root.",
+  "input": {
+    "id": "a00",
+    "bucket": "",
+    "question": "",
+    "evidence": [],
+    "answer": ""
+  },
+  "prompts": [
+    "What is Dracula trying to do in Fury of Dracula? Search the knowledge base, then update this record with the question, evidence, and answer."
+  ],
+  "output": {
+    "id": "a00",
+    "bucket": "",
+    "question": "What is Dracula trying to do in Fury of Dracula?",
+    "evidence": [
+      {
+        "id": "fury-of-dracula-4e-objective",
+        "title": "Objective, sides, and victory conditions",
+        "url": "fury-of-dracula-4e://rules/objective",
+        "excerpt": "Fury of Dracula is a hidden-movement game between Dracula and the hunters. One player controls Dracula and secretly travels through Europe while spreading influence and leaving encounters. The other players control hunters who share information, collect supplies, follow clues, reveal the trail, and try to destroy Dracula. The hunters win when Dracula is defeated by reducing his damage capacity through combat and card effects. Dracula wins when the influence track reaches its victory space, most commonly by maturing vampires, defeating or biting hunters, and resolving encounter or card effects that add influence. The game is asymmetric: the hunters act openly and coordinate as a team, while Dracula acts secretly and only reveals information when rules or effects require it."
+      }
+    ],
+    "answer": "Dracula is trying to win by advancing the influence track to its victory space, commonly by maturing vampires, defeating or biting hunters, and using encounter or card effects that add influence."
+  },
+  "evaluation": {
+    "evidence_path": "/evidence",
+    "answer_path": "/answer"
+  },
+  "tags": ["turns:single", "mapped:true", "state:new-question"]
+}

@@ -1,0 +1,12 @@
+[project]
+name = "review-assistant-eval"
+version = "0.1.0"
+description = "Azure Blob evaluation runner for Review Assistant inference artifacts."
+requires-python = ">=3.11"
+dependencies = [
+  "azure-identity>=1.17.0,<5",
+  "azure-storage-blob>=12.20.0,<13"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

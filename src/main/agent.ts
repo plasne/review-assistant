@@ -281,7 +281,8 @@ export class AgentRuntime {
       toolRequestId: request.requestId,
       ok: response.ok,
       code: response.ok ? undefined : response.error.code,
-      elapsedMs: Date.now() - startedAt
+      elapsedMs: Date.now() - startedAt,
+      ...localToolResultLogFields(response)
     });
     pending.child.send({
       type: 'toolResponse',
@@ -316,6 +317,28 @@ export class AgentRuntimeError extends Error {
     this.name = 'AgentRuntimeError';
   }
 }
+
+export const localToolResultLogFields = (response: ToolInvocationResponse): Record<string, unknown> => {
+  if (!response.ok || !isRecord(response.result)) {
+    return {};
+  }
+  const result = response.result;
+  return {
+    targetPath: stringField(result.targetPath),
+    containerPath: stringField(result.containerPath),
+    responseField: stringField(result.responseField),
+    evidenceField: stringField(result.evidenceField),
+    evidenceContainerPath: stringField(result.evidenceContainerPath),
+    savedEvidenceCount: numberField(result.savedEvidenceCount),
+    savedItemCount: numberField(result.savedItemCount),
+    containerItemCount: numberField(result.containerItemCount),
+    turnIndex: numberField(result.turnIndex)
+  };
+};
+
+const stringField = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+const numberField = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 export const normalizeProviderError = (error: unknown): AgentErrorEnvelope => {
   const message = error instanceof Error ? error.message : String(error);

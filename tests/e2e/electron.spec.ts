@@ -34,7 +34,7 @@ test('real Electron app opens a local project and reviews a record', async () =>
   await expect(page.getByText('Version')).toBeVisible();
   await page.getByLabel('Current project').selectOption('sample-project');
   await page.getByRole('button', { name: 'valid-record', exact: true }).click();
-  await expect(page.getByText('Record passes schema validation.')).toBeVisible();
+  await expect(page.getByText('Record loaded.')).toBeVisible();
   await expect(page.getByText('How do I run the harness?')).toBeVisible();
   const arrayItemSummaryMetrics = await page.evaluate(() => {
     const summary = document.querySelector('.collapsible-node summary');

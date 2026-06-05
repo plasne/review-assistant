@@ -1,0 +1,56 @@
+{
+  "type": "object",
+  "description": "A multi-turn record where each turn carries its own evidence.",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "turns": {
+      "type": "array",
+      "description": "Conversation turns captured for this record.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The user question for this turn."
+          },
+          "evidence": {
+            "type": "array",
+            "description": "Evidence used to support this turn's answer.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "excerpt": {
+                  "type": "string"
+                },
+                "score": {
+                  "type": "number"
+                }
+              },
+              "required": ["id", "title", "url", "excerpt"],
+              "additionalProperties": false
+            }
+          },
+          "answer": {
+            "type": "string",
+            "description": "The answer for this turn."
+          }
+        },
+        "required": ["question", "evidence", "answer"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["turns"],
+  "additionalProperties": false
+}

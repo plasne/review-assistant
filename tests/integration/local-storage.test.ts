@@ -27,6 +27,19 @@ describe('local storage adapter', () => {
     await expect(adapter.listProjects()).resolves.toEqual([{ id: 'sample-project', name: 'sample-project' }]);
   });
 
+  it('does not list the app-root config directory as a project', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-local-storage-'));
+    await fs.mkdir(path.join(tempRoot, 'config'));
+    await fs.mkdir(path.join(tempRoot, 'sample-project'));
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: path.join(tempRoot, 'config', '.env'),
+      values: { LOCAL_PATH: tempRoot }
+    });
+
+    await expect(tempAdapter.listProjects()).resolves.toEqual([{ id: 'sample-project', name: 'sample-project' }]);
+  });
+
   it('opens projects, requires schema, and discovers only record json files', async () => {
     const project = await adapter.openProject('sample-project');
     const recordIds = project.records.map((record) => record.id);
@@ -37,7 +50,7 @@ describe('local storage adapter', () => {
     expect(project.schema).toMatchObject({ type: 'object' });
   });
 
-  it('returns record details with schema validation and render tree', async () => {
+  it('returns record details with render tree metadata', async () => {
     const detail = await adapter.getRecord('sample-project', 'valid-record');
     expect(detail.validationIssues).toEqual([]);
     expect(detail.renderTree.kind).toBe('object');
@@ -299,7 +312,7 @@ describe('local project creation', () => {
     expect(await readJson(path.join(projectPath, 'config', 'schema_2.json'))).toEqual({ type: 'object', properties: {}, additionalProperties: true });
   });
 
-  it('rejects invalid generated schemas before replacing the existing project schema', async () => {
+  it('saves generated schema objects without validating JSON Schema keywords', async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
     const tempAdapter = new LocalStorageAdapter({
       backendKind: 'local',
@@ -308,12 +321,17 @@ describe('local project creation', () => {
     });
     await tempAdapter.createProject('schema-project');
     const projectPath = path.join(tempRoot, 'schema-project');
-    const original = await readJson(path.join(projectPath, 'config', 'schema.json'));
+    const schema = { type: 123 };
 
-    await expect(tempAdapter.saveProjectSchema('schema-project', { type: 123 })).rejects.toThrow();
+    await expect(tempAdapter.saveProjectSchema('schema-project', schema)).resolves.toEqual({
+      projectId: 'schema-project',
+      schemaPath: 'config/schema.json',
+      backupSchemaPath: 'config/schema_1.json',
+      schema
+    });
 
-    expect(await readJson(path.join(projectPath, 'config', 'schema.json'))).toEqual(original);
-    await expect(fs.access(path.join(projectPath, 'config', 'schema_1.json'))).rejects.toThrow();
+    expect(await readJson(path.join(projectPath, 'config', 'schema.json'))).toEqual(schema);
+    expect(await readJson(path.join(projectPath, 'config', 'schema_1.json'))).toEqual({ type: 'object', properties: {}, additionalProperties: true });
   });
 
   it('normalizes feedback configuration after a generated schema changes project fields', async () => {
