@@ -75,7 +75,7 @@ export const discoverComputedTagPlugins = async (directories: Array<string | und
   const plugins: Array<ComputedTagPlugin | Error> = [];
   for (const file of files) {
     try {
-      const module = (await nativeImport(pathToFileURL(file).toString())) as Record<string, unknown>;
+      const module = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
       const candidate = module.default ?? module.plugin ?? module;
       if (isTagPlugin(candidate)) {
         plugins.push(candidate as ComputedTagPlugin);
@@ -193,8 +193,6 @@ const readOptionalDirectory = async (directory: string): Promise<import('node:fs
 };
 
 const isPluginFile = (name: string): boolean => path.extname(name) === '.mjs';
-
-const nativeImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<unknown>;
 
 const readJsonPointer = (data: unknown, pointer: string): unknown => {
   if (!pointer.startsWith('/')) {
