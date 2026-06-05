@@ -1,6 +1,13 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  server: {
+    fs: {
+      allow: [os.tmpdir(), fs.realpathSync(os.tmpdir())]
+    }
+  },
   test: {
     globals: true,
     environment: 'jsdom',
