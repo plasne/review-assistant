@@ -27,6 +27,7 @@ import {
   assertProjectSummaries,
   assertRecordDraftStatus,
   assertRecordDetail,
+  assertRecordSaveResult,
   assertRecordId,
   assertChatAttachmentId
 } from '../shared/validators';
@@ -63,8 +64,8 @@ const initializeBackend = (): void => {
     backendKind = config.backendKind;
     appConfigValues = config.values;
     agent.setAgentSettings(config.agentSettings ?? {});
-    appMcpConfigPath = path.join(path.dirname(config.appEnvPath), '_mcp.json');
-    appPromptPath = path.join(path.dirname(config.appEnvPath), '_prompt.md');
+    appMcpConfigPath = path.join(path.dirname(config.appEnvPath), 'mcp.json');
+    appPromptPath = path.join(path.dirname(config.appEnvPath), 'prompt.md');
   } catch (error) {
     bootstrapError = error instanceof ConfigError || error instanceof Error ? error.message : String(error);
     logError('review-assistant.config-error', { message: bootstrapError });
@@ -186,11 +187,14 @@ const registerIpc = (): void => {
   ipcMain.handle('records:updateData', async (_event, projectId: unknown, recordId: unknown, data: unknown) =>
     assertRecordDetail(await drafts.updateRecord(assertProjectId(projectId), assertRecordId(recordId), data))
   );
+  ipcMain.handle('records:computeTags', async (_event, projectId: unknown, recordId: unknown) =>
+    assertRecordSaveResult(await drafts.computeTags(assertProjectId(projectId), assertRecordId(recordId)))
+  );
   ipcMain.handle('records:getDraftStatus', async (_event, projectId: unknown, recordId: unknown) =>
     assertRecordDraftStatus(drafts.getStatus(assertProjectId(projectId), assertRecordId(recordId)))
   );
   ipcMain.handle('records:saveChanges', async (_event, projectId: unknown, recordId: unknown) =>
-    assertRecordDetail(await drafts.saveDraft(assertProjectId(projectId), assertRecordId(recordId)))
+    assertRecordSaveResult(await drafts.saveDraft(assertProjectId(projectId), assertRecordId(recordId)))
   );
   ipcMain.handle('records:discardChanges', async (_event, projectId: unknown, recordId: unknown) =>
     assertRecordDraftStatus(drafts.discardDraft(assertProjectId(projectId), assertRecordId(recordId)))

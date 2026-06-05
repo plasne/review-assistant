@@ -18,6 +18,7 @@ import type {
   ProjectUser,
   RecordDetail,
   RenderNode,
+  TagDefinition,
   ValidationIssue
 } from '../shared/types';
 import { CANONICAL_MAPPINGS, feedbackConfigEntryForPath, FEEDBACK_EDIT_MODES, FEEDBACK_MODES, FIELD_PRESENTATIONS } from '../shared/feedback';
@@ -48,6 +49,8 @@ type PendingNavigation =
 const MIN_COLUMN_PERCENT = 16;
 const NEW_RECORD_ID_BASE = 'new-record';
 const MAX_CHAT_ATTACHMENTS = 5;
+const MAX_TAGS_PER_RECORD = 100;
+const MAX_TAG_LENGTH = 100;
 const NOT_SET_LABEL = '(not set)';
 
 const nextNewRecordId = (existingIds: string[]): string => {
@@ -134,6 +137,7 @@ const App = () => {
   const [showExtraSchemaFields, setShowExtraSchemaFields] = useState(false);
   const [status, setStatus] = useState<Status>('loading');
   const [error, setError] = useState<string | undefined>();
+  const [saveWarning, setSaveWarning] = useState<string | undefined>();
   const [columns, setColumns] = useState({ records: 22, details: 48, chat: 30 });
   const columnsRef = useRef<HTMLElement | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -349,6 +353,7 @@ const App = () => {
     }
     setStatus('loading');
     setError(undefined);
+    setSaveWarning(undefined);
     try {
       const result = await window.reviewAssistant.openProject(projectId);
       setProject(result);
@@ -368,6 +373,7 @@ const App = () => {
     }
     setStatus('loading');
     setError(undefined);
+    setSaveWarning(undefined);
     try {
       selectRecordDetail(await window.reviewAssistant.getRecord(selectedProjectId, recordId));
       updateFeedbackDrafts({});
@@ -582,6 +588,28 @@ const App = () => {
     }
   };
 
+  const computeSelectedRecordTags = async () => {
+    if (!selectedProjectId || !record) {
+      return;
+    }
+    setStatus('loading');
+    setError(undefined);
+    try {
+      await inlineEditQueueRef.current;
+      await submitPendingFeedbackDrafts();
+      const result = await window.reviewAssistant.computeRecordTags(selectedProjectId, record.recordId);
+      selectRecordDetail(result.record);
+      inlineDraftDataRef.current = result.record.data;
+      setSaveWarning(result.tagPluginWarning);
+      updateUnsavedChanges(true);
+      setStatus('idle');
+    } catch (caught) {
+      setStatus('error');
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setSaveWarning(undefined);
+    }
+  };
+
   const saveSelectedRecordChanges = async (): Promise<boolean> => {
     if (!selectedProjectId || !record) {
       return false;
@@ -590,7 +618,9 @@ const App = () => {
     setError(undefined);
     try {
       await submitPendingFeedbackDrafts();
-      selectRecordDetail(await window.reviewAssistant.saveRecordChanges(selectedProjectId, record.recordId));
+      const result = await window.reviewAssistant.saveRecordChanges(selectedProjectId, record.recordId);
+      selectRecordDetail(result.record);
+      setSaveWarning(result.tagPluginWarning);
       draftRecordIdsRef.current.delete(record.recordId);
       updateFeedbackDrafts({});
       updateUnsavedChanges(false);
@@ -600,6 +630,7 @@ const App = () => {
     } catch (caught) {
       setStatus('error');
       setError(caught instanceof Error ? caught.message : String(caught));
+      setSaveWarning(undefined);
       return false;
     }
   };
@@ -1156,6 +1187,11 @@ const App = () => {
           {error}
         </section>
       ) : null}
+      {saveWarning ? (
+        <section className="warning-panel" role="alert" tabIndex={0}>
+          {saveWarning}
+        </section>
+      ) : null}
 
       <main
         ref={columnsRef}
@@ -1254,8 +1290,10 @@ const App = () => {
               showExtraSchemaFields={showExtraSchemaFields}
               onSubmitFeedback={submitFeedback}
               onInlineEdit={updateInlineRecordValue}
+              onComputeTags={computeSelectedRecordTags}
               feedbackDrafts={feedbackDrafts}
               onChangeFeedbackDraft={changeFeedbackDraft}
+              tagDefinitions={project?.tagDefinitions ?? []}
             />
           ) : (
             <p className="empty">Choose a record to inspect read-only details.</p>
@@ -1509,6 +1547,15 @@ const SaveIcon = () => (
     <path
       fill="currentColor"
       d="M2 1.5A1.5 1.5 0 0 1 3.5 0h7.38c.4 0 .78.16 1.06.44l1.62 1.62c.28.28.44.66.44 1.06V14.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 14.5v-13ZM4 1.5V6h7V1.62L10.88 1.5H10V4H8V1.5H4Zm0 8V15h8V9.5H4Z"
+    />
+  </svg>
+);
+
+const ComputeTagsIcon = () => (
+  <svg className="action-svg-icon" aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+    <path
+      fill="currentColor"
+      d="M8 1.5 9.53 5l3.72.43-2.8 2.5.74 3.67L8 9.7l-3.19 1.9.74-3.67-2.8-2.5L6.47 5 8 1.5Zm0 3.02-.63 1.43-1.53.18 1.15 1.03-.3 1.51L8 7.89l1.31.78-.3-1.51 1.15-1.03-1.53-.18L8 4.52ZM2.5 12h11v1.5h-11V12Z"
     />
   </svg>
 );
@@ -1773,8 +1820,10 @@ const RecordDetails = ({
   showExtraSchemaFields,
   onSubmitFeedback,
   onInlineEdit,
+  onComputeTags,
   feedbackDrafts,
-  onChangeFeedbackDraft
+  onChangeFeedbackDraft,
+  tagDefinitions
 }: {
   record: RecordDetail;
   feedbackConfig: FeedbackConfig | undefined;
@@ -1782,8 +1831,10 @@ const RecordDetails = ({
   showExtraSchemaFields: boolean;
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
   onInlineEdit: (node: Extract<RenderNode, { kind: 'array' | 'value' | 'raw' }>, value: string) => Promise<void>;
+  onComputeTags: () => Promise<void>;
   feedbackDrafts: FeedbackDrafts;
   onChangeFeedbackDraft: (path: string, draft: FeedbackDraft) => void;
+  tagDefinitions: TagDefinition[];
 }) => {
   const [activeTabId, setActiveTabId] = useState('overview');
   const history = record.feedbackHistory ?? {};
@@ -1850,8 +1901,10 @@ const RecordDetails = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            onComputeTags={onComputeTags}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            tagDefinitions={tagDefinitions}
           />
         ) : (
           <RenderTreeRoot
@@ -1861,8 +1914,10 @@ const RecordDetails = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            onComputeTags={onComputeTags}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            tagDefinitions={tagDefinitions}
             collapseEvidence
             omitArrayItemsForPath={showTurnTabs ? turnsPath : undefined}
           />
@@ -1924,8 +1979,10 @@ const RenderTreeRoot = ({
   projectUser,
   showExtraSchemaFields,
   onSubmitFeedback,
+  onComputeTags,
   feedbackDrafts,
   onChangeFeedbackDraft,
+  tagDefinitions = [],
   collapseEvidence = false,
   omitArrayItemsForPath
 }: {
@@ -1935,8 +1992,10 @@ const RenderTreeRoot = ({
   projectUser?: ProjectUser;
   showExtraSchemaFields: boolean;
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
+  onComputeTags?: () => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
+  tagDefinitions?: TagDefinition[];
   collapseEvidence?: boolean;
   omitArrayItemsForPath?: string;
 }) => {
@@ -1953,8 +2012,10 @@ const RenderTreeRoot = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            onComputeTags={onComputeTags}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            tagDefinitions={tagDefinitions}
             collapseEvidence={collapseEvidence}
             omitArrayItemsForPath={omitArrayItemsForPath}
           />
@@ -1970,8 +2031,10 @@ const RenderTreeRoot = ({
       projectUser={projectUser}
       showExtraSchemaFields={showExtraSchemaFields}
       onSubmitFeedback={onSubmitFeedback}
+      onComputeTags={onComputeTags}
       feedbackDrafts={feedbackDrafts}
       onChangeFeedbackDraft={onChangeFeedbackDraft}
+      tagDefinitions={tagDefinitions}
       collapseEvidence={collapseEvidence}
       omitArrayItemsForPath={omitArrayItemsForPath}
     />
@@ -1986,8 +2049,10 @@ const RenderTree = ({
   projectUser,
   showExtraSchemaFields = true,
   onSubmitFeedback,
+  onComputeTags,
   feedbackDrafts,
   onChangeFeedbackDraft,
+  tagDefinitions = [],
   collapseEvidence = false,
   omitArrayItemsForPath
 }: {
@@ -1998,8 +2063,10 @@ const RenderTree = ({
   projectUser?: ProjectUser;
   showExtraSchemaFields?: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+  onComputeTags?: () => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
+  tagDefinitions?: TagDefinition[];
   collapseEvidence?: boolean;
   omitArrayItemsForPath?: string;
 }) => {
@@ -2044,8 +2111,10 @@ const RenderTree = ({
               projectUser={projectUser}
               showExtraSchemaFields={showExtraSchemaFields}
               onSubmitFeedback={onSubmitFeedback}
+              onComputeTags={onComputeTags}
               feedbackDrafts={feedbackDrafts}
               onChangeFeedbackDraft={onChangeFeedbackDraft}
+              tagDefinitions={tagDefinitions}
               collapseEvidence={collapseEvidence}
               omitArrayItemsForPath={omitArrayItemsForPath}
             />
@@ -2075,8 +2144,10 @@ const RenderTree = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            onComputeTags={onComputeTags}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            tagDefinitions={tagDefinitions}
             collapseEvidence={collapseEvidence}
             omitArrayItemsForPath={omitArrayItemsForPath}
           />
@@ -2087,6 +2158,7 @@ const RenderTree = ({
   if (node.kind === 'array') {
     const editMode = editModeForNode(node, feedbackConfig);
     const stringArray = isStringArrayNode(node);
+    const tagsPresentation = stringArray && isTagsPresentationNode(node, feedbackConfig);
     const [localStringArrayCount, setLocalStringArrayCount] = useState<number | undefined>(undefined);
     if (node.presentation === 'evidence-list') {
       return (
@@ -2125,6 +2197,16 @@ const RenderTree = ({
         />
         {node.path && node.path === omitArrayItemsForPath ? (
           <p className="array-items-omitted">(shown in tabs)</p>
+        ) : tagsPresentation ? (
+          <TagsPresentation
+            node={node}
+            editMode={editMode}
+            tagDefinitions={tagDefinitions}
+            onComputeTags={onComputeTags}
+            draft={node.path ? feedbackDrafts?.[node.path] : undefined}
+            onChangeDraft={onChangeFeedbackDraft}
+            onChangeCount={setLocalStringArrayCount}
+          />
         ) : stringArray ? (
           <StringArrayRows
             node={node}
@@ -2148,6 +2230,7 @@ const RenderTree = ({
             onSubmitFeedback={onSubmitFeedback}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
+            tagDefinitions={tagDefinitions}
             collapseEvidence={collapseEvidence}
             omitArrayItemsForPath={omitArrayItemsForPath}
           />
@@ -2506,8 +2589,13 @@ const editModeForNode = (node: RenderNode, feedbackConfig?: FeedbackConfig): Fee
   return config?.editMode ?? 'none';
 };
 
+const isTagsPresentationNode = (node: RenderNode, feedbackConfig?: FeedbackConfig): boolean => {
+  const config = node.path && feedbackConfig ? feedbackConfigEntryForPath(feedbackConfig, node.path) : undefined;
+  return node.presentation === 'tags' || config?.presentation === 'tags';
+};
+
 const editabilityLabel = (editMode: FeedbackEditMode): string =>
-  editMode === 'inline' ? 'Inline' : editMode === 'logged' ? 'Logged' : 'Read-only';
+  editMode === 'inline' ? 'inline' : editMode === 'logged' ? 'logged' : 'read-only';
 
 const isEvidenceContentField = (node: RenderNode): boolean => node.label.toLowerCase() === 'content';
 
@@ -2686,6 +2774,152 @@ const StringArrayRows = ({
       {!editable && rows.length === 0 ? <output className="array-string-output">{NOT_SET_LABEL}</output> : null}
     </div>
   );
+};
+
+const TagsPresentation = ({
+  node,
+  editMode,
+  tagDefinitions,
+  onComputeTags,
+  draft,
+  onChangeDraft,
+  onChangeCount
+}: {
+  node: Extract<RenderNode, { kind: 'array' }>;
+  editMode: FeedbackEditMode;
+  tagDefinitions: TagDefinition[];
+  onComputeTags?: () => Promise<void>;
+  draft?: FeedbackDraft;
+  onChangeDraft?: (path: string, draft: FeedbackDraft) => void;
+  onChangeCount?: (count: number) => void;
+}) => {
+  const initialValue = editableValue(node);
+  const draftValue = draft?.editValue;
+  const editable = editMode === 'inline' || editMode === 'logged';
+  const tagSource = editMode === 'logged' && draftValue !== undefined ? draftValue : initialValue;
+  const tags = useMemo(() => parseStringArrayEditValue(tagSource), [tagSource]);
+  const manualNames = useMemo(() => new Set(tagDefinitions.map((definition) => definition.name)), [tagDefinitions]);
+  const manualTags = tags.filter((tag) => manualNames.has(tag));
+  const computedTags = tags.filter((tag) => !manualNames.has(tag));
+  const availableDefinitions = tagDefinitions.filter((definition) => !tags.includes(definition.name));
+  const onInlineEdit = React.useContext(InlineEditContext);
+
+  useEffect(() => {
+    onChangeCount?.(tags.length);
+  }, [onChangeCount, tags.length]);
+
+  const applyTags = (nextTags: string[]) => {
+    const normalized = [...new Set(nextTags.map((tag) => tag.trim()).filter(Boolean))];
+    const nextValueText = normalized.join('\n');
+    onChangeCount?.(normalized.length);
+    if (editMode === 'inline' && onInlineEdit) {
+      void onInlineEdit(node, nextValueText);
+      return;
+    }
+    if (editMode === 'logged' && node.path && onChangeDraft) {
+      onChangeDraft(node.path, normalizeFeedbackDraft({ ...draft, editValue: nextValueText }, initialValue));
+    }
+  };
+
+  const addManualTag = (name: string) => {
+    if (!name || !manualNames.has(name) || name.length > MAX_TAG_LENGTH) {
+      return;
+    }
+    const domain = manualTagDomain(name);
+    const sameDomainTags =
+      domain === undefined ? [] : tags.filter((tag) => tag !== name && manualNames.has(tag) && manualTagDomain(tag) === domain);
+    if (tags.includes(name) || (sameDomainTags.length === 0 && tags.length >= MAX_TAGS_PER_RECORD)) {
+      return;
+    }
+    if (sameDomainTags.length === 0) {
+      applyTags([...tags, name]);
+      return;
+    }
+    let replaced = false;
+    applyTags(
+      tags.flatMap((tag) => {
+        if (!sameDomainTags.includes(tag)) {
+          return [tag];
+        }
+        if (replaced) {
+          return [];
+        }
+        replaced = true;
+        return [name];
+      })
+    );
+  };
+  const removeManualTag = (name: string) => applyTags(tags.filter((tag) => tag !== name));
+
+  return (
+    <div className="tags-presentation" aria-label={`${node.label} tags`}>
+      <TagGroup title="Computed tags" tags={computedTags} />
+      <TagGroup title="Manual tags" tags={manualTags} onRemove={editable ? removeManualTag : undefined} />
+      <div className="tag-controls">
+        {editable ? (
+          <label className="tag-add-control">
+            <select
+              aria-label={`Add ${node.label} manual tag`}
+              value=""
+              onChange={(event) => {
+                addManualTag(event.target.value);
+                event.currentTarget.value = '';
+              }}
+              disabled={availableDefinitions.length === 0 || tags.length >= MAX_TAGS_PER_RECORD}
+            >
+              <option value="">Choose a tag</option>
+              {availableDefinitions.map((definition) => (
+                <option key={definition.name} value={definition.name}>
+                  {definition.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {onComputeTags ? (
+          <button
+            type="button"
+            className="refresh-records-button action-icon-button"
+            aria-label="Compute tags"
+            data-tooltip="Compute tags"
+            onClick={() => void onComputeTags()}
+          >
+            <ComputeTagsIcon />
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+};
+
+const TagGroup = ({ title, tags, onRemove }: { title: string; tags: string[]; onRemove?: (tag: string) => void }) => (
+  <section className="tag-group" aria-label={title}>
+    <h4>{title}</h4>
+    {tags.length === 0 ? (
+      <output className="array-string-output">{NOT_SET_LABEL}</output>
+    ) : (
+      <div className="tag-chip-list">
+        {tags.map((tag) => (
+          <span key={tag} className="tag-chip">
+            <span>{tag}</span>
+            {onRemove ? (
+              <button type="button" aria-label={`Remove ${tag}`} onClick={() => onRemove(tag)}>
+                x
+              </button>
+            ) : null}
+          </span>
+        ))}
+      </div>
+    )}
+  </section>
+);
+
+const manualTagDomain = (name: string): string | undefined => {
+  const separatorIndex = name.indexOf(':');
+  if (separatorIndex <= 0 || separatorIndex === name.length - 1) {
+    return undefined;
+  }
+  return name.slice(0, separatorIndex);
 };
 
 const isHttpUrl = (value: string): boolean => {

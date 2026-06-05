@@ -12,6 +12,7 @@ import {
   assertProjectSummaries,
   assertRecordDraftStatus,
   assertRecordDetail,
+  assertRecordSaveResult,
   assertRecordId,
   assertChatMessage,
   assertChatAttachmentId,
@@ -51,9 +52,12 @@ const api: Api = {
   getRecord: (projectId, recordId) => invoke('records:get', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId)),
   updateRecordData: (projectId, recordId, data) =>
     invoke('records:updateData', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId), data),
+  computeRecordTags: (projectId, recordId) =>
+    invoke('records:computeTags', assertRecordSaveResult, assertProjectId(projectId), assertRecordId(recordId)),
   getRecordDraftStatus: (projectId, recordId) =>
     invoke('records:getDraftStatus', assertRecordDraftStatus, assertProjectId(projectId), assertRecordId(recordId)),
-  saveRecordChanges: (projectId, recordId) => invoke('records:saveChanges', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId)),
+  saveRecordChanges: (projectId, recordId) =>
+    invoke('records:saveChanges', assertRecordSaveResult, assertProjectId(projectId), assertRecordId(recordId)),
   discardRecordChanges: (projectId, recordId) =>
     invoke('records:discardChanges', assertRecordDraftStatus, assertProjectId(projectId), assertRecordId(recordId)),
   getFeedbackConfig: (projectId) => invoke('feedback:getConfig', assertFeedbackConfig, assertProjectId(projectId)),

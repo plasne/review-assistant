@@ -50,8 +50,8 @@ The underlying deterministic npm gates are:
 
 ## Project Configuration
 
-- Project review settings live in `_config.json`; do not add `_feedback.json` or `_display.json` code paths.
-- Persist `_config.json` keys in snake_case at the storage boundary, while TypeScript may use camelCase internally.
+- Project review settings live in `config/config.json`; do not add `_feedback.json` or `_display.json` code paths.
+- Persist `config/config.json` keys in snake_case at the storage boundary, while TypeScript may use camelCase internally.
 - Canonical mappings (`turns`, `request`, `response`, `evidence`, `facts`, `tags`) must be unique across explicit config entries.
 - Tool names and descriptions should be action-oriented and describe behavior from metadata without relying on prompt-only guidance.
 

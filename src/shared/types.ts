@@ -39,8 +39,13 @@ export type ValidationIssue = {
   keyword: string;
 };
 
-export type FieldPresentation = 'chat-request' | 'chat-response' | 'evidence-list';
+export type FieldPresentation = 'chat-request' | 'chat-response' | 'evidence-list' | 'tags';
 export type CanonicalMapping = 'turns' | 'request' | 'response' | 'evidence' | 'facts' | 'tags';
+
+export type TagDefinition = {
+  name: string;
+  description: string;
+};
 
 export type RenderNode =
   | {
@@ -89,6 +94,7 @@ export type OpenProjectResult = {
   records: RecordSummary[];
   projectConfig: Record<string, string>;
   feedbackConfig?: FeedbackConfig;
+  tagDefinitions?: TagDefinition[];
 };
 
 export type RecordDetail = {
@@ -104,6 +110,11 @@ export type RecordDetail = {
 
 export type RecordDraftStatus = {
   hasUnsavedChanges: boolean;
+};
+
+export type RecordSaveResult = {
+  record: RecordDetail;
+  tagPluginWarning?: string;
 };
 
 export type FeedbackMode = 'none' | 'good_fair_bad' | 'thumbs' | 'stars_5';
@@ -318,8 +329,9 @@ export type Api = {
   createRecordDraft: (projectId: string, recordId: string) => Promise<RecordDetail>;
   getRecord: (projectId: string, recordId: string) => Promise<RecordDetail>;
   updateRecordData: (projectId: string, recordId: string, data: unknown) => Promise<RecordDetail>;
+  computeRecordTags: (projectId: string, recordId: string) => Promise<RecordSaveResult>;
   getRecordDraftStatus: (projectId: string, recordId: string) => Promise<RecordDraftStatus>;
-  saveRecordChanges: (projectId: string, recordId: string) => Promise<RecordDetail>;
+  saveRecordChanges: (projectId: string, recordId: string) => Promise<RecordSaveResult>;
   discardRecordChanges: (projectId: string, recordId: string) => Promise<RecordDraftStatus>;
   getFeedbackConfig: (projectId: string) => Promise<FeedbackConfig>;
   saveFeedbackConfig: (projectId: string, config: FeedbackConfig) => Promise<FeedbackConfig>;

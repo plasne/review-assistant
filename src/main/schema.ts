@@ -28,7 +28,7 @@ export const buildRenderTree = (schema: unknown, data: unknown, issues: Validati
 
 const compileSchema = (schema: unknown): ValidateFunction => {
   if (!isSchema(schema)) {
-    throw new Error('Project _schema.json must be a JSON object.');
+    throw new Error('Project config/schema.json must be a JSON object.');
   }
   return ajv.compile(schema);
 };
