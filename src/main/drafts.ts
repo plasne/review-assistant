@@ -129,6 +129,16 @@ export class RecordDraftStore {
     return { record, ...(reconciled.pluginErrors.length > 0 ? { tagPluginWarning: tagPluginWarning(reconciled.pluginErrors) } : {}) };
   }
 
+  async computeTags(projectId: string, recordId: string): Promise<RecordSaveResult> {
+    const data = await this.readRecordData(projectId, recordId);
+    const reconciled = await this.getStorage().reconcileRecordTags(projectId, data);
+    await this.stageDraft(projectId, recordId, reconciled.data);
+    return {
+      record: await this.renderRecordData(projectId, recordId, reconciled.data),
+      ...(reconciled.pluginErrors.length > 0 ? { tagPluginWarning: tagPluginWarning(reconciled.pluginErrors, 'Tags computed') } : {})
+    };
+  }
+
   discardDraft(projectId: string, recordId: string): RecordDraftStatus {
     this.drafts.delete(this.key(projectId, recordId));
     return this.getStatus(projectId, recordId);

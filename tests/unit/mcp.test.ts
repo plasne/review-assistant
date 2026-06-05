@@ -56,7 +56,7 @@ describe('external MCP config', () => {
         }),
         {}
       )
-    ).toThrow('Invalid _mcp.json: MCP server github references missing environment value MISSING_TOKEN.');
+    ).toThrow('Invalid config/mcp.json: MCP server github references missing environment value MISSING_TOKEN.');
   });
 
   it('merges app-level and project-level servers with project overrides by id', () => {

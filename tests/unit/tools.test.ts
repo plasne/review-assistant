@@ -9,7 +9,7 @@ const storage: StorageAdapter = {
   getProjectPrompt: async () => undefined,
   getFeedbackConfig: async () => ({ properties: {} }),
   saveFeedbackConfig: async (_projectId, config) => config,
-  saveProjectSchema: async (projectId, schema) => ({ projectId, schemaPath: '_schema.json', schema }),
+  saveProjectSchema: async (projectId, schema) => ({ projectId, schemaPath: 'config/schema.json', schema }),
   getProjectUser: async () => ({ username: 'sme@example.com', valid: true }),
   submitFeedback: async (projectId, recordId) => ({
     username: 'sme@example.com',
@@ -203,7 +203,7 @@ describe('local tool runtime', () => {
       ...storage,
       saveProjectSchema: async (projectId, schema) => {
         savedSchemas.push(clone(schema));
-        return { projectId, schemaPath: '_schema.json', backupSchemaPath: '_schema_1.json', schema };
+        return { projectId, schemaPath: 'config/schema.json', backupSchemaPath: 'config/schema_1.json', schema };
       }
     };
     const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project' });
@@ -221,8 +221,8 @@ describe('local tool runtime', () => {
       ok: true,
       result: {
         projectId: 'sample-project',
-        schemaPath: '_schema.json',
-        backupSchemaPath: '_schema_1.json',
+        schemaPath: 'config/schema.json',
+        backupSchemaPath: 'config/schema_1.json',
         schema
       }
     });

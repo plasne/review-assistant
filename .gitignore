@@ -3,7 +3,7 @@ dist/
 coverage/
 test-results/
 playwright-report/
-.env
+**/.env
+!test-fixtures/config/.env
 data/
-**/_mcp.json
 .copilot-tracking/

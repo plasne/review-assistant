@@ -16,7 +16,7 @@ export const FEEDBACK_MODES: FeedbackMode[] = ['none', 'good_fair_bad', 'thumbs'
 export const FEEDBACK_EDIT_MODES: FeedbackEditMode[] = ['none', 'logged', 'inline'];
 export const FIELD_PRESENTATIONS: FieldPresentation[] = ['chat-request', 'chat-response', 'evidence-list', 'tags'];
 export const CANONICAL_MAPPINGS: CanonicalMapping[] = ['turns', 'request', 'response', 'evidence', 'facts', 'tags'];
-export const USERNAME_VALIDATION_MESSAGE = 'USERNAME environment variable not configured. Please set USERNAME in your .env file.';
+export const USERNAME_VALIDATION_MESSAGE = 'USERNAME environment variable not configured. Please set USERNAME in your config/.env file.';
 
 const FEEDBACK_SUFFIXES = ['_feedback', '_edits', '_comments'];
 const USERNAME_PATTERN = /^[a-zA-Z0-9._@-]{1,254}$/;

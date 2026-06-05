@@ -329,6 +329,7 @@ export type Api = {
   createRecordDraft: (projectId: string, recordId: string) => Promise<RecordDetail>;
   getRecord: (projectId: string, recordId: string) => Promise<RecordDetail>;
   updateRecordData: (projectId: string, recordId: string, data: unknown) => Promise<RecordDetail>;
+  computeRecordTags: (projectId: string, recordId: string) => Promise<RecordSaveResult>;
   getRecordDraftStatus: (projectId: string, recordId: string) => Promise<RecordDraftStatus>;
   saveRecordChanges: (projectId: string, recordId: string) => Promise<RecordSaveResult>;
   discardRecordChanges: (projectId: string, recordId: string) => Promise<RecordDraftStatus>;

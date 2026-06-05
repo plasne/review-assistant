@@ -120,6 +120,7 @@ describe('feedback helpers', () => {
     );
 
     expect(config.properties['/tags']).toMatchObject({ mapping: 'tags', editMode: 'none' });
+    expect(config.properties['/tags'].presentation).toBeUndefined();
   });
 
   it('keeps canonical tags object arrays non-editable when mapped as tags', () => {

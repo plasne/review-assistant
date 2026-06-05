@@ -23,7 +23,7 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 - Preload validates request arguments before invoking allowlisted IPC channels and validates responses/events before exposing them to renderer code.
 - Main validates project identifiers, record identifiers, chat messages, and IPC payloads before crossing into storage or agent orchestration.
 - Storage adapters implement one stable project contract: `listProjects`, `createProject`, `openProject`, `getRecord`, and `getProjectPrompt`.
-- Agent instructions come from `_prompt.md` beside the app `.env` plus the selected project's `_prompt.md` when present.
+- Agent instructions come from `config/prompt.md` beside the app `config/.env` plus the selected project's `config/prompt.md` when present.
 - Local tool responses use `ToolInvocationResponse` with stable `requestId`, `ok`, `result`, and structured `error` fields.
 - Project-level local tools, such as generated schema saves, use the selected project from trusted UI state and never accept project paths or identifiers from model-provided tool arguments.
 
@@ -34,7 +34,7 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 3. The renderer may request text file attachments through preload; main opens the system picker, reads selected text files, and caches their contents by attachment identifier.
 4. The renderer starts chat by sending the user message plus selected project/record identifiers and attachment metadata.
 5. Main resolves attachment identifiers from its cache, then assembles the selected app/project prompt, selected record context identifiers, attachment content, and local tool metadata.
-6. Main resolves app-level external MCP connectors from `_mcp.json` beside the app `.env` and project-scoped connectors from the selected project's `_mcp.json`, including environment placeholders from app/project configuration.
+6. Main resolves app-level external MCP connectors from `config/mcp.json` beside the app `config/.env` and project-scoped connectors from the selected project's `config/mcp.json`, including environment placeholders from app/project configuration.
 7. The agent worker launches GitHub Copilot with an isolated temporary workspace and MCP configuration.
 8. Copilot calls Review Assistant MCP tools when it needs selected record contents and may call allowlisted external MCP tools.
 9. Local tool calls return through the worker to main, where the trusted UI-selected project and record determine storage access.
@@ -46,7 +46,7 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 - Preload owns IPC allowlisting and runtime validation at the renderer boundary.
 - Main owns app lifecycle, config loading, backend selection, app-level agent settings, storage access, validation policy, local tool execution, and agent orchestration.
 - Main owns local chat attachment file access; renderer must not provide paths for main to read outside the main-owned attachment cache, and attachment cache entries are cleared after use or explicit discard.
-- Main owns project schema writes; generated schemas are validated before replacing `_schema.json`, and existing schemas are backed up as `_schema_N.json`.
+- Main owns project schema writes; generated schemas are validated before replacing `config/schema.json`, and existing schemas are backed up as `config/schema_N.json`.
 - Agent worker owns provider transport details, provider-specific agent setting application, temporary directories, MCP server wiring, and process cleanup.
 - External MCP connector credentials remain in main/worker configuration and must not be exposed to the renderer. Project-level MCP server definitions override app-level definitions with the same server id for the active request.
 - Provider-specific logic must not leak into renderer components.

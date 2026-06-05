@@ -7,6 +7,11 @@ const fakeProviderEnv = {
   REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE: path.resolve('test-fixtures/fake-copilot-sdk-provider.mjs')
 };
 
+const writeEnvFile = (filePath: string, content: string): void => {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content);
+};
+
 const expectRecordSaved = async (page: import('@playwright/test').Page) => {
   await expect(page.getByText('Loading...')).toBeHidden();
   await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
@@ -15,7 +20,7 @@ const expectRecordSaved = async (page: import('@playwright/test').Page) => {
 test('real Electron app opens a local project and reviews a record', async () => {
   const createdProjectPath = path.resolve('test-fixtures/local-projects/e2e-created-project');
   fs.rmSync(createdProjectPath, { recursive: true, force: true });
-  const appEnv = path.resolve('test-fixtures/e2e.env');
+  const appEnv = path.resolve('test-fixtures/config/.env');
   const electronApp = await electron.launch({
     args: ['.'],
     env: {
@@ -61,7 +66,7 @@ test('real Electron app opens a local project and reviews a record', async () =>
   await page.getByLabel('Project name').fill('e2e-created-project');
   await createProjectDialog.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'records' })).toBeVisible();
-  await expect.poll(() => fs.existsSync(path.join(createdProjectPath, '_schema.json'))).toBe(true);
+  await expect.poll(() => fs.existsSync(path.join(createdProjectPath, 'config', 'schema.json'))).toBe(true);
 
   await electronApp.close();
   fs.rmSync(createdProjectPath, { recursive: true, force: true });
@@ -70,17 +75,17 @@ test('real Electron app opens a local project and reviews a record', async () =>
 test('records list scroll area reaches the records column edge and keeps content clear of the scrollbar', async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-scroll-'));
   const projectPath = path.join(tempRoot, 'scroll-project');
-  const appEnv = path.join(tempRoot, 'app.env');
-  fs.mkdirSync(projectPath);
+  const appEnv = path.join(tempRoot, 'config', '.env');
+  fs.mkdirSync(path.join(projectPath, 'config'), { recursive: true });
   fs.writeFileSync(
-    path.join(projectPath, '_schema.json'),
+    path.join(projectPath, 'config', 'schema.json'),
     JSON.stringify({ type: 'object', properties: { question: { type: 'string' } }, required: ['question'] }, null, 2)
   );
   for (let index = 1; index <= 24; index += 1) {
     const id = `q${String(index).padStart(2, '0')}`;
     fs.writeFileSync(path.join(projectPath, `${id}.json`), JSON.stringify({ question: `Question ${index}` }, null, 2));
   }
-  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\n`);
+  writeEnvFile(appEnv, `LOCAL_PATH=${tempRoot}\n`);
   const electronApp = await electron.launch({
     args: ['.'],
     env: {
@@ -130,8 +135,8 @@ test('records list scroll area reaches the records column edge and keeps content
 test('workspace keeps filling the window after collapsible sections are toggled', async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-layout-'));
   fs.cpSync(path.resolve('test-fixtures/local-projects/sample-project'), path.join(tempRoot, 'sample-project'), { recursive: true });
-  const appEnv = path.join(tempRoot, 'app.env');
-  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=layout@example.com\n`);
+  const appEnv = path.join(tempRoot, 'config', '.env');
+  writeEnvFile(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=layout@example.com\n`);
   const electronApp = await electron.launch({
     args: ['.'],
     env: {
@@ -199,7 +204,7 @@ test('workspace keeps filling the window after collapsible sections are toggled'
 });
 
 test('real Electron app lets Copilot read the displayed record through the local tool', async () => {
-  const appEnv = path.resolve('test-fixtures/e2e.env');
+  const appEnv = path.resolve('test-fixtures/config/.env');
   const electronApp = await electron.launch({
     args: ['.'],
     env: {
@@ -228,14 +233,14 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   test.setTimeout(60000);
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-feedback-'));
   const projectPath = path.join(tempRoot, 'feedback-project');
-  const appEnv = path.join(tempRoot, 'app.env');
-  fs.mkdirSync(projectPath);
+  const appEnv = path.join(tempRoot, 'config', '.env');
+  fs.mkdirSync(path.join(projectPath, 'config'), { recursive: true });
   fs.writeFileSync(
-    path.join(projectPath, '_schema.json'),
+    path.join(projectPath, 'config', 'schema.json'),
     JSON.stringify({ type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] }, null, 2)
   );
   fs.writeFileSync(path.join(projectPath, 'record-1.json'), JSON.stringify({ answer: 'Initial answer' }, null, 2));
-  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=first@example.com\n`);
+  writeEnvFile(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=first@example.com\n`);
 
   const launch = () =>
     electron.launch({
@@ -265,7 +270,7 @@ test('real Electron app configures feedback and shows subsequent users collapsed
   await expectRecordSaved(firstPage);
   await firstApp.close();
 
-  fs.writeFileSync(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=second@example.com\n`);
+  writeEnvFile(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=second@example.com\n`);
   const secondApp = await launch();
   const secondPage = await secondApp.firstWindow();
   await secondPage.getByLabel('Current project').selectOption('feedback-project');

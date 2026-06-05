@@ -137,7 +137,7 @@ type SchemaNodeCandidate = CanonicalCandidate & {
 const discoverCanonicalSchemaMappingsTool: LocalToolDefinition = {
   name: 'discoverCanonicalSchemaMappings',
   description:
-    'Find schema paths for Review Assistant canonical concepts: turns, request, response, evidence, facts, and tags. Use this before saving search results or configuring displays; explicit project _config.json mappings are returned first and implicit schema candidates follow.',
+    'Find schema paths for Review Assistant canonical concepts: turns, request, response, evidence, facts, and tags. Use this before saving search results or configuring displays; explicit project config/config.json mappings are returned first and implicit schema candidates follow.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -233,13 +233,13 @@ const getRecordSchemaTool: LocalToolDefinition = {
 const saveGeneratedSchemaTool: LocalToolDefinition = {
   name: 'saveGeneratedSchema',
   description:
-    'Replace the selected project _schema.json with a generated JSON Schema after validating it. Existing schemas are backed up as _schema_1.json, _schema_2.json, etc.; project identity always comes from trusted UI state.',
+    'Replace the selected project config/schema.json with a generated JSON Schema after validating it. Existing schemas are backed up as config/schema_1.json, config/schema_2.json, etc.; project identity always comes from trusted UI state.',
   inputSchema: {
     type: 'object',
     properties: {
       schema: {
         type: 'object',
-        description: 'The complete JSON Schema object to save as the selected project _schema.json.'
+        description: 'The complete JSON Schema object to save as the selected project config/schema.json.'
       }
     },
     required: ['schema'],
@@ -844,7 +844,7 @@ const canonicalNameMatches = (mapping: CanonicalMapping, path: string): boolean 
 
 const resolveTurnTarget = (schema: unknown, data: unknown, targetPath: string | undefined): TurnTargetCandidate => {
   if (!isSchema(schema)) {
-    throw new Error('Project _schema.json must be a JSON object.');
+    throw new Error('Project config/schema.json must be a JSON object.');
   }
   if (targetPath !== undefined) {
     return turnTargetAtPointer(schema, data, targetPath);
@@ -1297,7 +1297,7 @@ const toTurnCandidateResult = (candidate: TurnTargetCandidate): Record<string, u
 
 const schemaAtPointer = (schema: unknown, path: string): JsonSchema => {
   if (!isSchema(schema)) {
-    throw new Error('Project _schema.json must be a JSON object.');
+    throw new Error('Project config/schema.json must be a JSON object.');
   }
   return pointerSegments(path).reduce<JsonSchema>((current, segment) => {
     const resolved = resolveSchema(current);
@@ -1499,7 +1499,7 @@ const toolErrorCode = (error: unknown): AgentErrorEnvelope['code'] => {
     message.includes('containerpath') ||
     message.includes('no schema exists') ||
     message.includes('schema at') ||
-    message.includes('_schema.json') ||
+    message.includes('schema.json') ||
     message.includes('record path') ||
     message.includes('targetpath') ||
     message.includes('turn target') ||

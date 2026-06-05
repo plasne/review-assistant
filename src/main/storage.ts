@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, lstatSync } from 'node:fs';
 import path from 'node:path';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { DefaultAzureCredential } from '@azure/identity';
@@ -60,7 +60,7 @@ export interface StorageAdapter {
 
 export type ProjectSchemaSaveResult = {
   projectId: string;
-  schemaPath: '_schema.json';
+  schemaPath: string;
   backupSchemaPath?: string;
   schema: unknown;
 };
@@ -73,8 +73,13 @@ const NEW_PROJECT_SCHEMA = {
 export const RECORD_DRAFT_CONFLICT_MESSAGE =
   'Record changed after this draft was staged. Refresh the record, review the latest changes, and stage your edits again.';
 const BACKEND_KEYS = new Set(['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'LOCAL_PATH']);
-const PROJECT_CONFIG_FILE = '_config.json';
-const TAGS_DIRECTORY = 'tags';
+const CONFIG_DIRECTORY = 'config';
+const PROJECT_CONFIG_FILE = `${CONFIG_DIRECTORY}/config.json`;
+const PROJECT_ENV_FILE = `${CONFIG_DIRECTORY}/.env`;
+const PROJECT_MCP_FILE = `${CONFIG_DIRECTORY}/mcp.json`;
+const PROJECT_PROMPT_FILE = `${CONFIG_DIRECTORY}/prompt.md`;
+const PROJECT_SCHEMA_FILE = `${CONFIG_DIRECTORY}/schema.json`;
+const PROJECT_TAGS_FILE = `${CONFIG_DIRECTORY}/tags.json`;
 
 export const createStorageAdapter = (config: AppConfig): StorageAdapter => {
   if (config.backendKind === 'local') {
@@ -106,7 +111,8 @@ export class LocalStorageAdapter implements StorageAdapter {
     const id = assertNewProjectId(projectId);
     const project = this.projectPath(id);
     await fs.mkdir(project, { recursive: false });
-    await fs.writeFile(path.join(project, '_schema.json'), `${JSON.stringify(NEW_PROJECT_SCHEMA, null, 2)}\n`, { flag: 'wx' });
+    await fs.mkdir(path.join(project, CONFIG_DIRECTORY), { recursive: false });
+    await fs.writeFile(path.join(project, PROJECT_SCHEMA_FILE), `${JSON.stringify(NEW_PROJECT_SCHEMA, null, 2)}\n`, { flag: 'wx' });
     await fs.writeFile(path.join(project, PROJECT_CONFIG_FILE), `${JSON.stringify(toPersistedFeedbackConfig(normalizeFeedbackConfig(NEW_PROJECT_SCHEMA, undefined)), null, 2)}\n`, {
       flag: 'wx'
     });
@@ -115,7 +121,7 @@ export class LocalStorageAdapter implements StorageAdapter {
 
   async openProject(projectId: string): Promise<OpenProjectResult> {
     const project = this.projectPath(assertProjectId(projectId));
-    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    const schema = await this.readProjectSchema(project);
     const projectConfig = redactConfig(this.loadProjectConfig(project));
     const feedbackConfig = await this.readFeedbackConfig(project, schema);
     const tagDefinitions = await this.getTagDefinitions(projectId);
@@ -141,7 +147,7 @@ export class LocalStorageAdapter implements StorageAdapter {
   async renderRecordData(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
     const project = this.projectPath(assertProjectId(projectId));
     const id = assertRecordId(recordId);
-    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    const schema = await this.readProjectSchema(project);
     return buildRecordDetail(projectId, id, schema, data, await this.readFeedbackConfig(project, schema));
   }
 
@@ -177,15 +183,17 @@ export class LocalStorageAdapter implements StorageAdapter {
 
   async getFeedbackConfig(projectId: string): Promise<FeedbackConfig> {
     const project = this.projectPath(assertProjectId(projectId));
-    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    const schema = await this.readProjectSchema(project);
     return this.readFeedbackConfig(project, schema);
   }
 
   async saveFeedbackConfig(projectId: string, config: FeedbackConfig): Promise<FeedbackConfig> {
     const project = this.projectPath(assertProjectId(projectId));
-    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    const schema = await this.readProjectSchema(project);
     const normalized = normalizeFeedbackConfig(schema, config);
-    await writeJsonFile(path.join(project, PROJECT_CONFIG_FILE), toPersistedFeedbackConfig(normalized));
+    const configPath = await this.projectConfigFilePath(project, 'config.json');
+    await rejectSymlinkIfExists(configPath, PROJECT_CONFIG_FILE);
+    await writeJsonFile(configPath, toPersistedFeedbackConfig(normalized));
     return normalized;
   }
 
@@ -193,8 +201,12 @@ export class LocalStorageAdapter implements StorageAdapter {
     validateRecord(schema, {});
     const id = assertProjectId(projectId);
     const project = this.projectPath(id);
-    const schemaPath = path.join(project, '_schema.json');
-    const tempPath = path.join(project, `._schema.${process.pid}.${Date.now()}.json`);
+    const configPath = await this.projectConfigDirectoryPath(project);
+    await fs.mkdir(configPath, { recursive: true });
+    await this.projectConfigDirectoryPath(project);
+    const schemaPath = await this.projectConfigFilePath(project, 'schema.json');
+    await rejectSymlinkIfExists(schemaPath, PROJECT_SCHEMA_FILE);
+    const tempPath = path.join(configPath, `.schema.${process.pid}.${Date.now()}.json`);
     const body = `${JSON.stringify(schema, null, 2)}\n`;
     await fs.writeFile(tempPath, body, { flag: 'wx' });
     let backupSchemaPath: string | undefined;
@@ -205,7 +217,7 @@ export class LocalStorageAdapter implements StorageAdapter {
         await fs.unlink(schemaPath);
       }
       await fs.rename(tempPath, schemaPath);
-      return { projectId: id, schemaPath: '_schema.json', backupSchemaPath, schema };
+      return { projectId: id, schemaPath: PROJECT_SCHEMA_FILE, backupSchemaPath, schema };
     } catch (error) {
       await fs.rm(tempPath, { force: true });
       throw error;
@@ -221,7 +233,7 @@ export class LocalStorageAdapter implements StorageAdapter {
     const project = this.projectPath(assertProjectId(projectId));
     const id = assertRecordId(recordId);
     const validInput = assertNonEmptyFeedbackSubmission(input);
-    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    const schema = await this.readProjectSchema(project);
     const config = await this.readFeedbackConfig(project, schema);
     assertSubmissionAllowed(config, validInput);
     const user = getProjectUser(this.loadProjectConfig(project));
@@ -249,8 +261,9 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
-    const project = this.projectPath(assertProjectId(projectId));
-    return readOptionalTextFile(path.join(project, '_prompt.md'));
+    const promptPath = await this.projectConfigFilePath(this.projectPath(assertProjectId(projectId)), 'prompt.md');
+    await rejectSymlinkIfExists(promptPath, PROJECT_PROMPT_FILE);
+    return readOptionalTextFile(promptPath);
   }
 
   async getProjectConfig(projectId: string): Promise<Record<string, string>> {
@@ -258,20 +271,22 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   async getProjectMcpConfig(projectId: string): Promise<string | undefined> {
-    return readOptionalTextFile(path.join(this.projectPath(assertProjectId(projectId)), '_mcp.json'));
+    const mcpPath = await this.projectConfigFilePath(this.projectPath(assertProjectId(projectId)), 'mcp.json');
+    await rejectSymlinkIfExists(mcpPath, PROJECT_MCP_FILE);
+    return readOptionalTextFile(mcpPath);
   }
 
   async getTagDefinitions(projectId: string): Promise<import('../shared/types').TagDefinition[]> {
     const project = this.projectPath(assertProjectId(projectId));
-    return loadManualTagDefinitionsFromDirectories([path.join(project, TAGS_DIRECTORY), this.appTagsPath()]);
+    return loadManualTagDefinitionsFromDirectories([await this.projectConfigDirectoryPath(project), this.appConfigPath()]);
   }
 
   async reconcileRecordTags(projectId: string, data: unknown): Promise<ReconcileTagsResult> {
     const project = this.projectPath(assertProjectId(projectId));
-    const schema = await readJsonFile(path.join(project, '_schema.json'), 'Project is missing required _schema.json.');
+    const schema = await this.readProjectSchema(project);
     const feedbackConfig = await this.readFeedbackConfig(project, schema);
     const tagDefinitions = await this.getTagDefinitions(projectId);
-    const plugins = await discoverComputedTagPlugins([path.join(project, TAGS_DIRECTORY), this.appTagsPath()]);
+    const plugins = await discoverComputedTagPlugins([this.appConfigPath()]);
     return reconcileComputedTags(schema, feedbackConfig, data, tagDefinitions, plugins);
   }
 
@@ -280,16 +295,49 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   private loadProjectConfig(project: string, options?: { log?: boolean }): Record<string, string> {
-    return loadProjectEnv(path.join(project, '.env'), { ...this.config.values, ...readRuntimeEnvValues(this.config.appEnvPath) }, options);
+    rejectConfigDirectorySymlinkIfExists(project);
+    return loadProjectEnv(path.join(project, PROJECT_ENV_FILE), { ...this.config.values, ...readRuntimeEnvValues(this.config.appEnvPath) }, options);
   }
 
-  private appTagsPath(): string {
-    return path.join(path.dirname(this.config.appEnvPath), TAGS_DIRECTORY);
+  private appConfigPath(): string {
+    return path.dirname(this.config.appEnvPath);
   }
 
   private async readFeedbackConfig(project: string, schema: unknown): Promise<FeedbackConfig> {
-    const config = await readOptionalJsonFile(path.join(project, PROJECT_CONFIG_FILE));
+    const configPath = await this.projectConfigFilePath(project, 'config.json');
+    await rejectSymlinkIfExists(configPath, PROJECT_CONFIG_FILE);
+    const config = await readOptionalJsonFile(configPath);
     return normalizeFeedbackConfig(schema, config);
+  }
+
+  private async readProjectSchema(project: string): Promise<unknown> {
+    const schemaPath = await this.projectConfigFilePath(project, 'schema.json');
+    await rejectSymlinkIfExists(schemaPath, PROJECT_SCHEMA_FILE);
+    return readJsonFile(schemaPath, `Project is missing required ${PROJECT_SCHEMA_FILE}.`);
+  }
+
+  private async projectConfigFilePath(project: string, fileName: 'config.json' | 'mcp.json' | 'prompt.md' | 'schema.json' | 'tags.json'): Promise<string> {
+    await this.projectConfigDirectoryPath(project);
+    return containedPath(project, `${CONFIG_DIRECTORY}/${fileName}`);
+  }
+
+  private async projectConfigDirectoryPath(project: string): Promise<string> {
+    const configPath = containedPath(project, CONFIG_DIRECTORY);
+    try {
+      const stat = await fs.lstat(configPath);
+      if (stat.isSymbolicLink()) {
+        throw new Error('Project config directory cannot be a symlink.');
+      }
+      if (!stat.isDirectory()) {
+        throw new Error('Project config path must be a directory.');
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return configPath;
+      }
+      throw error;
+    }
+    return configPath;
   }
 }
 
@@ -324,7 +372,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
       throw new Error(`Project already exists: ${id}`);
     }
     const schema = JSON.stringify(NEW_PROJECT_SCHEMA, null, 2);
-    await container.getBlockBlobClient('_schema.json').upload(schema, Buffer.byteLength(schema));
+    await container.getBlockBlobClient(PROJECT_SCHEMA_FILE).upload(schema, Buffer.byteLength(schema));
     const feedbackConfig = JSON.stringify(toPersistedFeedbackConfig(normalizeFeedbackConfig(NEW_PROJECT_SCHEMA, undefined)), null, 2);
     await container.getBlockBlobClient(PROJECT_CONFIG_FILE).upload(feedbackConfig, Buffer.byteLength(feedbackConfig));
     return { id, name: id };
@@ -333,9 +381,9 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   async openProject(projectId: string): Promise<OpenProjectResult> {
     const id = assertProjectId(projectId);
     const container = this.client.getContainerClient(id);
-    const schemaText = await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.');
+    const schemaText = await this.readProjectSchemaBlob(container);
     const schema = JSON.parse(schemaText) as unknown;
-    const projectEnv = await this.readOptionalBlob(container, '.env');
+    const projectEnv = await this.readOptionalBlob(container, PROJECT_ENV_FILE);
     const projectConfig = redactConfig(this.mergeAzureProjectConfig(projectEnv));
     const feedbackConfig = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE));
     const tagDefinitions = await this.getTagDefinitions(id);
@@ -364,7 +412,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const id = assertProjectId(projectId);
     const record = assertRecordId(recordId);
     const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
+    const schema = JSON.parse(await this.readProjectSchemaBlob(container)) as unknown;
     return buildRecordDetail(id, record, schema, data, normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE)));
   }
 
@@ -422,14 +470,14 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   async getFeedbackConfig(projectId: string): Promise<FeedbackConfig> {
     const id = assertProjectId(projectId);
     const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
+    const schema = JSON.parse(await this.readProjectSchemaBlob(container)) as unknown;
     return normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE));
   }
 
   async saveFeedbackConfig(projectId: string, config: FeedbackConfig): Promise<FeedbackConfig> {
     const id = assertProjectId(projectId);
     const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
+    const schema = JSON.parse(await this.readProjectSchemaBlob(container)) as unknown;
     const normalized = normalizeFeedbackConfig(schema, config);
     const body = `${JSON.stringify(toPersistedFeedbackConfig(normalized), null, 2)}\n`;
     await container.getBlockBlobClient(PROJECT_CONFIG_FILE).upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
@@ -440,23 +488,23 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     validateRecord(schema, {});
     const id = assertProjectId(projectId);
     const container = this.client.getContainerClient(id);
-    const schemaBlob = container.getBlockBlobClient('_schema.json');
+    const schemaBlob = container.getBlockBlobClient(PROJECT_SCHEMA_FILE);
     const body = `${JSON.stringify(schema, null, 2)}\n`;
     let backupSchemaPath: string | undefined;
     if (await schemaBlob.exists()) {
-      const existing = await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.');
+      const existing = await this.readProjectSchemaBlob(container);
       backupSchemaPath = await this.nextSchemaBackupName(container);
       await container.getBlockBlobClient(backupSchemaPath).upload(existing, Buffer.byteLength(existing), {
         blobHTTPHeaders: { blobContentType: 'application/json' }
       });
     }
     await schemaBlob.upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
-    return { projectId: id, schemaPath: '_schema.json', backupSchemaPath, schema };
+    return { projectId: id, schemaPath: PROJECT_SCHEMA_FILE, backupSchemaPath, schema };
   }
 
   async getProjectUser(projectId: string): Promise<ProjectUser> {
     const id = assertProjectId(projectId);
-    const projectEnv = await this.readOptionalBlob(this.client.getContainerClient(id), '.env');
+    const projectEnv = await this.readOptionalBlob(this.client.getContainerClient(id), PROJECT_ENV_FILE);
     return getProjectUser(this.mergeAzureProjectConfig(projectEnv));
   }
 
@@ -465,10 +513,10 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const record = assertRecordId(recordId);
     const validInput = assertNonEmptyFeedbackSubmission(input);
     const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
+    const schema = JSON.parse(await this.readProjectSchemaBlob(container)) as unknown;
     const config = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE));
     assertSubmissionAllowed(config, validInput);
-    const user = getProjectUser(this.mergeAzureProjectConfig(await this.readOptionalBlob(container, '.env')));
+    const user = getProjectUser(this.mergeAzureProjectConfig(await this.readOptionalBlob(container, PROJECT_ENV_FILE)));
     if (!user.valid || !user.username) {
       throw new Error(user.validationMessage);
     }
@@ -499,35 +547,39 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
     const id = assertProjectId(projectId);
-    return this.readOptionalBlob(this.client.getContainerClient(id), '_prompt.md');
+    return this.readOptionalBlob(this.client.getContainerClient(id), PROJECT_PROMPT_FILE);
   }
 
   async getProjectConfig(projectId: string): Promise<Record<string, string>> {
     const id = assertProjectId(projectId);
-    const projectEnv = await this.readOptionalBlob(this.client.getContainerClient(id), '.env');
+    const projectEnv = await this.readOptionalBlob(this.client.getContainerClient(id), PROJECT_ENV_FILE);
     return this.mergeAzureProjectConfig(projectEnv);
   }
 
   async getProjectMcpConfig(projectId: string): Promise<string | undefined> {
     const id = assertProjectId(projectId);
-    return this.readOptionalBlob(this.client.getContainerClient(id), '_mcp.json');
+    return this.readOptionalBlob(this.client.getContainerClient(id), PROJECT_MCP_FILE);
   }
 
   async getTagDefinitions(projectId: string): Promise<import('../shared/types').TagDefinition[]> {
     const id = assertProjectId(projectId);
-    const projectDefinitions = await this.readOptionalJsonBlob(this.client.getContainerClient(id), 'tags/manual.json');
-    const appDefinitions = await loadManualTagDefinitionsFromDirectories([path.join(path.dirname(this.config.appEnvPath), TAGS_DIRECTORY)]);
+    const projectDefinitions = await this.readOptionalJsonBlob(this.client.getContainerClient(id), PROJECT_TAGS_FILE);
+    const appDefinitions = await loadManualTagDefinitionsFromDirectories([path.dirname(this.config.appEnvPath)]);
     return loadManualTagDefinitionsFromValues([projectDefinitions, appDefinitions]);
   }
 
   async reconcileRecordTags(projectId: string, data: unknown): Promise<ReconcileTagsResult> {
     const id = assertProjectId(projectId);
     const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readBlob(container, '_schema.json', 'Project is missing required _schema.json.')) as unknown;
+    const schema = JSON.parse(await this.readProjectSchemaBlob(container)) as unknown;
     const feedbackConfig = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE));
     const tagDefinitions = await this.getTagDefinitions(id);
-    const plugins = await discoverComputedTagPlugins([path.join(path.dirname(this.config.appEnvPath), TAGS_DIRECTORY)]);
+    const plugins = await discoverComputedTagPlugins([path.dirname(this.config.appEnvPath)]);
     return reconcileComputedTags(schema, feedbackConfig, data, tagDefinitions, plugins);
+  }
+
+  private async readProjectSchemaBlob(container: ReturnType<BlobServiceClient['getContainerClient']>): Promise<string> {
+    return this.readBlob(container, PROJECT_SCHEMA_FILE, `Project is missing required ${PROJECT_SCHEMA_FILE}.`);
   }
 
   private async readBlob(container: ReturnType<BlobServiceClient['getContainerClient']>, name: string, missingMessage: string): Promise<string> {
@@ -555,7 +607,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
 
   private async nextSchemaBackupName(container: ReturnType<BlobServiceClient['getContainerClient']>): Promise<string> {
     for (let index = 1; ; index += 1) {
-      const name = `_schema_${index}.json`;
+      const name = `${CONFIG_DIRECTORY}/schema_${index}.json`;
       if (!(await container.getBlobClient(name).exists())) {
         return name;
       }
@@ -570,6 +622,37 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
 }
 
 const isRecordFile = (name: string): boolean => name.endsWith('.json') && !path.basename(name).startsWith('_') && !name.includes('/');
+
+const rejectSymlinkIfExists = async (filePath: string, label: string): Promise<void> => {
+  try {
+    if ((await fs.lstat(filePath)).isSymbolicLink()) {
+      throw new Error(`Project config file cannot be a symlink: ${label}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+};
+
+const rejectConfigDirectorySymlinkIfExists = (project: string): void => {
+  const configPath = containedPath(project, CONFIG_DIRECTORY);
+  try {
+    const stat = lstatSync(configPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error('Project config directory cannot be a symlink.');
+    }
+    if (!stat.isDirectory()) {
+      throw new Error('Project config path must be a directory.');
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+};
 
 const containedPath = (root: string, child: string): string => {
   const resolved = path.resolve(root, child);
@@ -620,7 +703,7 @@ const fileExists = async (filePath: string): Promise<boolean> => {
 
 const nextSchemaBackupName = async (projectPath: string): Promise<string> => {
   for (let index = 1; ; index += 1) {
-    const name = `_schema_${index}.json`;
+    const name = `${CONFIG_DIRECTORY}/schema_${index}.json`;
     if (!(await fileExists(path.join(projectPath, name)))) {
       return name;
     }
@@ -663,7 +746,7 @@ const parseAzureProjectEnv = (content: string): Record<string, string> =>
       .map((line) => {
         const index = line.indexOf('=');
         if (index <= 0) {
-          throw new Error(`Invalid project .env line: ${line}`);
+          throw new Error(`Invalid project config/.env line: ${line}`);
         }
         return [line.slice(0, index), line.slice(index + 1)];
       })

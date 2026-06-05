@@ -6,10 +6,7 @@ import type { FeedbackConfig, TagDefinition } from '../shared/types';
 
 export type ComputedTagPlugin = {
   name?: string;
-  targetSchema?: string;
-  schema?: string;
-  run?: (record: unknown, context: ComputedTagContext) => unknown;
-  apply?: (record: unknown, context: ComputedTagContext) => unknown;
+  tag: (record: unknown, context: ComputedTagContext) => unknown;
 };
 
 export type ComputedTagContext = {
@@ -32,7 +29,7 @@ export const loadManualTagDefinitionsFromDirectories = async (directories: Array
     if (!directory) {
       continue;
     }
-    const filePath = path.join(directory, 'manual.json');
+    const filePath = path.join(directory, 'tags.json');
     const content = await readOptionalTextFile(filePath);
     if (content === undefined) {
       continue;
@@ -52,7 +49,7 @@ export const loadManualTagDefinitionsFromValues = (values: Array<unknown | undef
     if (value === undefined) {
       continue;
     }
-    for (const definition of normalizeManualTagDefinitions(value, 'tags/manual.json')) {
+    for (const definition of normalizeManualTagDefinitions(value, 'config/tags.json')) {
       if (!definitions.has(definition.name)) {
         definitions.set(definition.name, definition);
       }
@@ -80,12 +77,10 @@ export const discoverComputedTagPlugins = async (directories: Array<string | und
     try {
       const module = (await nativeImport(pathToFileURL(file).toString())) as Record<string, unknown>;
       const candidate = module.default ?? module.plugin ?? module;
-      if (typeof candidate === 'function') {
-        plugins.push({ name: path.basename(file), run: candidate as ComputedTagPlugin['run'], targetSchema: readStringProperty(candidate, 'targetSchema') });
-      } else if (isPlainRecord(candidate)) {
+      if (isTagPlugin(candidate)) {
         plugins.push(candidate as ComputedTagPlugin);
       } else {
-        plugins.push(new Error(`Tag plugin ${path.basename(file)} does not export a plugin object or function.`));
+        plugins.push(new Error(`Tag plugin ${path.basename(file)} must export a tag(record, context) function.`));
       }
     } catch (error) {
       plugins.push(error instanceof Error ? error : new Error(String(error)));
@@ -106,36 +101,27 @@ export const reconcileComputedTags = (
     return { data, pluginErrors: [] };
   }
   const pluginErrors: string[] = [];
-  const schemaId = schemaIdentifier(schema);
   const context: ComputedTagContext = { schema, tagsPath, manualTagDefinitions };
   for (const plugin of plugins) {
     if (plugin instanceof Error) {
       pluginErrors.push(plugin.message);
       continue;
     }
-    const targetSchema = plugin.targetSchema ?? plugin.schema;
-    if (!targetSchema || !schemaId || targetSchema !== schemaId) {
-      continue;
-    }
     try {
-      const apply = plugin.run ?? plugin.apply;
-      if (!apply) {
-        throw new Error('Plugin does not export run or apply.');
-      }
-      const result = apply(data, context);
+      const result = plugin.tag(data, context);
       if (result && typeof (result as PromiseLike<void>).then === 'function') {
         throw new Error('Tag plugins must run synchronously.');
       }
     } catch (error) {
-      pluginErrors.push(`${plugin.name ?? targetSchema}: ${error instanceof Error ? error.message : String(error)}`);
+      pluginErrors.push(`${plugin.name ?? 'tag plugin'}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   normalizeTagsAtPath(data, tagsPath);
   return { data, pluginErrors };
 };
 
-export const tagPluginWarning = (errors: string[]): string | undefined =>
-  errors.length === 0 ? undefined : `Save succeeded, but ${errors.length} tag plugin${errors.length === 1 ? '' : 's'} failed. ${errors.join('; ')}`;
+export const tagPluginWarning = (errors: string[], successMessage = 'Save succeeded'): string | undefined =>
+  errors.length === 0 ? undefined : `${successMessage}, but ${errors.length} tag plugin${errors.length === 1 ? '' : 's'} failed. ${errors.join('; ')}`;
 
 export const tagsMappingPath = (feedbackConfig: FeedbackConfig): string | undefined =>
   Object.values(feedbackConfig.properties).find((entry) => entry.mapping === 'tags')?.path;
@@ -206,16 +192,9 @@ const readOptionalDirectory = async (directory: string): Promise<import('node:fs
   }
 };
 
-const isPluginFile = (name: string): boolean => name !== 'manual.json' && ['.js', '.mjs', '.cjs'].includes(path.extname(name));
+const isPluginFile = (name: string): boolean => path.extname(name) === '.mjs';
 
 const nativeImport = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<unknown>;
-
-const schemaIdentifier = (schema: unknown): string | undefined =>
-  isPlainRecord(schema) && typeof schema.$id === 'string'
-    ? schema.$id
-    : isPlainRecord(schema) && typeof schema.title === 'string'
-      ? schema.title
-      : undefined;
 
 const readJsonPointer = (data: unknown, pointer: string): unknown => {
   if (!pointer.startsWith('/')) {
@@ -257,9 +236,6 @@ const writeJsonPointer = (data: unknown, pointer: string, value: unknown): void 
 
 const unescapePointer = (value: string): string => value.replace(/~1/g, '/').replace(/~0/g, '~');
 
-const readStringProperty = (value: unknown, key: string): string | undefined =>
-  (isPlainRecord(value) || typeof value === 'function') && typeof (value as Record<string, unknown>)[key] === 'string'
-    ? ((value as Record<string, unknown>)[key] as string)
-    : undefined;
+const isTagPlugin = (value: unknown): value is ComputedTagPlugin => isPlainRecord(value) && typeof value.tag === 'function';
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);

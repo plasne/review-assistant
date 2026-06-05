@@ -461,6 +461,13 @@ h3 {
   padding: 0;
 }
 
+.tag-controls {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .tag-add-control {
   color: #c8d4e3;
   display: grid;
@@ -758,15 +765,15 @@ ul {
 }
 
 .field-edit-mode {
+  align-items: center;
   border: 1px solid #6c89ad;
   border-radius: 999px;
   color: #d7e4f5;
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  line-height: 1;
-  padding: 0.15rem 0.4rem;
-  text-transform: uppercase;
+  display: inline-flex;
+  font-size: 0.875rem;
+  font-weight: 400;
+  padding: 0.0625rem 0.5rem;
+  text-transform: lowercase;
 }
 
 .field-edit-mode-inline {
@@ -1034,13 +1041,17 @@ pre {
 }
 
 .editability-badge {
+  align-items: center;
   border: 1px solid #637897;
   border-radius: 999px;
   color: #c8d4e3;
+  display: inline-flex;
   font-size: 0.6875rem;
   font-weight: 700;
-  padding: 0.08rem 0.45rem;
-  text-transform: none;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 0.15rem 0.4rem;
+  text-transform: lowercase;
 }
 
 .editability-badge.editable {

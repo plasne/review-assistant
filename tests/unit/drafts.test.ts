@@ -88,6 +88,25 @@ describe('record draft store', () => {
     expect(result.tagPluginWarning).toContain('Save succeeded, but 1 tag plugin failed.');
   });
 
+  it('computes tag mutations into the draft without persisting the record', async () => {
+    let stored: unknown = { tags: ['manual'] };
+    const storage = createStorage(() => stored, (next) => {
+      stored = next;
+    });
+    storage.reconcileRecordTags = async (_projectId, data) => {
+      (data as { tags: string[] }).tags.push('computed');
+      return { data, pluginErrors: ['broken: boom'] };
+    };
+    const drafts = new RecordDraftStore(() => storage);
+
+    const result = await drafts.computeTags('sample-project', 'record-1');
+
+    expect(stored).toEqual({ tags: ['manual'] });
+    expect(result.record.data).toEqual({ tags: ['manual', 'computed'] });
+    expect(result.tagPluginWarning).toContain('Tags computed, but 1 tag plugin failed.');
+    expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: true });
+  });
+
   it('rejects saving a draft when the persisted record changed after staging', async () => {
     let stored: unknown = { answer: 'Original' };
     const storage = createStorage(() => stored, (next) => {
@@ -122,7 +141,7 @@ describe('record draft store', () => {
     );
     storage.saveProjectSchema = async (projectId, schema) => {
       savedSchema = clone(schema);
-      return { projectId, schemaPath: '_schema.json', backupSchemaPath: '_schema_1.json', schema };
+      return { projectId, schemaPath: 'config/schema.json', backupSchemaPath: 'config/schema_1.json', schema };
     };
     const drafts = new RecordDraftStore(() => storage);
     const adapter = drafts.createStorageAdapter();
@@ -130,8 +149,8 @@ describe('record draft store', () => {
 
     await expect(adapter.saveProjectSchema('sample-project', schema)).resolves.toEqual({
       projectId: 'sample-project',
-      schemaPath: '_schema.json',
-      backupSchemaPath: '_schema_1.json',
+      schemaPath: 'config/schema.json',
+      backupSchemaPath: 'config/schema_1.json',
       schema
     });
     expect(savedSchema).toEqual(schema);
@@ -183,7 +202,7 @@ const createStorage = (read: () => unknown, write: (value: unknown) => void): St
     }
   }),
   saveFeedbackConfig: async (_projectId, config) => config,
-  saveProjectSchema: async (projectId, schema) => ({ projectId, schemaPath: '_schema.json', schema }),
+  saveProjectSchema: async (projectId, schema) => ({ projectId, schemaPath: 'config/schema.json', schema }),
   getProjectUser: async () => ({ username: 'sme@example.com', valid: true }),
   submitFeedback: async (projectId, recordId) => ({ username: 'sme@example.com', record: createRecordDetail(projectId, recordId, read()) }),
   updateRecord: async (projectId, recordId, data) => {

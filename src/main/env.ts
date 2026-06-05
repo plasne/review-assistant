@@ -40,6 +40,9 @@ export const readEnvFile = (envPath: string): Record<string, string> => {
   if (!fs.existsSync(envPath)) {
     return {};
   }
+  if (fs.lstatSync(envPath).isSymbolicLink()) {
+    throw new ConfigError(`Environment file cannot be a symlink: ${envPath}`);
+  }
   return parseEnv(fs.readFileSync(envPath, 'utf8'));
 };
 
@@ -62,7 +65,7 @@ export const selectBackend = (values: Record<string, string>): BackendKind => {
 };
 
 export const getAppEnvPath = (): string =>
-  process.env.REVIEW_ASSISTANT_APP_ENV ?? path.resolve(process.cwd(), '.env');
+  process.env.REVIEW_ASSISTANT_APP_ENV ?? path.resolve(process.cwd(), 'config', '.env');
 
 export const loadAppConfig = (envPath = getAppEnvPath()): AppConfig => {
   const values = readEnvFile(envPath);
@@ -91,7 +94,7 @@ export const loadProjectEnv = (projectEnvPath: string, appValues: Record<string,
   const projectValues = readEnvFile(projectEnvPath);
   const backendOverrides = BACKEND_KEYS.filter((key) => key in projectValues);
   if (backendOverrides.length > 0) {
-    throw new ConfigError(`Project .env cannot override backend selection keys in v0.1.0: ${backendOverrides.join(', ')}`);
+    throw new ConfigError(`Project config/.env cannot override backend selection keys in v0.1.0: ${backendOverrides.join(', ')}`);
   }
   const merged = { ...appValues, ...projectValues };
   if (options.log !== false) {

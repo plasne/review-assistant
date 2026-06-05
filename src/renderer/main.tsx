@@ -588,6 +588,28 @@ const App = () => {
     }
   };
 
+  const computeSelectedRecordTags = async () => {
+    if (!selectedProjectId || !record) {
+      return;
+    }
+    setStatus('loading');
+    setError(undefined);
+    try {
+      await inlineEditQueueRef.current;
+      await submitPendingFeedbackDrafts();
+      const result = await window.reviewAssistant.computeRecordTags(selectedProjectId, record.recordId);
+      selectRecordDetail(result.record);
+      inlineDraftDataRef.current = result.record.data;
+      setSaveWarning(result.tagPluginWarning);
+      updateUnsavedChanges(true);
+      setStatus('idle');
+    } catch (caught) {
+      setStatus('error');
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setSaveWarning(undefined);
+    }
+  };
+
   const saveSelectedRecordChanges = async (): Promise<boolean> => {
     if (!selectedProjectId || !record) {
       return false;
@@ -1268,6 +1290,7 @@ const App = () => {
               showExtraSchemaFields={showExtraSchemaFields}
               onSubmitFeedback={submitFeedback}
               onInlineEdit={updateInlineRecordValue}
+              onComputeTags={computeSelectedRecordTags}
               feedbackDrafts={feedbackDrafts}
               onChangeFeedbackDraft={changeFeedbackDraft}
               tagDefinitions={project?.tagDefinitions ?? []}
@@ -1524,6 +1547,15 @@ const SaveIcon = () => (
     <path
       fill="currentColor"
       d="M2 1.5A1.5 1.5 0 0 1 3.5 0h7.38c.4 0 .78.16 1.06.44l1.62 1.62c.28.28.44.66.44 1.06V14.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 14.5v-13ZM4 1.5V6h7V1.62L10.88 1.5H10V4H8V1.5H4Zm0 8V15h8V9.5H4Z"
+    />
+  </svg>
+);
+
+const ComputeTagsIcon = () => (
+  <svg className="action-svg-icon" aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+    <path
+      fill="currentColor"
+      d="M8 1.5 9.53 5l3.72.43-2.8 2.5.74 3.67L8 9.7l-3.19 1.9.74-3.67-2.8-2.5L6.47 5 8 1.5Zm0 3.02-.63 1.43-1.53.18 1.15 1.03-.3 1.51L8 7.89l1.31.78-.3-1.51 1.15-1.03-1.53-.18L8 4.52ZM2.5 12h11v1.5h-11V12Z"
     />
   </svg>
 );
@@ -1788,6 +1820,7 @@ const RecordDetails = ({
   showExtraSchemaFields,
   onSubmitFeedback,
   onInlineEdit,
+  onComputeTags,
   feedbackDrafts,
   onChangeFeedbackDraft,
   tagDefinitions
@@ -1798,6 +1831,7 @@ const RecordDetails = ({
   showExtraSchemaFields: boolean;
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
   onInlineEdit: (node: Extract<RenderNode, { kind: 'array' | 'value' | 'raw' }>, value: string) => Promise<void>;
+  onComputeTags: () => Promise<void>;
   feedbackDrafts: FeedbackDrafts;
   onChangeFeedbackDraft: (path: string, draft: FeedbackDraft) => void;
   tagDefinitions: TagDefinition[];
@@ -1867,6 +1901,7 @@ const RecordDetails = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            onComputeTags={onComputeTags}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
             tagDefinitions={tagDefinitions}
@@ -1879,6 +1914,7 @@ const RecordDetails = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            onComputeTags={onComputeTags}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
             tagDefinitions={tagDefinitions}
@@ -1943,6 +1979,7 @@ const RenderTreeRoot = ({
   projectUser,
   showExtraSchemaFields,
   onSubmitFeedback,
+  onComputeTags,
   feedbackDrafts,
   onChangeFeedbackDraft,
   tagDefinitions = [],
@@ -1955,6 +1992,7 @@ const RenderTreeRoot = ({
   projectUser?: ProjectUser;
   showExtraSchemaFields: boolean;
   onSubmitFeedback: (input: FeedbackSubmissionInput) => Promise<void>;
+  onComputeTags?: () => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
   tagDefinitions?: TagDefinition[];
@@ -1974,6 +2012,7 @@ const RenderTreeRoot = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            onComputeTags={onComputeTags}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
             tagDefinitions={tagDefinitions}
@@ -1992,6 +2031,7 @@ const RenderTreeRoot = ({
       projectUser={projectUser}
       showExtraSchemaFields={showExtraSchemaFields}
       onSubmitFeedback={onSubmitFeedback}
+      onComputeTags={onComputeTags}
       feedbackDrafts={feedbackDrafts}
       onChangeFeedbackDraft={onChangeFeedbackDraft}
       tagDefinitions={tagDefinitions}
@@ -2009,6 +2049,7 @@ const RenderTree = ({
   projectUser,
   showExtraSchemaFields = true,
   onSubmitFeedback,
+  onComputeTags,
   feedbackDrafts,
   onChangeFeedbackDraft,
   tagDefinitions = [],
@@ -2022,6 +2063,7 @@ const RenderTree = ({
   projectUser?: ProjectUser;
   showExtraSchemaFields?: boolean;
   onSubmitFeedback?: (input: FeedbackSubmissionInput) => Promise<void>;
+  onComputeTags?: () => Promise<void>;
   feedbackDrafts?: FeedbackDrafts;
   onChangeFeedbackDraft?: (path: string, draft: FeedbackDraft) => void;
   tagDefinitions?: TagDefinition[];
@@ -2069,6 +2111,7 @@ const RenderTree = ({
               projectUser={projectUser}
               showExtraSchemaFields={showExtraSchemaFields}
               onSubmitFeedback={onSubmitFeedback}
+              onComputeTags={onComputeTags}
               feedbackDrafts={feedbackDrafts}
               onChangeFeedbackDraft={onChangeFeedbackDraft}
               tagDefinitions={tagDefinitions}
@@ -2101,6 +2144,7 @@ const RenderTree = ({
             projectUser={projectUser}
             showExtraSchemaFields={showExtraSchemaFields}
             onSubmitFeedback={onSubmitFeedback}
+            onComputeTags={onComputeTags}
             feedbackDrafts={feedbackDrafts}
             onChangeFeedbackDraft={onChangeFeedbackDraft}
             tagDefinitions={tagDefinitions}
@@ -2114,6 +2158,7 @@ const RenderTree = ({
   if (node.kind === 'array') {
     const editMode = editModeForNode(node, feedbackConfig);
     const stringArray = isStringArrayNode(node);
+    const tagsPresentation = stringArray && isTagsPresentationNode(node, feedbackConfig);
     const [localStringArrayCount, setLocalStringArrayCount] = useState<number | undefined>(undefined);
     if (node.presentation === 'evidence-list') {
       return (
@@ -2152,11 +2197,12 @@ const RenderTree = ({
         />
         {node.path && node.path === omitArrayItemsForPath ? (
           <p className="array-items-omitted">(shown in tabs)</p>
-        ) : stringArray && node.presentation === 'tags' ? (
+        ) : tagsPresentation ? (
           <TagsPresentation
             node={node}
             editMode={editMode}
             tagDefinitions={tagDefinitions}
+            onComputeTags={onComputeTags}
             draft={node.path ? feedbackDrafts?.[node.path] : undefined}
             onChangeDraft={onChangeFeedbackDraft}
             onChangeCount={setLocalStringArrayCount}
@@ -2543,8 +2589,13 @@ const editModeForNode = (node: RenderNode, feedbackConfig?: FeedbackConfig): Fee
   return config?.editMode ?? 'none';
 };
 
+const isTagsPresentationNode = (node: RenderNode, feedbackConfig?: FeedbackConfig): boolean => {
+  const config = node.path && feedbackConfig ? feedbackConfigEntryForPath(feedbackConfig, node.path) : undefined;
+  return node.presentation === 'tags' || config?.presentation === 'tags';
+};
+
 const editabilityLabel = (editMode: FeedbackEditMode): string =>
-  editMode === 'inline' ? 'Inline' : editMode === 'logged' ? 'Logged' : 'Read-only';
+  editMode === 'inline' ? 'inline' : editMode === 'logged' ? 'logged' : 'read-only';
 
 const isEvidenceContentField = (node: RenderNode): boolean => node.label.toLowerCase() === 'content';
 
@@ -2729,6 +2780,7 @@ const TagsPresentation = ({
   node,
   editMode,
   tagDefinitions,
+  onComputeTags,
   draft,
   onChangeDraft,
   onChangeCount
@@ -2736,6 +2788,7 @@ const TagsPresentation = ({
   node: Extract<RenderNode, { kind: 'array' }>;
   editMode: FeedbackEditMode;
   tagDefinitions: TagDefinition[];
+  onComputeTags?: () => Promise<void>;
   draft?: FeedbackDraft;
   onChangeDraft?: (path: string, draft: FeedbackDraft) => void;
   onChangeCount?: (count: number) => void;
@@ -2769,10 +2822,32 @@ const TagsPresentation = ({
   };
 
   const addManualTag = (name: string) => {
-    if (!name || tags.length >= MAX_TAGS_PER_RECORD || name.length > MAX_TAG_LENGTH) {
+    if (!name || !manualNames.has(name) || name.length > MAX_TAG_LENGTH) {
       return;
     }
-    applyTags([...tags, name]);
+    const domain = manualTagDomain(name);
+    const sameDomainTags =
+      domain === undefined ? [] : tags.filter((tag) => tag !== name && manualNames.has(tag) && manualTagDomain(tag) === domain);
+    if (tags.includes(name) || (sameDomainTags.length === 0 && tags.length >= MAX_TAGS_PER_RECORD)) {
+      return;
+    }
+    if (sameDomainTags.length === 0) {
+      applyTags([...tags, name]);
+      return;
+    }
+    let replaced = false;
+    applyTags(
+      tags.flatMap((tag) => {
+        if (!sameDomainTags.includes(tag)) {
+          return [tag];
+        }
+        if (replaced) {
+          return [];
+        }
+        replaced = true;
+        return [name];
+      })
+    );
   };
   const removeManualTag = (name: string) => applyTags(tags.filter((tag) => tag !== name));
 
@@ -2780,26 +2855,39 @@ const TagsPresentation = ({
     <div className="tags-presentation" aria-label={`${node.label} tags`}>
       <TagGroup title="Computed tags" tags={computedTags} />
       <TagGroup title="Manual tags" tags={manualTags} onRemove={editable ? removeManualTag : undefined} />
-      {editable ? (
-        <label className="tag-add-control">
-          <select
-            aria-label={`Add ${node.label} manual tag`}
-            value=""
-            onChange={(event) => {
-              addManualTag(event.target.value);
-              event.currentTarget.value = '';
-            }}
-            disabled={availableDefinitions.length === 0 || tags.length >= MAX_TAGS_PER_RECORD}
+      <div className="tag-controls">
+        {editable ? (
+          <label className="tag-add-control">
+            <select
+              aria-label={`Add ${node.label} manual tag`}
+              value=""
+              onChange={(event) => {
+                addManualTag(event.target.value);
+                event.currentTarget.value = '';
+              }}
+              disabled={availableDefinitions.length === 0 || tags.length >= MAX_TAGS_PER_RECORD}
+            >
+              <option value="">Choose a tag</option>
+              {availableDefinitions.map((definition) => (
+                <option key={definition.name} value={definition.name}>
+                  {definition.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        {onComputeTags ? (
+          <button
+            type="button"
+            className="refresh-records-button action-icon-button"
+            aria-label="Compute tags"
+            data-tooltip="Compute tags"
+            onClick={() => void onComputeTags()}
           >
-            <option value="">Choose a tag</option>
-            {availableDefinitions.map((definition) => (
-              <option key={definition.name} value={definition.name}>
-                {definition.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
+            <ComputeTagsIcon />
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 };
@@ -2825,6 +2913,14 @@ const TagGroup = ({ title, tags, onRemove }: { title: string; tags: string[]; on
     )}
   </section>
 );
+
+const manualTagDomain = (name: string): string | undefined => {
+  const separatorIndex = name.indexOf(':');
+  if (separatorIndex <= 0 || separatorIndex === name.length - 1) {
+    return undefined;
+  }
+  return name.slice(0, separatorIndex);
+};
 
 const isHttpUrl = (value: string): boolean => {
   try {
