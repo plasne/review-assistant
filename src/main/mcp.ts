@@ -1,5 +1,7 @@
 import type { ExternalMcpServerConfig } from '../shared/types';
 
+const MCP_CONFIG_FILE = 'config/mcp.json';
+
 type RawMcpServerConfig = {
   command?: unknown;
   args?: unknown;
@@ -17,11 +19,11 @@ export const parseExternalMcpServers = (content: string | undefined, values: Rec
   try {
     parsed = JSON.parse(content) as unknown;
   } catch (error) {
-    throw new Error(`Invalid _mcp.json: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Invalid ${MCP_CONFIG_FILE}: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   if (!isRecord(parsed) || !isRecord(parsed.mcpServers)) {
-    throw new Error('Invalid _mcp.json: expected an object with an mcpServers object.');
+    throw new Error(`Invalid ${MCP_CONFIG_FILE}: expected an object with an mcpServers object.`);
   }
 
   return Object.entries(parsed.mcpServers).map(([id, rawServer]) => parseServer(id, rawServer, values));
@@ -43,15 +45,15 @@ export const mergeExternalMcpServers = (
 
 const parseServer = (id: string, rawServer: unknown, values: Record<string, string>): ExternalMcpServerConfig => {
   if (!/^[A-Za-z0-9_-]+$/.test(id)) {
-    throw new Error(`Invalid _mcp.json: MCP server id must contain only letters, numbers, underscores, or hyphens: ${id}`);
+    throw new Error(`Invalid ${MCP_CONFIG_FILE}: MCP server id must contain only letters, numbers, underscores, or hyphens: ${id}`);
   }
   if (!isRecord(rawServer)) {
-    throw new Error(`Invalid _mcp.json: MCP server ${id} must be an object.`);
+    throw new Error(`Invalid ${MCP_CONFIG_FILE}: MCP server ${id} must be an object.`);
   }
 
   const server = rawServer as RawMcpServerConfig;
   if (typeof server.command !== 'string' || server.command.trim() === '') {
-    throw new Error(`Invalid _mcp.json: MCP server ${id} must include a command.`);
+    throw new Error(`Invalid ${MCP_CONFIG_FILE}: MCP server ${id} must include a command.`);
   }
 
   return {
@@ -66,12 +68,12 @@ const parseServer = (id: string, rawServer: unknown, values: Record<string, stri
 
 const parseEnv = (value: unknown, values: Record<string, string>, id: string): Record<string, string> => {
   if (!isRecord(value)) {
-    throw new Error(`Invalid _mcp.json: MCP server ${id} env must be an object.`);
+    throw new Error(`Invalid ${MCP_CONFIG_FILE}: MCP server ${id} env must be an object.`);
   }
   return Object.fromEntries(
     Object.entries(value).map(([key, rawValue]) => {
       if (typeof rawValue !== 'string') {
-        throw new Error(`Invalid _mcp.json: MCP server ${id} env.${key} must be a string.`);
+        throw new Error(`Invalid ${MCP_CONFIG_FILE}: MCP server ${id} env.${key} must be a string.`);
       }
       return [key, expandEnvValue(rawValue, values, id)];
     })
@@ -82,7 +84,7 @@ const expandEnvValue = (value: string, values: Record<string, string>, id: strin
   value.replace(/\$\{([A-Z0-9_]+)\}/g, (_match, key: string) => {
     const resolved = values[key] ?? process.env[key];
     if (resolved === undefined) {
-      throw new Error(`Invalid _mcp.json: MCP server ${id} references missing environment value ${key}.`);
+      throw new Error(`Invalid ${MCP_CONFIG_FILE}: MCP server ${id} references missing environment value ${key}.`);
     }
     return resolved;
   });
@@ -92,14 +94,14 @@ const parseStringArray = (value: unknown, label: string, defaultValue?: string[]
     return defaultValue;
   }
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.trim() === '')) {
-    throw new Error(`Invalid _mcp.json: ${label} must be a string array.`);
+    throw new Error(`Invalid ${MCP_CONFIG_FILE}: ${label} must be a string array.`);
   }
   return value;
 };
 
 const parseTimeout = (value: unknown, id: string): number => {
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
-    throw new Error(`Invalid _mcp.json: MCP server ${id} timeout must be a positive integer.`);
+    throw new Error(`Invalid ${MCP_CONFIG_FILE}: MCP server ${id} timeout must be a positive integer.`);
   }
   return value;
 };

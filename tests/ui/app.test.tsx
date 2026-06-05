@@ -31,6 +31,7 @@ const api: Api = {
   createRecordDraft: vi.fn(),
   getRecord: vi.fn(),
   updateRecordData: vi.fn(),
+  computeRecordTags: vi.fn(),
   getRecordDraftStatus: vi.fn(),
   saveRecordChanges: vi.fn(),
   discardRecordChanges: vi.fn(),
@@ -106,7 +107,8 @@ beforeEach(() => {
     validationIssues: [],
     renderTree: { kind: 'object', label: 'record', path: '', children: [], validationIssues: [] }
   }));
-  vi.mocked(api.saveRecordChanges).mockImplementation(async (projectId, recordId) => api.getRecord(projectId, recordId));
+  vi.mocked(api.saveRecordChanges).mockImplementation(async (projectId, recordId) => ({ record: await api.getRecord(projectId, recordId) }));
+  vi.mocked(api.computeRecordTags).mockImplementation(async (projectId, recordId) => ({ record: await api.getRecord(projectId, recordId) }));
   vi.mocked(api.discardRecordChanges).mockResolvedValue({ hasUnsavedChanges: false });
   vi.mocked(api.saveFeedbackConfig).mockImplementation(async (_projectId, config) => config);
   vi.mocked(api.closeWindow).mockResolvedValue(undefined);
@@ -236,8 +238,8 @@ describe('review UI', () => {
     expect(uriLink).toHaveClass('evidence-value-link');
     expect(screen.getByText('No edits yet.')).toBeInTheDocument();
     expect(screen.queryByText('The dial path enters through Dial Gateway.', { selector: 'dd' })).not.toBeInTheDocument();
-    expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0);
-    expect(screen.getByText('Logged')).toBeInTheDocument();
+    expect(screen.getAllByText('read-only').length).toBeGreaterThan(0);
+    expect(screen.getByText('logged')).toBeInTheDocument();
     expect(screen.getByLabelText('doc-1 feedback')).toBeInTheDocument();
     expect(screen.getByLabelText('doc-1 feedback value')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'doc-1' }).closest('summary')).toHaveAccessibleName(
@@ -294,6 +296,151 @@ describe('review UI', () => {
     await userEvent.click((evidenceGroup as HTMLElement).querySelector('summary') as HTMLElement);
 
     expect(evidenceGroup).not.toHaveAttribute('open');
+  });
+
+  it('renders tags as computed and manual groups with manual edits gated by edit mode', () => {
+    const node: RenderNode = {
+      kind: 'array',
+      label: 'tags',
+      path: '/tags',
+      items: [
+        { kind: 'value', label: '0', path: '/tags/0', value: 'needs-review', type: 'string', validationIssues: [] },
+        { kind: 'value', label: '1', path: '/tags/1', value: 'computed-risk', type: 'string', validationIssues: [] }
+      ],
+      validationIssues: []
+    };
+    const feedbackConfig = {
+      properties: {
+        '/tags': {
+          path: '/tags',
+          target: 'Tags',
+          tab: 'Main',
+          feedback: 'none' as const,
+          comments: false,
+          editMode: 'inline' as const,
+          presentation: 'tags' as const,
+          mapping: 'tags' as const
+        }
+      }
+    };
+
+    const { rerender } = render(
+      <RenderTree
+        node={node}
+        feedbackConfig={feedbackConfig}
+        tagDefinitions={[{ name: 'needs-review', description: 'Needs review' }, { name: 'approved', description: 'Approved' }]}
+      />
+    );
+
+    expect(within(screen.getByLabelText('Manual tags')).getByText('needs-review')).toBeInTheDocument();
+    expect(within(screen.getByLabelText('Computed tags')).getByText('computed-risk')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove needs-review' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove computed-risk' })).not.toBeInTheDocument();
+    const addManualTag = screen.getByLabelText('Add tags manual tag');
+    expect(addManualTag).toBeEnabled();
+    expect(addManualTag).toHaveRole('combobox');
+    expect(within(addManualTag).queryByRole('option', { name: 'computed-risk' })).not.toBeInTheDocument();
+    expect(within(addManualTag).getByRole('option', { name: 'approved' })).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /tags/i })).not.toBeInTheDocument();
+
+    rerender(
+      <RenderTree
+        node={node}
+        feedbackConfig={{
+          properties: {
+            '/tags': {
+              ...feedbackConfig.properties['/tags'],
+              editMode: 'none'
+            }
+          }
+        }}
+        tagDefinitions={[{ name: 'needs-review', description: 'Needs review' }]}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: 'Remove needs-review' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Add tags manual tag')).not.toBeInTheDocument();
+  });
+
+  it('keeps mapped tag arrays free-form when the tags presentation is not configured', () => {
+    render(
+      <RenderTree
+        node={{
+          kind: 'array',
+          label: 'tags',
+          path: '/tags',
+          items: [{ kind: 'value', label: '0', path: '/tags/0', value: 'needs-review', type: 'string', validationIssues: [] }],
+          validationIssues: []
+        }}
+        feedbackConfig={{
+          properties: {
+            '/tags': {
+              path: '/tags',
+              target: 'Tags',
+              tab: 'Main',
+              feedback: 'none',
+              comments: false,
+              editMode: 'inline',
+              mapping: 'tags'
+            }
+          }
+        }}
+        tagDefinitions={[{ name: 'approved', description: 'Approved' }]}
+      />
+    );
+
+    expect(screen.queryByLabelText('Add tags manual tag')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'tags item 1' })).toBeInTheDocument();
+  });
+
+  it('replaces an existing manual tag from the same domain in the tags presentation', async () => {
+    const onChangeFeedbackDraft = vi.fn();
+    render(
+      <RenderTree
+        node={{
+          kind: 'array',
+          label: 'tags',
+          path: '/tags',
+          items: [
+            { kind: 'value', label: '0', path: '/tags/0', value: 'priority:high', type: 'string', validationIssues: [] },
+            { kind: 'value', label: '1', path: '/tags/1', value: 'computed-risk', type: 'string', validationIssues: [] },
+            { kind: 'value', label: '2', path: '/tags/2', value: 'status:open', type: 'string', validationIssues: [] }
+          ],
+          validationIssues: []
+        }}
+        feedbackConfig={{
+          properties: {
+            '/tags': {
+              path: '/tags',
+              target: 'Tags',
+              tab: 'Main',
+              feedback: 'none',
+              comments: false,
+              editMode: 'logged',
+              presentation: 'tags'
+            }
+          }
+        }}
+        tagDefinitions={[
+          { name: 'priority:high', description: 'High priority' },
+          { name: 'priority:low', description: 'Low priority' },
+          { name: 'status:open', description: 'Open' },
+          { name: 'status:closed', description: 'Closed' }
+        ]}
+        history={{}}
+        projectUser={{ username: 'sme@example.com', valid: true }}
+        onSubmitFeedback={vi.fn()}
+        feedbackDrafts={{}}
+        onChangeFeedbackDraft={onChangeFeedbackDraft}
+      />
+    );
+
+    await userEvent.selectOptions(screen.getByLabelText('Add tags manual tag'), 'priority:low');
+
+    expect(onChangeFeedbackDraft).toHaveBeenLastCalledWith(
+      '/tags',
+      expect.objectContaining({ editValue: 'priority:low\ncomputed-risk\nstatus:open' })
+    );
   });
 
   it('renders whole-item feedback controls for generic array object items', () => {
@@ -1633,7 +1780,7 @@ describe('review UI', () => {
       stagedData = data as Record<string, unknown>;
       return recordDetail(stagedData);
     });
-    vi.mocked(api.saveRecordChanges).mockImplementation(async () => recordDetail(stagedData));
+    vi.mocked(api.saveRecordChanges).mockImplementation(async () => ({ record: recordDetail(stagedData) }));
 
     render(<App />);
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
@@ -1732,12 +1879,91 @@ describe('review UI', () => {
     const addTagInput = within(tagsSection).getByLabelText('tags new item');
     expect(addTagInput).toHaveValue('');
     expect(screen.queryByText('Tags > *')).not.toBeInTheDocument();
-    await userEvent.type(addTagInput, 'source:sme');
+    await userEvent.type(addTagInput, 'domain:privacy');
 
-    await waitFor(() => expect(api.updateRecordData).toHaveBeenLastCalledWith('sample-project', 'record-1', { tags: ['domain:legal', 'turns:multi', 'source:sme'] }));
-    expect(stagedTags).toEqual(['domain:legal', 'turns:multi', 'source:sme']);
+    await waitFor(() => expect(api.updateRecordData).toHaveBeenLastCalledWith('sample-project', 'record-1', { tags: ['domain:legal', 'turns:multi', 'domain:privacy'] }));
+    expect(stagedTags).toEqual(['domain:legal', 'turns:multi', 'domain:privacy']);
     await waitFor(() => expect(within(tagsSection).getByText('3 items')).toBeInTheDocument());
     expect(within(tagsSection).getByLabelText('tags new item')).toHaveValue('');
+  });
+
+  it('computes presentation tags without saving the record', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        tags: { type: 'array', items: { type: 'string' } }
+      }
+    };
+    const feedbackConfig = {
+      properties: {
+        '/tags': {
+          path: '/tags',
+          target: 'Tags',
+          tab: 'Main',
+          feedback: 'none' as const,
+          comments: false,
+          editMode: 'inline' as const,
+          presentation: 'tags' as const,
+          mapping: 'tags' as const
+        }
+      }
+    };
+    const recordDetail = (tags: string[]) => ({
+      projectId: 'sample-project',
+      recordId: 'record-1',
+      displayName: 'record-1',
+      data: { tags },
+      schema,
+      validationIssues: [],
+      renderTree: {
+        kind: 'object' as const,
+        label: 'record',
+        path: '',
+        children: [
+          {
+            kind: 'array' as const,
+            label: 'tags',
+            path: '/tags',
+            items: tags.map((tag, index) => ({
+              kind: 'value' as const,
+              label: String(index),
+              path: `/tags/${index}`,
+              value: tag,
+              type: 'string',
+              validationIssues: []
+            })),
+            validationIssues: []
+          }
+        ],
+        validationIssues: []
+      },
+      feedbackHistory: {}
+    });
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema,
+      records: [{ id: 'record-1', displayName: 'record-1' }],
+      feedbackConfig,
+      tagDefinitions: [{ name: 'manual', description: 'Manual tag' }]
+    });
+    vi.mocked(api.getRecord).mockResolvedValue(recordDetail(['manual']));
+    vi.mocked(api.computeRecordTags).mockResolvedValue({ record: recordDetail(['manual', 'turns:single']) });
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
+    await userEvent.click(await screen.findByRole('button', { name: 'record-1' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Compute tags' }));
+
+    await waitFor(() => expect(api.computeRecordTags).toHaveBeenCalledWith('sample-project', 'record-1'));
+    expect(api.saveRecordChanges).not.toHaveBeenCalled();
+    expect(within(screen.getByLabelText('Computed tags')).getByText('turns:single')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 
   it('renders string arrays without numeric labels in read-only mode', () => {
@@ -2245,7 +2471,7 @@ describe('review UI', () => {
     });
     vi.mocked(api.getProjectUser).mockResolvedValue({
       valid: false,
-      validationMessage: 'USERNAME environment variable not configured. Please set USERNAME in your .env file.'
+      validationMessage: 'USERNAME environment variable not configured. Please set USERNAME in your config/.env file.'
     });
     vi.mocked(api.getRecord).mockResolvedValue({
       projectId: 'sample-project',
@@ -2270,7 +2496,7 @@ describe('review UI', () => {
     expect(await screen.findByText('Run npm run check.', { selector: 'output' })).toBeInTheDocument();
     expect(screen.queryByLabelText('answer feedback')).not.toBeInTheDocument();
     expect(screen.queryByText('No feedback configured')).not.toBeInTheDocument();
-    expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your .env file.')).not.toBeInTheDocument();
+    expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your config/.env file.')).not.toBeInTheDocument();
     expect(screen.queryByText('History (0)')).not.toBeInTheDocument();
   });
 
@@ -2448,7 +2674,7 @@ describe('review UI', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: 'valid-record' }));
     expect(await screen.findByText('Run npm run check.', { selector: 'output' })).toBeInTheDocument();
-    expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your .env file.')).not.toBeInTheDocument();
+    expect(screen.queryByText('USERNAME environment variable not configured. Please set USERNAME in your config/.env file.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     expect(screen.getByLabelText('Current feedback username')).toHaveTextContent('sme@example.com');
     expect(screen.queryByText(/Feedback mode:/)).not.toBeInTheDocument();
@@ -2767,7 +2993,7 @@ describe('review UI', () => {
             }
           }
         }}
-        projectUser={{ valid: false, validationMessage: 'USERNAME environment variable not configured. Please set USERNAME in your .env file.' }}
+        projectUser={{ valid: false, validationMessage: 'USERNAME environment variable not configured. Please set USERNAME in your config/.env file.' }}
         onSubmitFeedback={submit}
       />
     );

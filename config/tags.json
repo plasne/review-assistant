@@ -1,0 +1,10 @@
+[
+  {
+    "name": "domain:legal",
+    "description": "Legal domain review tag."
+  },
+  {
+    "name": "domain:finance",
+    "description": "Finance domain review tag."
+  }
+]
