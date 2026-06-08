@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Review Assistant — Endurance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Hanken+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+<style>
+  /*
+    "Endurance" — built for multi-hour review sessions.
+    Principles: warm low-blue palette (less eye strain), legibility-first
+    typefaces (Atkinson Hyperlegible), generous spacing, large hit targets,
+    capped reading width, near-zero motion, and pacing/progress aids.
+  */
+  :root{
+    --bg:#1c1915; --bg2:#211d18; --surface:#26221c; --surface-2:#2d281f;
+    --line:#3a342a; --line-soft:#322d25;
+    --txt:#ece3d2; --txt-2:#cabfa9; --dim:#998c75;
+    --amber:#d9a85c; --amber-d:#b88a42;
+    --sage:#8fae7e; --sage-d:#6f8d60;
+    --clay:#cd8163; --rose:#cf7a83;
+    --r:12px;
+    --read:64ch;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg);color:var(--txt);overflow:hidden;
+    font-family:"Atkinson Hyperlegible",system-ui,sans-serif;
+    font-size:16px;line-height:1.65;letter-spacing:.005em;-webkit-font-smoothing:antialiased;
+  }
+  /* respect reduced-motion users; default motion is already minimal */
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+  h1,h2,h3{font-family:"Hanken Grotesk",sans-serif;letter-spacing:.005em}
+
+  .app{display:grid;grid-template-rows:auto auto 1fr auto;height:100%}
+
+  /* top bar */
+  header{display:flex;align-items:center;gap:18px;padding:14px 24px;background:var(--bg2);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:12px}
+  .brand .dot{width:30px;height:30px;border-radius:9px;background:radial-gradient(circle at 32% 30%,var(--amber),var(--amber-d));box-shadow:inset 0 -2px 4px rgba(0,0,0,.25)}
+  .brand h1{font-size:1.15rem;font-weight:700;margin:0}
+  .brand small{display:block;font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);font-family:"Atkinson Hyperlegible";line-height:1}
+  .grow{flex:1}
+  .fld{display:flex;flex-direction:column;gap:2px}
+  .fld label{font-size:.62rem;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+  select.w{appearance:none;background:var(--surface);border:1px solid var(--line);border-radius:10px;color:var(--txt);font-family:inherit;font-size:.95rem;padding:9px 34px 9px 13px;cursor:pointer;min-height:42px;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23d9a85c'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 13px center}
+  .who{display:inline-flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 15px 6px 7px;color:var(--txt-2);font-size:.88rem;min-height:42px}
+  .who .av{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--amber),var(--clay))}
+  .who b{color:var(--txt);font-weight:700}
+  .cta{font-family:"Hanken Grotesk";font-weight:600;font-size:.92rem;cursor:pointer;color:#241d12;border:0;border-radius:10px;padding:0 20px;min-height:44px;background:var(--amber)}
+  .cta:hover{background:var(--amber-d)}
+  .iconbtn{min-width:44px;min-height:44px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--txt-2);cursor:pointer;font-size:1.1rem}
+  .iconbtn:hover{border-color:var(--amber);color:var(--amber)}
+
+  /* pacing strip — the long-session centerpiece */
+  .pacing{display:flex;align-items:center;gap:22px;padding:10px 24px;background:var(--surface);border-bottom:1px solid var(--line)}
+  .pace-prog{flex:1;max-width:520px}
+  .pace-prog .row{display:flex;justify-content:space-between;font-size:.8rem;color:var(--txt-2);margin-bottom:5px}
+  .pace-prog .row b{color:var(--txt)}
+  .bar{height:9px;border-radius:999px;background:#332e25;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--sage-d),var(--sage))}
+  .stat{display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--txt-2)}
+  .stat b{color:var(--txt);font-family:"Hanken Grotesk";font-weight:600}
+  .stat .ic{width:9px;height:9px;border-radius:50%}
+  .break{margin-left:auto;display:inline-flex;align-items:center;gap:9px;background:rgba(143,174,126,.12);border:1px solid rgba(143,174,126,.4);color:var(--sage);border-radius:999px;padding:7px 15px;font-size:.84rem}
+  .break button{background:none;border:0;color:var(--sage);font-weight:700;cursor:pointer;font-family:inherit;text-decoration:underline;padding:0}
+
+  main{display:grid;grid-template-columns:300px minmax(0,1.85fr) minmax(320px,1fr);min-height:0}
+  .col{min-height:0;overflow:auto}
+  .col + .col{border-left:1px solid var(--line)}
+
+  .ph{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;padding:16px 20px 12px;background:var(--bg);border-bottom:1px solid var(--line-soft)}
+  .ph h2{font-size:1.02rem;font-weight:600;margin:0}
+  .ph .badge{font-size:.74rem;color:var(--dim)}
+  .list{padding:10px 14px 18px}
+
+  .rec{width:100%;text-align:left;cursor:pointer;color:inherit;background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:14px 16px;margin-bottom:10px;min-height:64px}
+  .rec:hover{background:var(--surface-2);border-color:#4a4234}
+  .rec.on{background:var(--surface-2);border-color:var(--amber);box-shadow:inset 3px 0 0 var(--amber)}
+  .rec .r1{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .rec .nm{font-weight:700;font-size:.98rem}
+  .rec .sub{font-size:.82rem;color:var(--dim);margin-top:3px}
+  .rec.read .nm{color:var(--txt-2)}
+  .rec.read .check{color:var(--sage)}
+  .check{color:transparent;font-weight:700}
+  .pill{font-size:.7rem;font-weight:700;padding:3px 11px;border-radius:999px;white-space:nowrap}
+  .pill.flag{color:#3a2018;background:rgba(207,129,99,.85)} .pill.pend{color:#3a2e12;background:rgba(217,168,92,.85)} .pill.done{color:#22301c;background:rgba(143,174,126,.85)}
+
+  /* details — capped reading width, large type, calm */
+  .detail{padding:26px 28px}
+  .wrap{max-width:var(--read)}
+  .eyebrow{font-size:.74rem;letter-spacing:.16em;text-transform:uppercase;color:var(--amber)}
+  .htitle{font-size:1.9rem;font-weight:700;margin:8px 0 6px;line-height:1.2}
+  .lead{color:var(--txt-2);font-size:1.04rem}
+
+  .ev{margin-top:22px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px 22px}
+  .ev-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .ev-h h3{font-size:1.2rem;font-weight:600;margin:0}
+  .ev-h .eid{font-size:.76rem;color:var(--dim)}
+  .tags{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+  .t{font-size:.78rem;color:var(--txt-2);background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:4px 12px}
+  .t b{color:var(--txt);font-weight:700}
+  .excerpt{font-size:1.08rem;line-height:1.6;color:var(--txt);border-left:3px solid var(--amber);padding:6px 0 6px 18px;margin:14px 0}
+  .conf{display:flex;align-items:center;gap:12px;margin:10px 0 4px}
+  .conf .lab{font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .track{flex:1;height:9px;border-radius:999px;background:#332e25;overflow:hidden}
+  .track i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--sage-d),var(--sage))}
+  .conf .v{font-weight:700;font-family:"Hanken Grotesk";color:var(--sage)}
+
+  /* large, low-fatigue action row with keyboard hints */
+  .actions{display:flex;gap:12px;margin-top:18px;flex-wrap:wrap}
+  .act{display:inline-flex;align-items:center;gap:10px;cursor:pointer;font-family:"Hanken Grotesk";font-weight:600;font-size:.95rem;
+    min-height:52px;padding:0 20px;border-radius:12px;border:1px solid var(--line);background:var(--surface-2);color:var(--txt)}
+  .act .kbd{font-family:"Atkinson Hyperlegible";font-size:.72rem;font-weight:700;color:var(--dim);border:1px solid var(--line);border-radius:6px;padding:2px 7px;background:var(--bg)}
+  .act:hover{border-color:#4a4234}
+  .act[data-v="ok"].on{background:rgba(143,174,126,.18);border-color:var(--sage);color:var(--sage)}
+  .act[data-v="warn"].on{background:rgba(217,168,92,.18);border-color:var(--amber);color:var(--amber)}
+  .act[data-v="rej"].on{background:rgba(207,122,131,.18);border-color:var(--rose);color:var(--rose)}
+
+  /* chat */
+  .chat{display:flex;flex-direction:column;min-height:0}
+  .thread{flex:1;overflow:auto;padding:14px 18px;display:flex;flex-direction:column;gap:14px;min-height:0}
+  .msg{max-width:90%;padding:13px 16px;border-radius:14px;font-size:.95rem;line-height:1.55}
+  .msg.bot{align-self:flex-start;background:var(--surface);border:1px solid var(--line);border-bottom-left-radius:5px}
+  .msg.me{align-self:flex-end;background:var(--surface-2);border:1px solid #4a4234;border-bottom-right-radius:5px}
+  .msg .nm{font-size:.66rem;text-transform:uppercase;letter-spacing:.14em;color:var(--dim);margin-bottom:5px}
+  .composer{padding:14px 18px;border-top:1px solid var(--line);display:grid;gap:11px;background:var(--bg2)}
+  .composer textarea{background:var(--surface);border:1px solid var(--line);border-radius:12px;color:var(--txt);font-family:inherit;font-size:.95rem;padding:12px 14px;resize:none;min-height:3rem;line-height:1.5}
+  .composer textarea:focus{outline:none;border-color:var(--amber)}
+  .composer .row{display:flex;gap:11px}
+  .composer button{flex:1;font-family:"Hanken Grotesk";font-weight:600;font-size:.92rem;cursor:pointer;border:0;border-radius:11px;min-height:46px;color:#241d12;background:var(--amber)}
+  .composer button:hover{background:var(--amber-d)}
+  .composer button.ghost{background:var(--surface-2);color:var(--txt);border:1px solid var(--line)}
+
+  /* footer with keyboard legend + comfort note */
+  footer{display:flex;align-items:center;gap:20px;padding:9px 24px;background:var(--bg2);border-top:1px solid var(--line);font-size:.78rem;color:var(--dim)}
+  .keys{display:flex;gap:14px;flex-wrap:wrap}
+  .keys span b{font-family:"Atkinson Hyperlegible";font-weight:700;color:var(--txt-2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;background:var(--surface);margin-right:5px}
+  footer .ok{color:var(--sage);margin-left:auto}
+  ::-webkit-scrollbar{width:12px}::-webkit-scrollbar-thumb{background:#3f382d;border-radius:12px;border:3px solid var(--bg)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand"><div class="dot"></div><div><h1>Review Assistant</h1><small>Endurance · long-session mode</small></div></div>
+    <div class="grow"></div>
+    <div class="fld"><label>Project</label>
+      <select class="w"><option>contract-renewals-q3</option><option>vendor-intake</option><option>policy-audit</option></select>
+    </div>
+    <span class="who"><span class="av"></span><b>@andrewDoing</b></span>
+    <button class="iconbtn" title="Reduce brightness / warm shift">☾</button>
+    <button class="cta">Connect Copilot</button>
+  </header>
+
+  <!-- pacing strip -->
+  <div class="pacing">
+    <div class="pace-prog">
+      <div class="row"><span>Session progress</span><span><b>14</b> of 24 reviewed</span></div>
+      <div class="bar"><i style="width:58%"></i></div>
+    </div>
+    <div class="stat"><span class="ic" style="background:var(--amber)"></span>Elapsed <b>1h 12m</b></div>
+    <div class="stat"><span class="ic" style="background:var(--sage)"></span>Pace <b>~5m / record</b></div>
+    <span class="break">You've reviewed for 40 min — <button>take a 5-min break?</button></span>
+  </div>
+
+  <main>
+    <section class="col">
+      <div class="ph"><h2>Records</h2><span class="badge">10 remaining</span></div>
+      <div class="list" id="recs">
+        <button class="rec on"><div class="r1"><span class="nm"><span class="check">✓</span> Acme Corp — Master Agreement</span><span class="pill flag">flagged</span></div><div class="sub">3 evidence · §8.2 · 2h ago</div></button>
+        <button class="rec read"><div class="r1"><span class="nm"><span class="check">✓</span> Globex Renewal Addendum</span><span class="pill done">reviewed</span></div><div class="sub">1 evidence · §3.1 · 5h ago</div></button>
+        <button class="rec read"><div class="r1"><span class="nm"><span class="check">✓</span> Initech SLA Schedule</span><span class="pill done">reviewed</span></div><div class="sub">2 evidence · §5.4 · 1d ago</div></button>
+        <button class="rec"><div class="r1"><span class="nm"><span class="check">✓</span> Umbrella Data Terms</span><span class="pill flag">flagged</span></div><div class="sub">5 evidence · §12 · 1d ago</div></button>
+        <button class="rec"><div class="r1"><span class="nm"><span class="check">✓</span> Soylent Pricing Exhibit</span><span class="pill pend">pending</span></div><div class="sub">0 evidence · §16 · 2d ago</div></button>
+      </div>
+    </section>
+
+    <section class="col">
+      <div class="ph"><h2>Record Details</h2><span class="badge">Record 15 of 24</span></div>
+      <div class="detail">
+        <div class="wrap">
+          <div class="eyebrow">Master Agreement</div>
+          <h1 class="htitle">Acme Corp</h1>
+          <p class="lead">The agent gathered three pieces of evidence. Two need your verdict. Text is set at a comfortable size and width so you can read for a long stretch without fatigue.</p>
+
+          <div class="ev">
+            <div class="ev-h"><h3>Limitation of Liability</h3><span class="eid">EV-0114</span></div>
+            <div class="tags"><span class="t"><b>Target</b> §8.2</span><span class="t"><b>Type</b> clause</span><span class="t"><b>Editable</b> yes</span></div>
+            <blockquote class="excerpt">"…aggregate liability shall not exceed the fees paid in the twelve (12) months preceding the claim."</blockquote>
+            <div class="conf"><span class="lab">Confidence</span><div class="track"><i style="width:91%"></i></div><span class="v">0.91</span></div>
+            <div class="actions" data-verdict>
+              <button class="act" data-v="ok"><span>Accept</span><span class="kbd">A</span></button>
+              <button class="act" data-v="warn"><span>Revise</span><span class="kbd">R</span></button>
+              <button class="act" data-v="rej"><span>Reject</span><span class="kbd">X</span></button>
+            </div>
+          </div>
+
+          <div class="ev">
+            <div class="ev-h"><h3>Auto-Renewal Cadence</h3><span class="eid">EV-0115</span></div>
+            <div class="tags"><span class="t"><b>Target</b> §3.1</span><span class="t"><b>Type</b> clause</span><span class="t"><b>Editable</b> yes</span></div>
+            <blockquote class="excerpt">"…renews for successive one-year terms unless either party provides ninety (90) days' written notice."</blockquote>
+            <div class="conf"><span class="lab">Confidence</span><div class="track"><i style="width:76%;background:linear-gradient(90deg,var(--amber-d),var(--amber))"></i></div><span class="v" style="color:var(--amber)">0.76</span></div>
+            <div class="actions" data-verdict>
+              <button class="act" data-v="ok"><span>Accept</span><span class="kbd">A</span></button>
+              <button class="act" data-v="warn"><span>Revise</span><span class="kbd">R</span></button>
+              <button class="act" data-v="rej"><span>Reject</span><span class="kbd">X</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="col chat">
+      <div class="ph"><h2>Copilot</h2><span class="badge"><span style="color:var(--sage)">●</span> connected</span></div>
+      <div class="thread">
+        <div class="msg bot"><div class="nm">Copilot</div>I reviewed §8.2 — the liability cap leaves out confidentiality breaches. Worth a flag before you move on.</div>
+        <div class="msg me"><div class="nm">You</div>Draft a redline adding confidentiality to the carve-outs.</div>
+        <div class="msg bot"><div class="nm">Copilot</div>Proposed: "…except for Sections 8, 9, and 11." Apply this to EV-0114?</div>
+      </div>
+      <form class="composer" onsubmit="return false">
+        <textarea placeholder="Message Copilot…"></textarea>
+        <div class="row"><button class="ghost" type="button">Clear</button><button type="submit">Send</button></div>
+      </form>
+    </section>
+  </main>
+
+  <footer>
+    <div class="keys">
+      <span><b>J</b>/<b>K</b> prev / next</span>
+      <span><b>A</b> accept</span>
+      <span><b>R</b> revise</span>
+      <span><b>X</b> reject</span>
+      <span><b>⌘Z</b> undo</span>
+    </div>
+    <span class="ok">● Autosaved · warm-light mode on</span>
+  </footer>
+</div>
+<script>
+  document.querySelectorAll('#recs .rec').forEach(r=>r.addEventListener('click',()=>{
+    document.querySelectorAll('#recs .rec').forEach(x=>x.classList.remove('on'));r.classList.add('on');}));
+  document.querySelectorAll('[data-verdict]').forEach(g=>g.querySelectorAll('.act').forEach(b=>b.addEventListener('click',()=>{
+    g.querySelectorAll('.act').forEach(x=>x.classList.remove('on'));b.classList.add('on');})));
+</script>
+</body>
+</html>

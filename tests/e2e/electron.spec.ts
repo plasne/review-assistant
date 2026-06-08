@@ -72,6 +72,44 @@ test('real Electron app opens a local project and reviews a record', async () =>
   fs.rmSync(createdProjectPath, { recursive: true, force: true });
 });
 
+test('theme selection persists across Electron restarts', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-theme-e2e-'));
+  const appEnv = path.join(tempRoot, 'config', '.env');
+  writeEnvFile(appEnv, `LOCAL_PATH=${path.join(tempRoot, 'projects')}\n`);
+  const launch = () =>
+    electron.launch({
+      args: ['.'],
+      env: {
+        ...process.env,
+        HOME: tempRoot,
+        XDG_CONFIG_HOME: path.join(tempRoot, '.config'),
+        REVIEW_ASSISTANT_APP_ENV: appEnv,
+        ...fakeProviderEnv
+      }
+    });
+
+  const firstApp = await launch();
+  const firstPage = await firstApp.firstWindow();
+  try {
+    await firstPage.getByRole('button', { name: 'Manage themes' }).click();
+    await firstPage.getByLabel('Active theme').selectOption('endurance');
+    await expect.poll(() => firstPage.evaluate(() => document.documentElement.style.getPropertyValue('--bg'))).toBe('#1c1915');
+  } finally {
+    await firstApp.close();
+  }
+
+  const secondApp = await launch();
+  const secondPage = await secondApp.firstWindow();
+  try {
+    await secondPage.getByRole('button', { name: 'Manage themes' }).click();
+    await expect(secondPage.getByLabel('Active theme')).toHaveValue('endurance');
+    await expect.poll(() => secondPage.evaluate(() => document.documentElement.style.getPropertyValue('--bg'))).toBe('#1c1915');
+  } finally {
+    await secondApp.close();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('records list scroll area reaches the records column edge and keeps content clear of the scrollbar', async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'review-assistant-scroll-'));
   const projectPath = path.join(tempRoot, 'scroll-project');

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Review Assistant — Editorial Atelier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,900;1,9..144,500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --ink:#1c1a17; --ink-soft:#5c554c; --line:#d8cfc0;
+    --paper:#f4ece0; --paper-2:#ece1d1; --card:#fbf6ee;
+    --accent:#9a3412; --accent-2:#1e5b4f; --gold:#a8761f;
+    --rule:1px solid var(--line);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:
+      radial-gradient(1200px 600px at 80% -10%, #fbf3e6 0%, transparent 60%),
+      var(--paper);
+    color:var(--ink);
+    font-family:"Newsreader",Georgia,serif;
+    font-size:17px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* faint paper grain */
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; opacity:.05; z-index:0;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .app{position:relative;z-index:1;display:grid;grid-template-rows:auto 1fr auto;height:100%}
+
+  header.masthead{
+    display:flex;align-items:flex-end;justify-content:space-between;gap:1.5rem;
+    padding:1.1rem 2rem .9rem;border-bottom:3px double var(--ink);
+    background:linear-gradient(180deg,var(--paper-2),transparent);
+  }
+  .brand{display:flex;flex-direction:column;line-height:1}
+  .brand .kicker{font-size:.62rem;letter-spacing:.42em;text-transform:uppercase;color:var(--accent);font-family:"Newsreader";font-weight:600}
+  .brand h1{
+    font-family:"Fraunces",serif;font-weight:900;font-size:2.05rem;letter-spacing:-.02em;
+    margin:.15rem 0 0;font-optical-sizing:auto;
+  }
+  .brand h1 em{font-style:italic;color:var(--accent)}
+  .masthead-meta{display:flex;align-items:center;gap:1.25rem;font-size:.8rem;color:var(--ink-soft)}
+  .field{display:flex;flex-direction:column;gap:.2rem}
+  .field label{font-size:.58rem;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-soft)}
+  select.book{
+    appearance:none;background:var(--card);border:var(--rule);border-radius:2px;color:var(--ink);
+    font-family:"Newsreader";font-size:.95rem;padding:.35rem 1.8rem .35rem .6rem;cursor:pointer;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239a3412'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right .6rem center;
+  }
+  .who{display:inline-flex;align-items:center;gap:.45rem;border:var(--rule);background:var(--card);border-radius:999px;padding:.25rem .7rem}
+  .who .dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--accent-2)}
+  .ghbtn{
+    font-family:"Fraunces";font-weight:600;font-size:.82rem;border:1px solid var(--ink);
+    background:var(--ink);color:var(--paper);padding:.5rem .9rem;border-radius:2px;cursor:pointer;letter-spacing:.02em;
+  }
+  .ghbtn:hover{background:var(--accent);border-color:var(--accent)}
+
+  main{display:grid;grid-template-columns:minmax(210px,.85fr) minmax(0,2fr) minmax(260px,1fr);min-height:0}
+  .col{min-height:0;overflow:auto;padding:1.3rem 1.5rem}
+  .col + .col{border-left:var(--rule)}
+
+  .section-rule{display:flex;align-items:baseline;justify-content:space-between;border-bottom:1px solid var(--ink);padding-bottom:.35rem;margin-bottom:1rem}
+  .section-rule h2{font-family:"Fraunces";font-weight:600;font-size:1.05rem;margin:0;letter-spacing:.01em}
+  .section-rule .count{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-soft)}
+
+  /* records as a table of contents */
+  .toc{list-style:none;margin:0;padding:0}
+  .toc li{border-bottom:1px dotted var(--line)}
+  .toc button{
+    width:100%;text-align:left;background:none;border:0;cursor:pointer;color:inherit;
+    display:grid;grid-template-columns:auto 1fr auto;gap:.6rem;align-items:baseline;
+    padding:.7rem .2rem;font-family:"Newsreader";
+  }
+  .toc .num{font-family:"Fraunces";font-weight:900;font-size:.85rem;color:var(--accent)}
+  .toc .ti{font-size:.98rem;line-height:1.25}
+  .toc .ti small{display:block;color:var(--ink-soft);font-size:.74rem}
+  .toc .pg{font-size:.72rem;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+  .toc button:hover{background:var(--paper-2)}
+  .toc li.on button{background:var(--paper-2)}
+  .toc li.on .ti{font-style:italic}
+
+  /* details */
+  .dropcap{float:left;font-family:"Fraunces";font-weight:900;font-size:4.1rem;line-height:.74;padding:.18rem .55rem .1rem 0;color:var(--accent)}
+  .lede{font-size:1.18rem;color:var(--ink);margin:0 0 1.3rem}
+  .byline{font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:.4rem}
+
+  .evidence{border:var(--rule);background:var(--card);border-radius:3px;margin:1.1rem 0;padding:1.1rem 1.2rem;box-shadow:0 1px 0 #fff inset, 2px 3px 0 rgba(28,26,23,.05)}
+  .evidence h3{font-family:"Fraunces";font-weight:600;font-size:1.12rem;margin:0 0 .1rem;display:flex;align-items:baseline;gap:.5rem}
+  .evidence h3 .eid{font-family:"Newsreader";font-size:.7rem;letter-spacing:.18em;color:var(--gold);text-transform:uppercase}
+  .meta-grid{display:flex;flex-wrap:wrap;gap:.4rem;margin:.7rem 0}
+  .chip{font-size:.72rem;border:var(--rule);background:var(--paper);border-radius:2px;padding:.18rem .55rem;color:var(--ink-soft)}
+  .chip b{color:var(--ink);font-weight:600}
+  .quote{border-left:3px solid var(--accent);padding:.2rem 0 .2rem .9rem;font-style:italic;color:#37322c;margin:.7rem 0}
+
+  .rate{display:flex;align-items:center;gap:.5rem;margin-top:.9rem;border-top:1px dotted var(--line);padding-top:.8rem}
+  .rate span.lbl{font-size:.6rem;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-soft)}
+  .stars{display:inline-flex;gap:.12rem}
+  .stars button{background:none;border:0;cursor:pointer;font-size:1.15rem;line-height:1;color:var(--line);padding:0 .04rem}
+  .stars button.on,.stars button:hover,.stars button:hover ~ button{color:var(--gold)}
+  .stars:hover button{color:var(--gold)}
+  .stars:hover button:hover ~ button{color:var(--line)}
+  .note{width:100%;margin-top:.7rem;font-family:"Newsreader";font-size:.95rem;background:var(--paper);border:var(--rule);border-radius:2px;padding:.55rem .65rem;color:var(--ink);resize:vertical;min-height:2.4rem}
+
+  /* chat as letters column */
+  .chat{display:flex;flex-direction:column;height:100%}
+  .thread{flex:1;min-height:0;overflow:auto;padding-right:.2rem}
+  .letter{margin-bottom:1.1rem}
+  .letter .from{font-size:.6rem;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:.25rem;display:flex;justify-content:space-between}
+  .letter p{margin:0;background:var(--card);border:var(--rule);border-radius:3px;padding:.6rem .7rem;font-size:.95rem}
+  .letter.me p{background:#f0e7d6;border-color:#cbb893}
+  .letter.bot p{border-left:3px solid var(--accent-2)}
+  .composer{border-top:1px solid var(--ink);padding-top:.7rem;display:grid;gap:.5rem}
+  .composer textarea{font-family:"Newsreader";font-size:.95rem;background:var(--card);border:var(--rule);border-radius:3px;padding:.55rem;min-height:3.2rem;resize:vertical;color:var(--ink)}
+  .composer .row{display:flex;gap:.5rem}
+  .composer button{flex:1;font-family:"Fraunces";font-weight:600;font-size:.85rem;cursor:pointer;border:1px solid var(--ink);border-radius:2px;padding:.5rem;background:var(--ink);color:var(--paper)}
+  .composer button.ghost{background:var(--card);color:var(--ink)}
+  .composer button:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+
+  footer{border-top:3px double var(--ink);padding:.35rem 2rem;font-size:.66rem;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-soft);display:flex;justify-content:space-between}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--line);border:3px solid var(--paper)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="masthead">
+    <div class="brand">
+      <span class="kicker">An instrument for careful judgement</span>
+      <h1>The Review <em>Atelier</em></h1>
+    </div>
+    <div class="masthead-meta">
+      <div class="field">
+        <label>Project</label>
+        <select class="book"><option>contract-renewals-q3</option><option>vendor-intake</option><option>policy-audit</option></select>
+      </div>
+      <span class="who"><span class="dot"></span>@andrewDoing</span>
+      <button class="ghbtn">Sign in · Copilot</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- records -->
+    <section class="col">
+      <div class="section-rule"><h2>Contents</h2><span class="count">24 records</span></div>
+      <ul class="toc" id="toc">
+        <li class="on"><button><span class="num">01</span><span class="ti">Acme Corp — Master Agreement<small>flagged · 3 evidence</small></span><span class="pg">p.1</span></button></li>
+        <li><button><span class="num">02</span><span class="ti">Globex Renewal Addendum<small>pending review</small></span><span class="pg">p.4</span></button></li>
+        <li><button><span class="num">03</span><span class="ti">Initech SLA Schedule<small>reviewed</small></span><span class="pg">p.7</span></button></li>
+        <li><button><span class="num">04</span><span class="ti">Umbrella Data Terms<small>flagged · 5 evidence</small></span><span class="pg">p.11</span></button></li>
+        <li><button><span class="num">05</span><span class="ti">Soylent Pricing Exhibit<small>pending review</small></span><span class="pg">p.16</span></button></li>
+        <li><button><span class="num">06</span><span class="ti">Stark Indemnity Clause<small>reviewed</small></span><span class="pg">p.19</span></button></li>
+      </ul>
+    </section>
+
+    <!-- details -->
+    <section class="col">
+      <p class="byline">Record 01 · Master Agreement · Last edited 2h ago</p>
+      <p class="lede"><span class="dropcap">A</span>cme Corp's master agreement carries three points of evidence requiring a reviewer's eye. The agent surfaced clauses on liability, renewal cadence, and data residency — each is reproduced below for your annotation and rating.</p>
+
+      <article class="evidence">
+        <h3>Limitation of Liability <span class="eid">EV-0114</span></h3>
+        <div class="meta-grid">
+          <span class="chip"><b>Target</b> §8.2</span>
+          <span class="chip"><b>Confidence</b> 0.91</span>
+          <span class="chip"><b>Editable</b> yes</span>
+        </div>
+        <blockquote class="quote">"In no event shall either party's aggregate liability exceed the fees paid in the twelve (12) months preceding the claim."</blockquote>
+        <div class="rate"><span class="lbl">Your rating</span>
+          <div class="stars" data-stars><button>★</button><button>★</button><button>★</button><button>★</button><button>★</button></div>
+        </div>
+        <textarea class="note" placeholder="Add a reviewer's note…">Cap is standard; confirm carve-outs for IP and confidentiality.</textarea>
+      </article>
+
+      <article class="evidence">
+        <h3>Auto-Renewal Cadence <span class="eid">EV-0115</span></h3>
+        <div class="meta-grid">
+          <span class="chip"><b>Target</b> §3.1</span>
+          <span class="chip"><b>Confidence</b> 0.76</span>
+          <span class="chip"><b>Editable</b> yes</span>
+        </div>
+        <blockquote class="quote">"This Agreement renews for successive one-year terms unless either party provides ninety (90) days' written notice."</blockquote>
+        <div class="rate"><span class="lbl">Your rating</span>
+          <div class="stars" data-stars><button>★</button><button>★</button><button>★</button><button>★</button><button>★</button></div>
+        </div>
+        <textarea class="note" placeholder="Add a reviewer's note…"></textarea>
+      </article>
+    </section>
+
+    <!-- chat -->
+    <section class="col chat">
+      <div class="section-rule"><h2>Correspondence</h2><span class="count">Copilot</span></div>
+      <div class="thread">
+        <div class="letter bot"><div class="from"><span>Copilot</span><span>09:42</span></div><p>I've reviewed §8.2. The liability cap excludes IP infringement but not confidentiality breaches — worth a flag.</p></div>
+        <div class="letter me"><div class="from"><span>You</span><span>09:43</span></div><p>Draft a redline adding confidentiality to the carve-outs.</p></div>
+        <div class="letter bot"><div class="from"><span>Copilot</span><span>09:43</span></div><p>Proposed: "…except for breaches of Sections 8 (Liability), 9 (Confidentiality), and 11 (Indemnity)." Apply to EV-0114?</p></div>
+      </div>
+      <form class="composer" onsubmit="return false">
+        <textarea placeholder="Write to Copilot…"></textarea>
+        <div class="row"><button class="ghost" type="button">Clear</button><button type="submit">Send</button></div>
+      </form>
+    </section>
+  </main>
+
+  <footer><span>Review Assistant · Editorial Atelier</span><span>Saved · all changes synced</span></footer>
+</div>
+<script>
+  document.querySelectorAll('#toc li').forEach(li=>li.addEventListener('click',()=>{
+    document.querySelectorAll('#toc li').forEach(x=>x.classList.remove('on'));li.classList.add('on');
+  }));
+  document.querySelectorAll('[data-stars]').forEach(g=>{
+    const b=[...g.children];
+    b.forEach((btn,i)=>btn.addEventListener('click',()=>b.forEach((x,j)=>x.classList.toggle('on',j<=i))));
+  });
+</script>
+</body>
+</html>

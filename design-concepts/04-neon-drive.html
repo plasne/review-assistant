@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Review Assistant — Neon Drive</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#0d0420; --bg2:#160833; --panel:rgba(28,10,58,.7); --edge:#3a1c6e;
+    --txt:#eadcff; --dim:#9a86c9;
+    --magenta:#ff2db8; --cyan:#19f0ff; --purple:#9d5bff; --lime:#b6ff3d; --amber:#ffcf3d;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--txt);overflow:hidden;
+    font-family:"Rajdhani",sans-serif;font-size:15px;line-height:1.4;-webkit-font-smoothing:antialiased}
+  /* sunset + perspective grid */
+  .scene{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+  .sun{position:absolute;left:50%;top:6%;width:380px;height:380px;transform:translateX(-50%);border-radius:50%;
+    background:linear-gradient(180deg,#ff7ed4,#ff2db8 45%,#7a1ad6);filter:blur(2px);opacity:.55;
+    -webkit-mask:repeating-linear-gradient(180deg,#000 0 12px,transparent 12px 18px);mask:repeating-linear-gradient(180deg,#000 0 12px,transparent 12px 18px)}
+  .glow{position:absolute;inset:0;background:radial-gradient(700px 380px at 50% 6%,rgba(255,45,184,.28),transparent 60%)}
+  .floor{position:absolute;left:-25%;right:-25%;bottom:-2%;height:46%;
+    background-image:linear-gradient(rgba(25,240,255,.45) 2px,transparent 2px),linear-gradient(90deg,rgba(25,240,255,.35) 2px,transparent 2px);
+    background-size:64px 44px;transform:perspective(420px) rotateX(74deg);transform-origin:bottom;
+    -webkit-mask:linear-gradient(180deg,transparent,#000 30%);mask:linear-gradient(180deg,transparent,#000 30%);animation:run 1.1s linear infinite}
+  @keyframes run{to{background-position:0 44px,0 0}}
+
+  .app{position:relative;z-index:1;display:grid;grid-template-rows:auto 1fr auto;height:100%;padding:12px;gap:12px}
+  .neon{text-shadow:0 0 6px currentColor,0 0 18px currentColor}
+
+  header{display:flex;align-items:center;gap:14px;padding:10px 16px;border:1px solid var(--magenta);border-radius:6px;
+    background:linear-gradient(180deg,rgba(40,10,72,.85),rgba(13,4,32,.85));box-shadow:0 0 22px rgba(255,45,184,.35),inset 0 0 22px rgba(255,45,184,.08)}
+  .logo{font-family:"Chakra Petch";font-weight:700;font-size:1.15rem;letter-spacing:.06em;color:var(--cyan)}
+  .logo b{color:var(--magenta)}
+  .grow{flex:1}
+  .fld{display:flex;align-items:center;gap:8px;border:1px solid var(--cyan);border-radius:5px;padding:5px 10px;background:rgba(25,240,255,.06)}
+  .fld label{font-family:"Chakra Petch";font-size:.62rem;letter-spacing:.18em;text-transform:uppercase;color:var(--cyan)}
+  select.n{appearance:none;background:transparent;border:0;color:var(--txt);font-family:"Rajdhani";font-weight:600;font-size:.95rem;cursor:pointer;padding-right:16px;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0l4.5 6 4.5-6z' fill='%2319f0ff'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right center}
+  select.n option{color:#111}
+  .uid{font-family:"Chakra Petch";font-size:.78rem;letter-spacing:.1em;color:var(--lime);border:1px solid var(--lime);border-radius:999px;padding:4px 11px;box-shadow:0 0 12px rgba(182,255,61,.3)}
+  .cta{font-family:"Chakra Petch";font-weight:700;font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;
+    color:#0d0420;border:0;border-radius:5px;padding:9px 16px;background:linear-gradient(135deg,var(--magenta),var(--purple));box-shadow:0 0 18px rgba(255,45,184,.5)}
+  .cta:hover{filter:brightness(1.12)}
+
+  main{display:grid;grid-template-columns:280px minmax(0,1.65fr) minmax(300px,1fr);gap:12px;min-height:0}
+  .panel{border:1px solid var(--edge);border-radius:6px;background:var(--panel);backdrop-filter:blur(8px);display:flex;flex-direction:column;min-height:0;overflow:hidden;
+    box-shadow:inset 0 0 30px rgba(157,91,255,.08)}
+  .ph{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-bottom:1px solid var(--edge);
+    background:linear-gradient(90deg,rgba(255,45,184,.12),transparent)}
+  .ph h2{font-family:"Chakra Petch";font-weight:700;font-size:.86rem;letter-spacing:.16em;text-transform:uppercase;margin:0;color:var(--magenta)}
+  .ph .b{font-family:"Chakra Petch";font-size:.66rem;color:var(--cyan);letter-spacing:.12em}
+  .scroll{overflow:auto;padding:10px;min-height:0}
+
+  .rec{width:100%;text-align:left;cursor:pointer;color:inherit;background:rgba(13,4,32,.6);border:1px solid var(--edge);border-radius:5px;padding:11px 13px;margin-bottom:9px;transition:.15s}
+  .rec:hover{border-color:var(--cyan);box-shadow:0 0 14px rgba(25,240,255,.25)}
+  .rec.on{border-color:var(--magenta);box-shadow:0 0 16px rgba(255,45,184,.4);background:linear-gradient(90deg,rgba(255,45,184,.14),rgba(13,4,32,.6))}
+  .rec .r1{display:flex;justify-content:space-between;align-items:center}
+  .rec .nm{font-family:"Chakra Petch";font-weight:600;font-size:.92rem;letter-spacing:.02em}
+  .rec .sub{font-size:.82rem;color:var(--dim);margin-top:3px}
+  .stat{font-family:"Chakra Petch";font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;padding:2px 8px;border-radius:3px;border:1px solid currentColor}
+  .stat.flag{color:var(--magenta)} .stat.pend{color:var(--amber)} .stat.done{color:var(--lime)}
+
+  .detail{padding:16px}
+  .eyebrow{font-family:"Chakra Petch";font-size:.66rem;letter-spacing:.28em;text-transform:uppercase;color:var(--cyan)}
+  .htitle{font-family:"Chakra Petch";font-weight:700;font-size:1.9rem;letter-spacing:.02em;margin:5px 0 2px;color:#fff;text-shadow:0 0 10px rgba(255,45,184,.5)}
+  .lead{color:var(--dim);max-width:60ch}
+  .ev{margin-top:14px;border:1px solid var(--edge);border-radius:6px;overflow:hidden;background:linear-gradient(180deg,rgba(40,12,76,.5),rgba(13,4,32,.6))}
+  .ev-h{display:flex;justify-content:space-between;align-items:center;padding:11px 14px;border-bottom:1px solid var(--edge)}
+  .ev-h h3{font-family:"Chakra Petch";font-weight:600;font-size:1rem;letter-spacing:.04em;margin:0;color:var(--cyan)}
+  .ev-h .eid{font-family:"Chakra Petch";font-size:.66rem;letter-spacing:.14em;color:var(--amber)}
+  .ev-b{padding:13px 14px;display:grid;gap:11px}
+  .tags{display:flex;flex-wrap:wrap;gap:7px}
+  .t{font-family:"Chakra Petch";font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);border:1px solid var(--edge);border-radius:3px;padding:3px 9px}
+  .t b{color:var(--lime)}
+  .excerpt{border-left:3px solid var(--magenta);padding:6px 0 6px 13px;color:#f0e6ff;font-size:1.02rem}
+  .conf{display:flex;align-items:center;gap:10px}
+  .conf .lab{font-family:"Chakra Petch";font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .track{flex:1;height:9px;border-radius:3px;background:rgba(13,4,32,.8);border:1px solid var(--edge);overflow:hidden}
+  .track i{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--magenta));box-shadow:0 0 12px var(--magenta)}
+  .conf .v{font-family:"Chakra Petch";font-weight:700;color:var(--cyan)}
+  .verdict{display:flex;gap:8px;flex-wrap:wrap}
+  .verdict button{font-family:"Chakra Petch";font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;
+    background:rgba(13,4,32,.7);border:1px solid var(--edge);color:var(--dim);border-radius:4px;padding:7px 13px}
+  .verdict button[data-v="ok"].on{color:var(--lime);border-color:var(--lime);box-shadow:0 0 12px rgba(182,255,61,.5)}
+  .verdict button[data-v="warn"].on{color:var(--amber);border-color:var(--amber);box-shadow:0 0 12px rgba(255,207,61,.4)}
+  .verdict button[data-v="rej"].on{color:var(--magenta);border-color:var(--magenta);box-shadow:0 0 12px rgba(255,45,184,.5)}
+
+  .chat{display:flex;flex-direction:column;min-height:0}
+  .thread{flex:1;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:10px;min-height:0}
+  .msg{max-width:88%;padding:9px 12px;border-radius:6px;font-size:.95rem;border:1px solid var(--edge)}
+  .msg .nm{font-family:"Chakra Petch";font-size:.58rem;letter-spacing:.16em;text-transform:uppercase;margin-bottom:3px}
+  .msg.bot{align-self:flex-start;background:rgba(25,240,255,.07);border-color:var(--cyan)}
+  .msg.bot .nm{color:var(--cyan)}
+  .msg.me{align-self:flex-end;background:rgba(255,45,184,.1);border-color:var(--magenta)}
+  .msg.me .nm{color:var(--magenta)}
+  .composer{padding:11px 12px;border-top:1px solid var(--edge);display:grid;gap:9px}
+  .composer textarea{background:rgba(13,4,32,.8);border:1px solid var(--edge);border-radius:5px;color:var(--txt);font-family:"Rajdhani";font-weight:500;font-size:.95rem;padding:9px 11px;resize:none;min-height:2.5rem}
+  .composer textarea:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 12px rgba(25,240,255,.3)}
+  .composer .row{display:flex;gap:9px}
+  .composer button{flex:1;font-family:"Chakra Petch";font-weight:700;font-size:.76rem;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;border:0;border-radius:5px;padding:9px;color:#0d0420;background:linear-gradient(135deg,var(--cyan),var(--purple));box-shadow:0 0 14px rgba(25,240,255,.4)}
+  .composer button.ghost{background:transparent;color:var(--dim);border:1px solid var(--edge);box-shadow:none}
+
+  footer{display:flex;justify-content:space-between;padding:8px 16px;border:1px solid var(--edge);border-radius:6px;background:var(--panel);
+    font-family:"Chakra Petch";font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  footer .on{color:var(--lime)}
+  ::-webkit-scrollbar{width:9px}::-webkit-scrollbar-thumb{background:var(--edge);border-radius:9px}
+</style>
+</head>
+<body>
+<div class="scene"><div class="glow"></div><div class="sun"></div><div class="floor"></div></div>
+<div class="app">
+  <header>
+    <div class="logo neon">REVIEW//<b>ASSISTANT</b></div>
+    <div class="grow"></div>
+    <div class="fld"><label>Project</label>
+      <select class="n"><option>contract-renewals-q3</option><option>vendor-intake</option><option>policy-audit</option></select>
+    </div>
+    <span class="uid">@andrewDoing</span>
+    <button class="cta">Connect Copilot</button>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="ph"><h2>Records</h2><span class="b">24 LOADED</span></div>
+      <div class="scroll" id="recs">
+        <button class="rec on"><div class="r1"><span class="nm">Acme Corp — Master Agreement</span><span class="stat flag">flag</span></div><div class="sub">3 evidence · §8.2 · 2h ago</div></button>
+        <button class="rec"><div class="r1"><span class="nm">Globex Renewal Addendum</span><span class="stat pend">pend</span></div><div class="sub">1 evidence · §3.1 · 5h ago</div></button>
+        <button class="rec"><div class="r1"><span class="nm">Initech SLA Schedule</span><span class="stat done">done</span></div><div class="sub">2 evidence · §5.4 · 1d ago</div></button>
+        <button class="rec"><div class="r1"><span class="nm">Umbrella Data Terms</span><span class="stat flag">flag</span></div><div class="sub">5 evidence · §12 · 1d ago</div></button>
+        <button class="rec"><div class="r1"><span class="nm">Soylent Pricing Exhibit</span><span class="stat pend">pend</span></div><div class="sub">0 evidence · §16 · 2d ago</div></button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="ph"><h2>Record Details</h2><span class="b">REC-0001</span></div>
+      <div class="scroll detail">
+        <div class="eyebrow">Master Agreement</div>
+        <h1 class="htitle">ACME CORP</h1>
+        <p class="lead">Agent surfaced three evidence units. Liability and renewal cadence require your verdict — one reads below the confidence threshold.</p>
+
+        <div class="ev">
+          <div class="ev-h"><h3>Limitation of Liability</h3><span class="eid">EV-0114</span></div>
+          <div class="ev-b">
+            <div class="tags"><span class="t"><b>Target</b> §8.2</span><span class="t"><b>Type</b> clause</span><span class="t"><b>Editable</b> yes</span></div>
+            <blockquote class="excerpt">"…aggregate liability shall not exceed the fees paid in the twelve (12) months preceding the claim."</blockquote>
+            <div class="conf"><span class="lab">Conf</span><div class="track"><i style="width:91%"></i></div><span class="v">0.91</span></div>
+            <div class="verdict" data-verdict><button data-v="ok">accept</button><button data-v="warn">revise</button><button data-v="rej">reject</button></div>
+          </div>
+        </div>
+
+        <div class="ev">
+          <div class="ev-h"><h3>Auto-Renewal Cadence</h3><span class="eid">EV-0115</span></div>
+          <div class="ev-b">
+            <div class="tags"><span class="t"><b>Target</b> §3.1</span><span class="t"><b>Type</b> clause</span><span class="t"><b>Editable</b> yes</span></div>
+            <blockquote class="excerpt">"…renews for successive one-year terms unless either party provides ninety (90) days' written notice."</blockquote>
+            <div class="conf"><span class="lab">Conf</span><div class="track"><i style="width:76%;background:linear-gradient(90deg,var(--amber),var(--magenta))"></i></div><span class="v" style="color:var(--amber)">0.76</span></div>
+            <div class="verdict" data-verdict><button data-v="ok">accept</button><button data-v="warn">revise</button><button data-v="rej">reject</button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel chat">
+      <div class="ph"><h2>Copilot</h2><span class="b"><span style="color:var(--lime)">●</span> ONLINE</span></div>
+      <div class="thread">
+        <div class="msg bot"><div class="nm">Copilot</div>§8.2 liability cap excludes IP infringement but not confidentiality breaches. Recommend a flag.</div>
+        <div class="msg me"><div class="nm">You</div>Draft a redline adding confidentiality to the carve-outs.</div>
+        <div class="msg bot"><div class="nm">Copilot</div>Proposed: "…except for Sections 8, 9, and 11." Apply to EV-0114?</div>
+      </div>
+      <form class="composer" onsubmit="return false">
+        <textarea placeholder="Message Copilot…"></textarea>
+        <div class="row"><button class="ghost" type="button">Clear</button><button type="submit">Send</button></div>
+      </form>
+    </section>
+  </main>
+
+  <footer><span><span class="on">●</span> Copilot Linked · 42ms</span><span>Autosave Engaged</span></footer>
+</div>
+<script>
+  document.querySelectorAll('#recs .rec').forEach(r=>r.addEventListener('click',()=>{
+    document.querySelectorAll('#recs .rec').forEach(x=>x.classList.remove('on'));r.classList.add('on');}));
+  document.querySelectorAll('[data-verdict]').forEach(g=>g.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+    g.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');})));
+</script>
+</body>
+</html>

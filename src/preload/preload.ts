@@ -28,7 +28,10 @@ import {
   assertFeedbackSubmissionInput,
   assertFeedbackSubmissionResult,
   assertGitHubLoginCompletion,
-  assertProjectUser
+  assertProjectUser,
+  assertTheme,
+  assertThemeId,
+  assertThemeState
 } from '../shared/validators';
 
 const invoke = async <T>(channel: string, validator: (value: unknown) => T, ...args: unknown[]): Promise<T> =>
@@ -62,6 +65,10 @@ const api: Api = {
     invoke('records:discardChanges', assertRecordDraftStatus, assertProjectId(projectId), assertRecordId(recordId)),
   getFeedbackConfig: (projectId) => invoke('feedback:getConfig', assertFeedbackConfig, assertProjectId(projectId)),
   saveFeedbackConfig: (projectId, config) => invoke('feedback:saveConfig', assertFeedbackConfig, assertProjectId(projectId), assertFeedbackConfig(config)),
+  getThemeState: () => invoke('theme:getState', assertThemeState),
+  saveTheme: (theme) => invoke('theme:save', assertThemeState, assertTheme(theme)),
+  deleteTheme: (themeId) => invoke('theme:delete', assertThemeState, assertThemeId(themeId)),
+  setActiveTheme: (themeId) => invoke('theme:setActive', assertThemeState, assertThemeId(themeId)),
   getProjectUser: (projectId) => invoke('feedback:getProjectUser', assertProjectUser, assertProjectId(projectId)),
   submitFeedback: (projectId, recordId, input) =>
     invoke(

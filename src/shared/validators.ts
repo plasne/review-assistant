@@ -25,7 +25,10 @@ import type {
   RecordDetail,
   RecordSaveResult,
   RecordSummary,
-  TagDefinition
+  TagDefinition,
+  Theme,
+  ThemeState,
+  ThemeTokens
 } from './types';
 import { CANONICAL_MAPPINGS, FEEDBACK_EDIT_MODES, FEEDBACK_MODES, FIELD_PRESENTATIONS } from './feedback';
 
@@ -43,6 +46,22 @@ const isString = (value: unknown): value is string => typeof value === 'string';
 const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_CHAT_ATTACHMENT_CONTENT_CHARS = 60_000;
 const MAX_CHAT_ATTACHMENT_TOTAL_CHARS = 60_000;
+const REQUIRED_THEME_TOKEN_KEYS = [
+  'bg',
+  'bg2',
+  'surface',
+  'surface2',
+  'border',
+  'text',
+  'textDim',
+  'accent',
+  'accent2',
+  'success',
+  'warning',
+  'danger',
+  'focusRing',
+  'fontSans'
+] as const satisfies readonly (keyof ThemeTokens)[];
 
 export const assertProjectId = (value: unknown): string => {
   if (!isString(value) || value.trim() === '' || value.includes('/') || value.includes('\\') || value.includes('..')) {
@@ -60,6 +79,13 @@ export const assertNewProjectId = (value: unknown): string => {
     throw new ValidationError('Project name must be 3-63 characters using lowercase letters, numbers, and hyphens.');
   }
   return projectId;
+};
+
+export const assertThemeId = (value: unknown): string => {
+  if (!isString(value) || !/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$/.test(value)) {
+    throw new ValidationError('Theme identifier must be 3-63 characters using lowercase letters, numbers, and hyphens.');
+  }
+  return value;
 };
 
 export const assertRecordId = (value: unknown): string => {
@@ -291,6 +317,69 @@ export const assertFeedbackConfig = (value: unknown): FeedbackConfig => {
   return { properties } as FeedbackConfig;
 };
 
+const assertThemeTokens = (value: unknown): ThemeTokens => {
+  if (!isRecord(value)) {
+    throw new ValidationError('Invalid theme tokens.');
+  }
+  for (const key of REQUIRED_THEME_TOKEN_KEYS) {
+    if (!isString(value[key]) || value[key].trim() === '') {
+      throw new ValidationError(`Theme token ${key} must be a non-empty string.`);
+    }
+  }
+  if (value.fontSerif !== undefined && (!isString(value.fontSerif) || value.fontSerif.trim() === '')) {
+    throw new ValidationError('Theme token fontSerif must be a non-empty string when provided.');
+  }
+  const tokens = value as Record<(typeof REQUIRED_THEME_TOKEN_KEYS)[number], string> & { fontSerif?: string };
+  return {
+    bg: tokens.bg,
+    bg2: tokens.bg2,
+    surface: tokens.surface,
+    surface2: tokens.surface2,
+    border: tokens.border,
+    text: tokens.text,
+    textDim: tokens.textDim,
+    accent: tokens.accent,
+    accent2: tokens.accent2,
+    success: tokens.success,
+    warning: tokens.warning,
+    danger: tokens.danger,
+    focusRing: tokens.focusRing,
+    fontSans: tokens.fontSans,
+    ...(tokens.fontSerif === undefined ? {} : { fontSerif: tokens.fontSerif })
+  };
+};
+
+export const assertTheme = (value: unknown): Theme => {
+  if (!isRecord(value) || !isString(value.name) || value.name.trim() === '' || typeof value.builtIn !== 'boolean') {
+    throw new ValidationError('Invalid theme.');
+  }
+  return {
+    id: assertThemeId(value.id),
+    name: value.name,
+    builtIn: value.builtIn,
+    tokens: assertThemeTokens(value.tokens)
+  };
+};
+
+export const assertThemeState = (value: unknown): ThemeState => {
+  if (!isRecord(value) || !Array.isArray(value.themes)) {
+    throw new ValidationError('Invalid theme state.');
+  }
+  const themes = value.themes.map(assertTheme);
+  const ids = new Set<string>();
+  for (const theme of themes) {
+    if (ids.has(theme.id)) {
+      throw new ValidationError('Theme identifiers must be unique.');
+    }
+    ids.add(theme.id);
+  }
+  const activeThemeId = assertThemeId(value.activeThemeId);
+  if (!ids.has(activeThemeId)) {
+    throw new ValidationError('Active theme identifier must reference an available theme.');
+  }
+  return { activeThemeId, themes };
+};
+
 export const assertProjectUser = (value: unknown): ProjectUser => {
   if (!isRecord(value) || typeof value.valid !== 'boolean') {
     throw new ValidationError('Invalid project user response.');
@@ -332,7 +421,19 @@ export const assertBootstrap = (value: unknown): AppBootstrap => {
   if (!isRecord(value) || !Array.isArray(value.projects) || !isString(value.version)) {
     throw new ValidationError('Invalid bootstrap response.');
   }
-  return value as AppBootstrap;
+  if (value.configError !== undefined && !isString(value.configError)) {
+    throw new ValidationError('Invalid bootstrap response.');
+  }
+  if (value.backendKind !== undefined && value.backendKind !== 'local' && value.backendKind !== 'azure-connection-string' && value.backendKind !== 'azure-default-credential') {
+    throw new ValidationError('Invalid bootstrap response.');
+  }
+  return {
+    ...(value.configError === undefined ? {} : { configError: value.configError }),
+    ...(value.backendKind === undefined ? {} : { backendKind: value.backendKind }),
+    projects: assertProjectSummaries(value.projects),
+    themeState: assertThemeState(value.themeState),
+    version: value.version
+  };
 };
 
 export const assertAgentError = (value: unknown): AgentErrorEnvelope => {

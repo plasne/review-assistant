@@ -14,6 +14,36 @@ export type AgentSettings = {
   reasoningEffort?: AgentReasoningEffort;
 };
 
+export type ThemeTokens = {
+  bg: string;
+  bg2: string;
+  surface: string;
+  surface2: string;
+  border: string;
+  text: string;
+  textDim: string;
+  accent: string;
+  accent2: string;
+  success: string;
+  warning: string;
+  danger: string;
+  focusRing: string;
+  fontSans: string;
+  fontSerif?: string;
+};
+
+export type Theme = {
+  id: string;
+  name: string;
+  builtIn: boolean;
+  tokens: ThemeTokens;
+};
+
+export type ThemeState = {
+  activeThemeId: string;
+  themes: Theme[];
+};
+
 export type ExternalMcpServerConfig = {
   id: string;
   command: string;
@@ -318,6 +348,7 @@ export type AppBootstrap = {
   configError?: string;
   backendKind?: BackendKind;
   projects: ProjectSummary[];
+  themeState?: ThemeState;
   version: string;
 };
 
@@ -350,6 +381,10 @@ export type Api = {
   continueWithGitHub: () => Promise<ContinueWithGitHubResult>;
   closeWindow: () => Promise<void>;
   cancelChat: (requestId: string) => Promise<ChatCancelResult>;
+  getThemeState: () => Promise<ThemeState>;
+  saveTheme: (theme: Theme) => Promise<ThemeState>;
+  deleteTheme: (themeId: string) => Promise<ThemeState>;
+  setActiveTheme: (themeId: string) => Promise<ThemeState>;
 } & AuthEventHandlers &
   AppEventHandlers &
   ChatStreamEventHandlers;

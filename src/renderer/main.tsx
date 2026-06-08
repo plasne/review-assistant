@@ -19,9 +19,13 @@ import type {
   RecordDetail,
   RenderNode,
   TagDefinition,
+  Theme,
+  ThemeTokens,
+  ThemeState,
   ValidationIssue
 } from '../shared/types';
 import { CANONICAL_MAPPINGS, feedbackConfigEntryForPath, FEEDBACK_EDIT_MODES, FEEDBACK_MODES, FIELD_PRESENTATIONS } from '../shared/feedback';
+import { applyThemeState } from './theme';
 import './styles.css';
 
 type Status = 'idle' | 'loading' | 'error';
@@ -52,6 +56,74 @@ const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_TAGS_PER_RECORD = 100;
 const MAX_TAG_LENGTH = 100;
 const NOT_SET_LABEL = '(not set)';
+
+type ThemeDraft = {
+  id: string;
+  name: string;
+  tokens: ThemeTokens;
+};
+
+const THEME_TOKEN_FIELDS = [
+  { key: 'bg', label: 'Background' },
+  { key: 'bg2', label: 'Secondary background' },
+  { key: 'surface', label: 'Surface' },
+  { key: 'surface2', label: 'Raised surface' },
+  { key: 'border', label: 'Border' },
+  { key: 'text', label: 'Text' },
+  { key: 'textDim', label: 'Dim text' },
+  { key: 'accent', label: 'Accent' },
+  { key: 'accent2', label: 'Secondary accent' },
+  { key: 'success', label: 'Success' },
+  { key: 'warning', label: 'Warning' },
+  { key: 'danger', label: 'Danger' },
+  { key: 'focusRing', label: 'Focus ring' },
+  { key: 'fontSans', label: 'Sans font' },
+  { key: 'fontSerif', label: 'Serif font' }
+] as const satisfies readonly { key: keyof ThemeTokens; label: string }[];
+
+const REQUIRED_THEME_TOKEN_KEYS = THEME_TOKEN_FIELDS.filter((field) => field.key !== 'fontSerif').map((field) => field.key);
+const COLOR_THEME_TOKEN_KEYS = new Set<keyof ThemeTokens>(
+  THEME_TOKEN_FIELDS.filter((field) => field.key !== 'fontSans' && field.key !== 'fontSerif').map((field) => field.key)
+);
+
+const emptyThemeTokens = (): ThemeTokens => ({
+  bg: '#101827',
+  bg2: '#0d1320',
+  surface: '#182338',
+  surface2: '#27344d',
+  border: '#30415f',
+  text: '#f4f7fb',
+  textDim: '#aebbd0',
+  accent: '#0969da',
+  accent2: '#58a6ff',
+  success: '#2f6f4f',
+  warning: '#ffd166',
+  danger: '#ff9aa8',
+  focusRing: '#8bd3ff',
+  fontSans: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontSerif: 'Georgia, "Times New Roman", serif'
+});
+
+const slugifyThemeId = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 63);
+
+const createThemeDraft = (source: Theme | undefined, themeState: ThemeState | undefined): ThemeDraft => {
+  const baseTokens = source?.tokens ?? themeState?.themes.find((theme) => theme.id === themeState.activeThemeId)?.tokens ?? emptyThemeTokens();
+  const baseName = source ? `${source.name} Custom` : 'Custom Theme';
+  const baseId = slugifyThemeId(source ? `${source.id}-custom` : 'custom-theme');
+  const existingIds = new Set(themeState?.themes.map((theme) => theme.id) ?? []);
+  let id = baseId || 'custom-theme';
+  for (let index = 2; existingIds.has(id); index += 1) {
+    const suffix = `-${index}`;
+    id = `${id.slice(0, Math.max(0, 63 - suffix.length))}${suffix}`;
+  }
+  return { id, name: baseName, tokens: { ...baseTokens } };
+};
 
 const nextNewRecordId = (existingIds: string[]): string => {
   const existing = new Set(existingIds);
@@ -110,6 +182,7 @@ const recordDraftErrorMessage = (error: unknown): string => {
 
 const App = () => {
   const [bootstrap, setBootstrap] = useState<AppBootstrap | undefined>();
+  const [themeState, setThemeState] = useState<ThemeState | undefined>();
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [project, setProject] = useState<OpenProjectResult | undefined>();
   const [record, setRecord] = useState<RecordDetail | undefined>();
@@ -131,6 +204,9 @@ const App = () => {
   const [isCreateProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [isCreateRecordDialogOpen, setCreateRecordDialogOpen] = useState(false);
   const [isFeedbackConfigOpen, setFeedbackConfigOpen] = useState(false);
+  const [isThemeManagerOpen, setThemeManagerOpen] = useState(false);
+  const [themeDraft, setThemeDraft] = useState<ThemeDraft | undefined>();
+  const [themeError, setThemeError] = useState<string | undefined>();
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [feedbackDrafts, setFeedbackDrafts] = useState<FeedbackDrafts>({});
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | undefined>();
@@ -156,6 +232,11 @@ const App = () => {
   const chatStateRef = useRef<ChatState>('ready');
   const activeLoginIdRef = useRef<string | undefined>(undefined);
   const loginDialogTitleId = useId();
+
+  const applyThemeStateUpdate = (nextThemeState: ThemeState): void => {
+    applyThemeState(nextThemeState);
+    setThemeState(nextThemeState);
+  };
 
   useEffect(() => {
     activeRequestIdRef.current = activeRequestId;
@@ -199,6 +280,9 @@ const App = () => {
     window.reviewAssistant
       .getBootstrap()
       .then((result) => {
+        if (result.themeState) {
+          applyThemeStateUpdate(result.themeState);
+        }
         setBootstrap(result);
         setStatus(result.configError ? 'error' : 'idle');
         setError(result.configError);
@@ -994,6 +1078,7 @@ const App = () => {
   const selectedRecordId = record?.recordId;
   const records = project?.records ?? [];
   const title = useMemo(() => (project ? 'records' : 'Select a project'), [project]);
+  const activeTheme = themeState?.themes.find((theme) => theme.id === themeState.activeThemeId);
   const agentUnavailable = agentStatus?.availability === 'unavailable';
   const agentAuthRequired = agentUnavailable && agentStatus?.error?.code === 'AUTH_REQUIRED';
   const canSendChat = Boolean((chatInput.trim() || chatAttachments.length > 0) && chatState !== 'streaming' && !agentUnavailable && status !== 'loading');
@@ -1029,6 +1114,84 @@ const App = () => {
     };
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+  };
+
+  const refreshThemeState = async (): Promise<ThemeState> => {
+    const nextThemeState = await window.reviewAssistant.getThemeState();
+    applyThemeStateUpdate(nextThemeState);
+    return nextThemeState;
+  };
+
+  const openThemeManager = () => {
+    setThemeError(undefined);
+    setThemeDraft(undefined);
+    setThemeManagerOpen(true);
+    if (!themeState) {
+      void refreshThemeState().catch((caught: Error) => setThemeError(caught.message));
+    }
+  };
+
+  const selectTheme = async (themeId: string) => {
+    setThemeError(undefined);
+    try {
+      applyThemeStateUpdate(await window.reviewAssistant.setActiveTheme(themeId));
+    } catch (caught) {
+      setThemeError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const deleteTheme = async (themeId: string) => {
+    setThemeError(undefined);
+    try {
+      const nextThemeState = await window.reviewAssistant.deleteTheme(themeId);
+      applyThemeStateUpdate(nextThemeState);
+      if (themeDraft?.id === themeId) {
+        setThemeDraft(undefined);
+      }
+    } catch (caught) {
+      setThemeError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const saveThemeDraft = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!themeDraft) {
+      return;
+    }
+    setThemeError(undefined);
+    const id = slugifyThemeId(themeDraft.id);
+    const name = themeDraft.name.trim();
+    if (!/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$/.test(id)) {
+      setThemeError('Theme identifier must be 3-63 characters using lowercase letters, numbers, and hyphens.');
+      return;
+    }
+    if (!name) {
+      setThemeError('Theme name is required.');
+      return;
+    }
+    for (const key of REQUIRED_THEME_TOKEN_KEYS) {
+      if (!themeDraft.tokens[key]?.trim()) {
+        setThemeError(`${THEME_TOKEN_FIELDS.find((field) => field.key === key)?.label ?? key} is required.`);
+        return;
+      }
+    }
+
+    try {
+      const savedState = await window.reviewAssistant.saveTheme({
+        id,
+        name,
+        builtIn: false,
+        tokens: {
+          ...themeDraft.tokens,
+          ...(themeDraft.tokens.fontSerif?.trim() ? { fontSerif: themeDraft.tokens.fontSerif.trim() } : { fontSerif: undefined })
+        }
+      });
+      applyThemeStateUpdate(savedState);
+      applyThemeStateUpdate(await window.reviewAssistant.setActiveTheme(id));
+      setThemeDraft(undefined);
+    } catch (caught) {
+      setThemeError(caught instanceof Error ? caught.message : String(caught));
+    }
   };
 
   return (
@@ -1076,6 +1239,14 @@ const App = () => {
           </button>
         ) : null}
         <div className="header-spacer" aria-hidden="true" />
+        <button
+          type="button"
+          className="secondary-button header-action-button"
+          aria-label="Manage themes"
+          onClick={openThemeManager}
+        >
+          Themes
+        </button>
         {selectedProjectId ? (
           <span className={projectUser?.valid === false ? 'username-badge invalid' : 'username-badge'} aria-label="Current feedback username">
             {projectUser === undefined
@@ -1086,6 +1257,174 @@ const App = () => {
           </span>
         ) : null}
       </header>
+
+      {isThemeManagerOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal theme-manager-modal" role="dialog" aria-modal="true" aria-labelledby="theme-manager-title">
+            <div className="theme-manager-header">
+              <div>
+                <h2 id="theme-manager-title">Themes</h2>
+                <p className="modal-help">Choose a built-in theme or author a custom token set. Changes apply immediately after selection or save.</p>
+              </div>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => {
+                  setThemeManagerOpen(false);
+                  setThemeDraft(undefined);
+                  setThemeError(undefined);
+                }}
+              >
+                Close
+              </button>
+            </div>
+
+            {themeError ? (
+              <p className="form-error" role="alert">
+                {themeError}
+              </p>
+            ) : null}
+
+            {themeState ? (
+              <>
+                <label className="theme-select">
+                  <span>Active theme</span>
+                  <select aria-label="Active theme" value={themeState.activeThemeId} onChange={(event) => void selectTheme(event.target.value)}>
+                    {themeState.themes.map((theme) => (
+                      <option key={theme.id} value={theme.id}>
+                        {theme.name} {theme.builtIn ? '(built-in)' : '(custom)'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="theme-list" aria-label="Available themes">
+                  {themeState.themes.map((theme) => (
+                    <article key={theme.id} className={theme.id === themeState.activeThemeId ? 'theme-card active' : 'theme-card'}>
+                      <div className="theme-card-swatches" aria-hidden="true">
+                        <span style={{ background: theme.tokens.bg }} />
+                        <span style={{ background: theme.tokens.surface }} />
+                        <span style={{ background: theme.tokens.accent }} />
+                        <span style={{ background: theme.tokens.success }} />
+                        <span style={{ background: theme.tokens.danger }} />
+                      </div>
+                      <div className="theme-card-body">
+                        <h3>{theme.name}</h3>
+                        <p>
+                          {theme.builtIn ? 'Built-in' : 'Custom'} · {theme.id}
+                        </p>
+                      </div>
+                      <div className="theme-card-actions">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={theme.id === themeState.activeThemeId}
+                          onClick={() => void selectTheme(theme.id)}
+                        >
+                          Select
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() =>
+                            setThemeDraft(theme.builtIn ? createThemeDraft(theme, themeState) : { id: theme.id, name: theme.name, tokens: { ...theme.tokens } })
+                          }
+                        >
+                          {theme.builtIn ? 'Copy' : 'Edit'}
+                        </button>
+                        {!theme.builtIn ? (
+                          <button type="button" className="secondary-button danger-button" onClick={() => void deleteTheme(theme.id)}>
+                            Delete
+                          </button>
+                        ) : null}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+
+                <div className="theme-editor-shell">
+                  <div className="theme-editor-heading">
+                    <h3>{themeDraft ? 'Custom theme editor' : 'Create a custom theme'}</h3>
+                    <button type="button" className="create-project-button" onClick={() => setThemeDraft(createThemeDraft(activeTheme, themeState))}>
+                      New custom theme
+                    </button>
+                  </div>
+
+                  {themeDraft ? (
+                    <form className="theme-editor" onSubmit={(event) => void saveThemeDraft(event)}>
+                      <div className="theme-editor-meta">
+                        <label>
+                          <span>Name</span>
+                          <input
+                            value={themeDraft.name}
+                            onChange={(event) => setThemeDraft((current) => (current ? { ...current, name: event.target.value } : current))}
+                          />
+                        </label>
+                        <label>
+                          <span>Identifier</span>
+                          <input
+                            value={themeDraft.id}
+                            onChange={(event) => setThemeDraft((current) => (current ? { ...current, id: event.target.value } : current))}
+                            pattern="[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])"
+                            title="Use 3-63 lowercase letters, numbers, and hyphens."
+                          />
+                        </label>
+                      </div>
+
+                      <div className="theme-token-grid">
+                        {THEME_TOKEN_FIELDS.map((field) => (
+                          <label key={field.key}>
+                            <span>{field.label}</span>
+                            <input
+                              type={COLOR_THEME_TOKEN_KEYS.has(field.key) ? 'text' : 'text'}
+                              value={themeDraft.tokens[field.key] ?? ''}
+                              placeholder={field.key === 'fontSerif' ? 'Optional serif font stack' : undefined}
+                              onChange={(event) =>
+                                setThemeDraft((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        tokens: {
+                                          ...current.tokens,
+                                          [field.key]: event.target.value
+                                        }
+                                      }
+                                    : current
+                                )
+                              }
+                            />
+                          </label>
+                        ))}
+                      </div>
+
+                      <div className="theme-preview" aria-label="Theme preview">
+                        <div style={{ background: themeDraft.tokens.bg, color: themeDraft.tokens.text, borderColor: themeDraft.tokens.border }}>
+                          <strong>Preview</strong>
+                          <span style={{ color: themeDraft.tokens.textDim }}>Surface and status tokens</span>
+                          <button type="button" style={{ background: themeDraft.tokens.accent, color: themeDraft.tokens.text }}>
+                            Accent action
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="modal-actions">
+                        <button type="button" className="secondary-button" onClick={() => setThemeDraft(undefined)}>
+                          Cancel
+                        </button>
+                        <button type="submit" className="create-project-button">
+                          Save and apply
+                        </button>
+                      </div>
+                    </form>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <p className="empty">Loading themes...</p>
+            )}
+          </section>
+        </div>
+      ) : null}
 
       {isCreateProjectDialogOpen ? (
         <div className="modal-backdrop" role="presentation">

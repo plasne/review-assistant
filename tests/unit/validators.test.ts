@@ -17,6 +17,9 @@ import {
   assertProjectId,
   assertRecordDetail,
   assertRecordId,
+  assertTheme,
+  assertThemeId,
+  assertThemeState,
   ValidationError
 } from '../../src/shared/validators';
 
@@ -91,6 +94,32 @@ describe('IPC boundary validators', () => {
       assertBootstrap({
         backendKind: 'local',
         projects: [{ id: 'sample-project', name: 'sample-project' }],
+        themeState: {
+          activeThemeId: 'default',
+          themes: [
+            {
+              id: 'default',
+              name: 'Default',
+              builtIn: true,
+              tokens: {
+                bg: '#101827',
+                bg2: '#0d1320',
+                surface: '#182338',
+                surface2: '#27344d',
+                border: '#30415f',
+                text: '#f4f7fb',
+                textDim: '#aebbd0',
+                accent: '#0969da',
+                accent2: '#58a6ff',
+                success: '#2f6f4f',
+                warning: '#ffd166',
+                danger: '#ff9aa8',
+                focusRing: '#8bd3ff',
+                fontSans: 'Inter, sans-serif'
+              }
+            }
+          ]
+        },
         version: 'v0.1.0-test'
       })
     ).toMatchObject({ backendKind: 'local' });
@@ -174,6 +203,39 @@ describe('IPC boundary validators', () => {
         }
       })
     ).toThrow(ValidationError);
+  });
+
+  it('validates theme contracts at shared process boundaries', () => {
+    const theme = {
+      id: 'custom-focus',
+      name: 'Custom Focus',
+      builtIn: false,
+      tokens: {
+        bg: '#101010',
+        bg2: '#151515',
+        surface: '#202020',
+        surface2: '#2a2a2a',
+        border: '#404040',
+        text: '#f5f5f5',
+        textDim: '#bbbbbb',
+        accent: '#44ccff',
+        accent2: '#ffaa44',
+        success: '#55cc88',
+        warning: '#ffcc55',
+        danger: '#ff6677',
+        focusRing: '#88ddff',
+        fontSans: 'Inter, sans-serif',
+        fontSerif: 'Georgia, serif'
+      }
+    };
+
+    expect(assertThemeId(theme.id)).toBe(theme.id);
+    expect(assertTheme(theme)).toEqual(theme);
+    expect(assertThemeState({ activeThemeId: theme.id, themes: [theme] })).toEqual({ activeThemeId: theme.id, themes: [theme] });
+    expect(() => assertThemeId('Bad Theme')).toThrow(ValidationError);
+    expect(() => assertTheme({ ...theme, tokens: { ...theme.tokens, textDim: '' } })).toThrow('Theme token textDim must be a non-empty string');
+    expect(() => assertThemeState({ activeThemeId: 'missing-theme', themes: [theme] })).toThrow('Active theme identifier must reference an available theme');
+    expect(() => assertThemeState({ activeThemeId: theme.id, themes: [theme, theme] })).toThrow('Theme identifiers must be unique');
   });
 
   it('validates streamed chat IPC payloads', () => {
