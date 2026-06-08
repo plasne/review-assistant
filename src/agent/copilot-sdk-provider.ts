@@ -449,8 +449,8 @@ const reasoningTurnId = (reasoningId: string): string | undefined => {
 };
 
 const createClient = (tempDir: string): CopilotClient => {
-  const command = process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND || process.env.REVIEW_ASSISTANT_COPILOT_COMMAND || resolveCopilotRuntimePath();
-  const args = parseRuntimeArgs(process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS ?? '');
+  const command = process.env.COPILOT_RUNTIME_COMMAND || resolveCopilotRuntimePath();
+  const args = parseRuntimeArgs(process.env.COPILOT_RUNTIME_ARGS ?? '');
   return new CopilotClient({
     connection: RuntimeConnection.forStdio({ path: command, args }),
     mode: 'empty',

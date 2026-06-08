@@ -2,8 +2,8 @@ import path from 'node:path';
 import { loadAppConfig } from './env';
 import { AzureInferenceArtifactWriter, runInference } from './inference';
 
-export const getInferenceAppEnvPath = (repoRoot: string, values: Record<string, string | undefined> = process.env): string =>
-  values.REVIEW_ASSISTANT_APP_ENV ?? path.join(repoRoot, 'ground-truth', 'config', '.env');
+export const getInferenceAppEnvPath = (repoRoot: string): string =>
+  path.join(repoRoot, 'ground-truth', 'config', '.env');
 
 const requireConfigValue = (values: Record<string, string>, name: string): string => {
   const value = values[name];
@@ -24,11 +24,16 @@ const parseIterations = (value: string | undefined): number => {
   return iterations;
 };
 
+export const resolveInferenceIterations = (
+  configValues: Record<string, string>,
+  envValues: Record<string, string | undefined> = process.env
+): number => parseIterations(envValues.ITERATIONS ?? configValues.ITERATIONS);
+
 const main = async (): Promise<void> => {
   const repoRoot = path.resolve(__dirname, '../..');
   const config = loadAppConfig(getInferenceAppEnvPath(repoRoot));
   const runFolder = String(Date.now());
-  const iterations = parseIterations(process.env.ITERATIONS);
+  const iterations = resolveInferenceIterations(config.values);
   const containerName = requireConfigValue(config.values, 'INFERENCE_CONTAINER');
   const result = await runInference({
     repoRoot,

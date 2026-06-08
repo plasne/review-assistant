@@ -1,18 +1,93 @@
+import io
+import os
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from eval.evaluate import (
+    DEFAULT_JUDGE_TIMEOUT_SECONDS,
+    CopilotSdkFactJudge,
+    ExperimentCatalogConfig,
+    create_fact_judge_from_env,
     evaluate_artifact,
     evaluation_blob_name,
-    generation_correctness,
-    record_correctness,
+    experiment_catalog_api_base_url,
+    experiment_catalog_metrics,
+    list_experiment_catalog_sets,
+    next_experiment_catalog_set,
+    next_suffixed_set_name,
+    generation_metrics_for_answers,
+    inference_timing_metrics,
+    is_inference_artifact_blob,
+    latest_inference_prefix,
+    log_evaluation_progress,
+    normalize_prefix,
+    parse_args,
+    parse_judge_response_content,
+    publish_experiment_catalog_result,
+    output_structure,
     retrieval_recall,
     resolve_json_pointer,
+    unquote_env_value,
 )
+
+
+class FakeBlob:
+    def __init__(self, name):
+        self.name = name
+
+
+class FakeContainer:
+    def __init__(self, blob_names):
+        self.blob_names = blob_names
+
+    def list_blobs(self, name_starts_with=None):
+        prefix = name_starts_with or ""
+        return [FakeBlob(name) for name in self.blob_names if name.startswith(prefix)]
 
 
 class EvaluateMetricsTests(unittest.TestCase):
     def test_evaluation_blob_name_replaces_json_suffix(self):
         self.assertEqual(evaluation_blob_name("run/a00-0.json"), "run/a00-0.eval.json")
+
+    def test_evaluation_replaces_existing_outputs_by_default(self):
+        with patch("sys.argv", ["evaluate.py"]):
+            args = parse_args()
+
+        self.assertEqual(args.skip_existing, False)
+
+    def test_evaluation_can_skip_existing_outputs_when_requested(self):
+        with patch("sys.argv", ["evaluate.py", "--skip-existing"]):
+            args = parse_args()
+
+        self.assertEqual(args.skip_existing, True)
+
+    def test_normalize_prefix_appends_slash_only_when_needed(self):
+        self.assertEqual(normalize_prefix("1780923514279"), "1780923514279/")
+        self.assertEqual(normalize_prefix("1780923514279/"), "1780923514279/")
+        self.assertEqual(normalize_prefix(""), "")
+
+    def test_latest_inference_prefix_uses_newest_manifest_folder(self):
+        container = FakeContainer(["1780923514278/manifest.json", "1780923514279/manifest.json", "1780923514279/a00-0.json"])
+        self.assertEqual(latest_inference_prefix(container), "1780923514279/")
+
+    def test_inference_artifact_filter_skips_manifest_and_eval_outputs(self):
+        self.assertTrue(is_inference_artifact_blob("1780923514279/a00-0.json"))
+        self.assertFalse(is_inference_artifact_blob("1780923514279/manifest.json"))
+        self.assertFalse(is_inference_artifact_blob("1780923514279/a00-0.eval.json"))
+
+    def test_unquote_env_value_handles_quoted_values(self):
+        self.assertEqual(unquote_env_value('"container"'), "container")
+        self.assertEqual(unquote_env_value("'container'"), "container")
+        self.assertEqual(unquote_env_value("container"), "container")
+
+    def test_evaluation_progress_logs_to_stderr(self):
+        stderr = io.StringIO()
+
+        with patch("sys.stderr", stderr):
+            log_evaluation_progress("Evaluating inference artifact", "run/a00-0.json")
+
+        self.assertEqual(stderr.getvalue(), "Evaluating inference artifact: run/a00-0.json\n")
 
     def test_json_pointer_resolves_objects_and_arrays(self):
         value = {"turns": [{"answer": "done"}]}
@@ -26,19 +101,355 @@ class EvaluateMetricsTests(unittest.TestCase):
         self.assertEqual(metric["score"], 0.5)
         self.assertEqual(metric["missing_evidence"], ["id:doc-b"])
 
-    def test_generation_correctness_scores_expected_facts_against_answer(self):
-        metric = generation_correctness(
-            "Dracula advances the influence track. Dracula matures vampires.",
-            "Dracula wins by advancing the influence track after vampires mature.",
-        )
-        self.assertGreater(metric["score"], 0.7)
-        self.assertLess(metric["score"], 1.0)
+    def test_generation_metrics_use_judge_for_material_equivalence(self):
+        def fact_judge(expected_answer, actual_answer):
+            self.assertIn("advancing the influence track", expected_answer)
+            self.assertIn("push the influence track", actual_answer)
+            return {
+                "schema_version": "review-assistant.fact-judge.v1",
+                "ground_truth_facts": [
+                    {
+                        "id": "gt-1",
+                        "fact": "Dracula wins by advancing the influence track to its victory space through vampires, hunters, and influence-adding effects.",
+                    }
+                ],
+                "inference_facts": [
+                    {
+                        "id": "inf-1",
+                        "fact": "Dracula's goal is to push the influence track to victory using maturing vampires, hunter attacks, and influence effects.",
+                    }
+                ],
+                "comparisons": [
+                    {
+                        "ground_truth_fact_id": "gt-1",
+                        "inference_fact_ids": ["inf-1"],
+                        "label": "equivalent",
+                        "rationale": "Both state the same objective and main mechanisms with different wording.",
+                    }
+                ],
+            }
 
-    def test_record_correctness_counts_union_of_leaf_properties(self):
-        metric = record_correctness({"a": 1, "b": {"c": 2}}, {"a": 1, "b": {"c": 3}, "d": 4})
-        self.assertEqual(metric["matching_properties"], 1)
-        self.assertEqual(metric["total_properties"], 3)
-        self.assertEqual(metric["score"], 0.333333)
+        metrics = generation_metrics_for_answers(
+            "Dracula is trying to win by advancing the influence track to its victory space, commonly by maturing vampires, defeating or biting hunters, and using encounter or card effects that add influence.",
+            "Dracula's goal is to push the influence track to victory, usually by maturing vampires, attacking hunters, and resolving effects that increase influence.",
+            fact_judge=fact_judge,
+        )
+
+        self.assertEqual(metrics["generation_accuracy"]["method"], "agent_judge")
+        self.assertEqual(metrics["generation_accuracy"]["numerator"], 2)
+        self.assertEqual(metrics["generation_accuracy"]["denominator"], 2)
+        self.assertEqual(metrics["generation_accuracy"]["score"], 1.0)
+        self.assertEqual(metrics["generation_recall"]["supported_ground_truth_fact_count"], 1)
+        self.assertEqual(metrics["generation_recall"]["ground_truth_fact_count"], 1)
+        self.assertEqual(metrics["generation_recall"]["score"], 1.0)
+        self.assertEqual(metrics["generation_precision"]["supported_inference_fact_count"], 1)
+        self.assertEqual(metrics["generation_precision"]["inference_fact_count"], 1)
+        self.assertEqual(metrics["generation_precision"]["score"], 1.0)
+        self.assertEqual(metrics["generation_accuracy"]["ground_truth_facts"][0]["supported_by_inference"], True)
+        self.assertEqual(metrics["generation_accuracy"]["inference_facts"][0]["supported_by_ground_truth"], True)
+        self.assertNotIn("generation_correctness", metrics)
+        self.assertNotIn("overlap", metrics["generation_accuracy"])
+        self.assertNotIn("extra_inference_facts", metrics["generation_accuracy"])
+
+    def test_generation_metrics_report_simple_support_flags_and_component_scores(self):
+        def fact_judge(_expected_answer, _actual_answer):
+            return {
+                "schema_version": "review-assistant.fact-judge.v1",
+                "ground_truth_facts": [
+                    {"id": "gt-1", "fact": "Dracula advances influence."},
+                    {"id": "gt-2", "fact": "Dracula matures vampires."},
+                ],
+                "inference_facts": [
+                    {"id": "inf-1", "fact": "Dracula advances influence."},
+                    {"id": "inf-2", "fact": "Dracula acts in secret."},
+                ],
+                "comparisons": [
+                    {
+                        "ground_truth_fact_id": "gt-1",
+                        "inference_fact_ids": ["inf-1"],
+                        "label": "equivalent",
+                        "rationale": "Same fact.",
+                    },
+                    {
+                        "ground_truth_fact_id": "gt-2",
+                        "inference_fact_ids": [],
+                        "label": "missing",
+                        "rationale": "No inference fact mentions vampire maturation.",
+                    },
+                ],
+            }
+
+        metrics = generation_metrics_for_answers("expected", "actual", fact_judge=fact_judge)
+
+        self.assertEqual(
+            metrics["generation_accuracy"]["ground_truth_facts"],
+            [
+                {"id": "gt-1", "fact": "Dracula advances influence.", "supported_by_inference": True},
+                {"id": "gt-2", "fact": "Dracula matures vampires.", "supported_by_inference": False},
+            ],
+        )
+        self.assertEqual(
+            metrics["generation_accuracy"]["inference_facts"],
+            [
+                {"id": "inf-1", "fact": "Dracula advances influence.", "supported_by_ground_truth": True},
+                {"id": "inf-2", "fact": "Dracula acts in secret.", "supported_by_ground_truth": False},
+            ],
+        )
+        self.assertEqual(
+            metrics["generation_accuracy"],
+            {
+                "numerator": 2,
+                "denominator": 4,
+                "score": 0.5,
+                "method": "agent_judge",
+                "schema_version": "review-assistant.fact-judge.v1",
+                "supported_fact_count": 2,
+                "total_fact_count": 4,
+                "inference_facts": [
+                    {"id": "inf-1", "fact": "Dracula advances influence.", "supported_by_ground_truth": True},
+                    {"id": "inf-2", "fact": "Dracula acts in secret.", "supported_by_ground_truth": False},
+                ],
+                "ground_truth_facts": [
+                    {"id": "gt-1", "fact": "Dracula advances influence.", "supported_by_inference": True},
+                    {"id": "gt-2", "fact": "Dracula matures vampires.", "supported_by_inference": False},
+                ],
+            },
+        )
+        self.assertEqual(
+            metrics["generation_recall"],
+            {
+                "numerator": 1,
+                "denominator": 2,
+                "score": 0.5,
+                "method": "agent_judge",
+                "schema_version": "review-assistant.fact-judge.v1",
+                "supported_ground_truth_fact_count": 1,
+                "ground_truth_fact_count": 2,
+            },
+        )
+        self.assertEqual(
+            metrics["generation_precision"],
+            {
+                "numerator": 1,
+                "denominator": 2,
+                "score": 0.5,
+                "method": "agent_judge",
+                "schema_version": "review-assistant.fact-judge.v1",
+                "supported_inference_fact_count": 1,
+                "inference_fact_count": 2,
+            },
+        )
+
+    def test_generation_metrics_reject_incomplete_judge_output(self):
+        def fact_judge(_expected_answer, _actual_answer):
+            return {
+                "schema_version": "review-assistant.fact-judge.v1",
+                "ground_truth_facts": [{"id": "gt-1", "fact": "Dracula advances influence."}],
+                "inference_facts": [],
+                "comparisons": [],
+            }
+
+        with self.assertRaisesRegex(ValueError, "missing comparisons"):
+            generation_metrics_for_answers("Dracula advances influence.", "", fact_judge=fact_judge)
+
+    def test_parse_judge_response_accepts_json_content_from_copilot(self):
+        parsed = parse_judge_response_content(
+            '```json\n{"schema_version":"review-assistant.fact-judge.v1","ground_truth_facts":[],"inference_facts":[],"comparisons":[]}\n```'
+        )
+
+        self.assertEqual(parsed["schema_version"], "review-assistant.fact-judge.v1")
+
+    def test_create_fact_judge_from_env_uses_copilot_sdk_defaults(self):
+        with patch.dict(os.environ, {}, clear=True):
+            judge = create_fact_judge_from_env()
+
+        self.assertIsInstance(judge, CopilotSdkFactJudge)
+        self.assertEqual(judge.repo_root, Path.cwd())
+        self.assertEqual(judge.timeout_seconds, DEFAULT_JUDGE_TIMEOUT_SECONDS)
+
+    def test_output_structure_validates_against_schema_without_comparing_values_or_array_lengths(self):
+        metric = output_structure(
+            {
+                "answer": "Different answer.",
+                "evidence": [
+                    {"id": "doc-1", "title": "A", "url": "a://doc", "excerpt": "Text.", "score": 25},
+                    {"id": "doc-2", "title": "B", "url": "b://doc", "excerpt": "Other text.", "score": 12},
+                ],
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string", "enum": ["Expected answer."]},
+                    "evidence": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "title": {"type": "string"},
+                                "url": {"type": "string"},
+                                "excerpt": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["id", "title", "url", "excerpt"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["answer", "evidence"],
+                "additionalProperties": False,
+            },
+        )
+
+        self.assertTrue(metric["valid"])
+        self.assertEqual(metric["issue_count"], 0)
+        self.assertEqual(metric["score"], 1.0)
+
+    def test_output_structure_reports_schema_violations(self):
+        metric = output_structure(
+            {"answer": 42, "extra": True},
+            {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}, "evidence": {"type": "array"}},
+                "required": ["answer", "evidence"],
+                "additionalProperties": False,
+            },
+        )
+
+        self.assertFalse(metric["valid"])
+        self.assertEqual(metric["issue_count"], 3)
+        self.assertEqual(
+            metric["issues"],
+            [
+                {"path": "/", "keyword": "required", "message": "Missing required property: evidence."},
+                {"path": "/answer", "keyword": "type", "message": "Expected string, got integer."},
+                {"path": "/extra", "keyword": "additionalProperties", "message": "Unexpected property: extra."},
+            ],
+        )
+        self.assertEqual(metric["score"], 0.0)
+
+    def test_inference_timing_metrics_are_derived_from_inference_transcript(self):
+        metrics = inference_timing_metrics(
+            {
+                "elapsed_ms": 1234,
+                "transcript": [
+                    {"type": "user-prompt", "elapsed_ms": 0},
+                    {"type": "tool-call", "elapsed_ms": 250},
+                    {"type": "assistant-response", "elapsed_ms": 900},
+                    {"type": "tool-call", "elapsed_ms": 50},
+                ],
+            }
+        )
+
+        self.assertEqual(metrics, {"meta_total_elapsed_ms": 1234, "meta_model_elapsed_ms": 900, "meta_tool_elapsed_ms": 300})
+
+    def test_experiment_catalog_metrics_flatten_scores_and_timing_values(self):
+        metrics = experiment_catalog_metrics(
+            {
+                "metrics": {
+                    "retrieval_recall": {"score": 0.5, "missing_evidence": ["id:doc-b"]},
+                    "generation_accuracy": {"score": 0.75, "ground_truth_facts": []},
+                    "output_structure": {"score": 1.0},
+                    "meta_total_elapsed_ms": 1234,
+                    "meta_model_elapsed_ms": 900,
+                    "meta_tool_elapsed_ms": 250,
+                }
+            }
+        )
+
+        self.assertEqual(
+            metrics,
+            {
+                "retrieval_recall": 0.5,
+                "generation_accuracy": 0.75,
+                "output_structure": 1.0,
+                "meta_total_elapsed_ms": 1234,
+                "meta_model_elapsed_ms": 900,
+                "meta_tool_elapsed_ms": 250,
+            },
+        )
+
+    def test_experiment_catalog_url_normalizes_to_api_path(self):
+        self.assertEqual(experiment_catalog_api_base_url("https://example.com/"), "https://example.com/api/")
+        self.assertEqual(experiment_catalog_api_base_url("https://example.com/api"), "https://example.com/api/")
+
+    def test_next_suffixed_set_name_uses_next_run_folder_letter(self):
+        self.assertEqual(next_suffixed_set_name("1700000000000", []), "1700000000000-A")
+        self.assertEqual(
+            next_suffixed_set_name("1700000000000", ["1700000000000-A", "1700000000000-B", "other-A"]),
+            "1700000000000-C",
+        )
+        self.assertEqual(next_suffixed_set_name("1700000000000", ["1700000000000-Z"]), "1700000000000-AA")
+
+    def test_next_experiment_catalog_set_reads_existing_catalog_sets(self):
+        response = FakeHttpResponse(status=200, body='["1700000000000-A"]')
+        config = ExperimentCatalogConfig(base_url="https://example.com/", project="review-assistant", experiment="baseline")
+
+        with patch("urllib.request.urlopen", return_value=response) as urlopen:
+            set_name = next_experiment_catalog_set(config, "1700000000000")
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://example.com/api/projects/review-assistant/experiments/baseline/sets")
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(set_name, "1700000000000-B")
+
+    def test_list_experiment_catalog_sets_rejects_invalid_shape(self):
+        config = ExperimentCatalogConfig(base_url="https://example.com/", project="review-assistant", experiment="baseline")
+        with patch("urllib.request.urlopen", return_value=FakeHttpResponse(status=200, body='{"set":"bad"}')):
+            with self.assertRaisesRegex(ValueError, "string list"):
+                list_experiment_catalog_sets(config)
+
+    def test_publish_experiment_catalog_result_posts_evaluation_metrics(self):
+        response = FakeHttpResponse(status=200)
+        with patch("urllib.request.urlopen", return_value=response) as urlopen:
+            publish_experiment_catalog_result(
+                ExperimentCatalogConfig(
+                    base_url="https://eval-catalog.salmonsky-371093b3.eastus2.azurecontainerapps.io/",
+                    project="review-assistant",
+                    experiment="baseline",
+                ),
+                {
+                    "inference": {
+                        "ref": "ref-a",
+                        "run_folder": "1700000000000",
+                    }
+                },
+                {
+                    "metrics": {
+                        "generation_accuracy": {"score": 1.0},
+                        "meta_total_elapsed_ms": 1234,
+                        "meta_model_elapsed_ms": 900,
+                        "meta_tool_elapsed_ms": 250,
+                    }
+                },
+                set_name="1700000000000-B",
+                inference_uri="https://storage.example/inference/1700000000000/ref-a-0.json",
+                evaluation_uri="https://storage.example/inference/1700000000000/ref-a-0.eval.json",
+            )
+
+        request = urlopen.call_args.args[0]
+        self.assertIn("context", urlopen.call_args.kwargs)
+        self.assertEqual(
+            request.full_url,
+            "https://eval-catalog.salmonsky-371093b3.eastus2.azurecontainerapps.io/api/projects/review-assistant/experiments/baseline/results",
+        )
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.headers["Content-type"], "application/json")
+        self.assertEqual(
+            json_from_request(request),
+            {
+                "ref": "ref-a",
+                "set": "1700000000000-B",
+                "inference_uri": "https://storage.example/inference/1700000000000/ref-a-0.json",
+                "evaluation_uri": "https://storage.example/inference/1700000000000/ref-a-0.eval.json",
+                "metrics": {
+                    "generation_accuracy": 1.0,
+                    "meta_total_elapsed_ms": 1234,
+                    "meta_model_elapsed_ms": 900,
+                    "meta_tool_elapsed_ms": 250,
+                },
+            },
+        )
 
     def test_evaluate_artifact_uses_explicit_ground_truth_paths(self):
         artifact = {
@@ -54,10 +465,40 @@ class EvaluateMetricsTests(unittest.TestCase):
                 "evaluation": {
                     "evidence_path": "/turns/0/evidence",
                     "answer_path": "/turns/0/answer",
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {
+                            "turns": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "answer": {"type": "string"},
+                                        "evidence": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {"id": {"type": "string"}},
+                                                "required": ["id"],
+                                                "additionalProperties": False,
+                                            },
+                                        },
+                                    },
+                                    "required": ["answer", "evidence"],
+                                    "additionalProperties": False,
+                                },
+                            }
+                        },
+                        "required": ["turns"],
+                        "additionalProperties": False,
+                    },
                 },
             },
             "inference": {
+                "ref": "ref-a",
+                "run_folder": "run",
                 "status": "completed",
+                "elapsed_ms": 1234,
                 "output": {
                     "turns": [
                         {
@@ -66,15 +507,174 @@ class EvaluateMetricsTests(unittest.TestCase):
                         }
                     ]
                 },
+                "transcript": [
+                    {"type": "tool-call", "elapsed_ms": 250},
+                    {"type": "assistant-response", "elapsed_ms": 900},
+                ],
             },
         }
 
-        result = evaluate_artifact(artifact, source_blob="run/c00-0.json")
+        result = evaluate_artifact(artifact, source_blob="run/c00-0.json", fact_judge=equivalent_fact_judge)
 
         self.assertEqual(result["status"], "evaluated")
         self.assertEqual(result["metrics"]["retrieval_recall"]["score"], 1.0)
-        self.assertEqual(result["metrics"]["generation_correctness"]["score"], 1.0)
-        self.assertEqual(result["metrics"]["record_correctness"]["score"], 1.0)
+        self.assertNotIn("generation_correctness", result["metrics"])
+        self.assertEqual(result["metrics"]["generation_accuracy"]["score"], 1.0)
+        self.assertEqual(result["metrics"]["generation_recall"]["score"], 1.0)
+        self.assertEqual(result["metrics"]["generation_precision"]["score"], 1.0)
+        self.assertEqual(result["metrics"]["output_structure"]["score"], 1.0)
+        self.assertEqual(result["paths"]["has_output_schema"], True)
+        self.assertEqual(result["metrics"]["meta_total_elapsed_ms"], 1234)
+        self.assertEqual(result["metrics"]["meta_model_elapsed_ms"], 900)
+        self.assertEqual(result["metrics"]["meta_tool_elapsed_ms"], 250)
+
+    def test_evaluate_artifact_uses_ground_truth_schema_when_output_schema_is_omitted(self):
+        artifact = {
+            "ground_truth": {
+                "output": {
+                    "answer": "Dracula wins by advancing influence.",
+                    "evidence": [{"id": "objective"}],
+                },
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {"type": "string"},
+                        "evidence": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {"id": {"type": "string"}},
+                                "required": ["id"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    "required": ["answer", "evidence"],
+                    "additionalProperties": False,
+                },
+                "evaluation": {
+                    "evidence_path": "/evidence",
+                    "answer_path": "/answer",
+                },
+            },
+            "inference": {
+                "ref": "ref-a",
+                "run_folder": "run",
+                "status": "completed",
+                "elapsed_ms": 1234,
+                "output": {
+                    "answer": "Dracula wins by advancing influence.",
+                    "evidence": [{"id": "objective"}],
+                },
+                "transcript": [
+                    {"type": "tool-call", "elapsed_ms": 250},
+                    {"type": "assistant-response", "elapsed_ms": 900},
+                ],
+            },
+        }
+
+        result = evaluate_artifact(artifact, source_blob="run/b00-0.json", fact_judge=equivalent_fact_judge)
+
+        self.assertEqual(result["status"], "evaluated")
+        self.assertEqual(result["metrics"]["output_structure"]["score"], 1.0)
+        self.assertEqual(result["paths"]["has_output_schema"], True)
+
+    def test_evaluate_artifact_keeps_timeout_outputs_catalog_publishable(self):
+        def fail_if_called(_expected_answer, _actual_answer):
+            raise AssertionError("timeout artifacts should not call the fact judge")
+
+        artifact = {
+            "ground_truth": {
+                "output": {
+                    "answer": "Dracula wins by advancing influence.",
+                    "evidence": [{"id": "objective"}],
+                },
+                "evaluation": {
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {
+                            "answer": {"type": "string"},
+                            "evidence": {"type": "array"},
+                        },
+                        "required": ["answer", "evidence"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "inference": {
+                "ref": "ref-a",
+                "run_folder": "run",
+                "status": "timeout",
+                "elapsed_ms": 4079,
+                "output": {},
+                "transcript": [
+                    {"type": "user-prompt", "elapsed_ms": 0},
+                    {"type": "event", "elapsed_ms": 0},
+                ],
+                "error": {"code": "INFERENCE_TIMEOUT", "message": "Inference prompt timed out."},
+            },
+        }
+
+        result = evaluate_artifact(artifact, source_blob="run/b00-7.json", fact_judge=fail_if_called)
+
+        self.assertEqual(result["status"], "evaluated")
+        self.assertEqual(result["source_status"], "timeout")
+        self.assertEqual(result["metrics"]["retrieval_recall"]["score"], 0.0)
+        self.assertEqual(result["metrics"]["generation_accuracy"]["score"], 0.0)
+        self.assertEqual(result["metrics"]["generation_recall"]["score"], 0.0)
+        self.assertEqual(result["metrics"]["generation_precision"]["score"], 0.0)
+        self.assertEqual(result["metrics"]["output_structure"]["score"], 0.0)
+        self.assertEqual(
+            experiment_catalog_metrics(result),
+            {
+                "retrieval_recall": 0.0,
+                "generation_accuracy": 0.0,
+                "generation_recall": 0.0,
+                "generation_precision": 0.0,
+                "output_structure": 0.0,
+                "meta_total_elapsed_ms": 4079,
+                "meta_model_elapsed_ms": 0,
+                "meta_tool_elapsed_ms": 0,
+            },
+        )
+
+
+def equivalent_fact_judge(_expected_answer, _actual_answer):
+    return {
+        "schema_version": "review-assistant.fact-judge.v1",
+        "ground_truth_facts": [{"id": "gt-1", "fact": "Dracula wins by advancing influence."}],
+        "inference_facts": [{"id": "inf-1", "fact": "Dracula wins by advancing influence."}],
+        "comparisons": [
+            {
+                "ground_truth_fact_id": "gt-1",
+                "inference_fact_ids": ["inf-1"],
+                "label": "equivalent",
+                "rationale": "The statements are identical.",
+            }
+        ],
+    }
+
+
+class FakeHttpResponse:
+    def __init__(self, status, body=""):
+        self.status = status
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return False
+
+    def getcode(self):
+        return self.status
+
+    def read(self):
+        return self.body.encode("utf-8")
+
+
+def json_from_request(request):
+    return __import__("json").loads(request.data.decode("utf-8"))
 
 
 if __name__ == "__main__":

@@ -193,19 +193,18 @@ export class AgentRuntime {
   }
 
   private forkWorker(): ChildProcess {
-    const runtimeCommand = this.options.command ?? process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND;
-    const runtimeArgs =
-      this.options.commandArgs?.join('\n') ?? process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS;
-    const providerModule = this.options.providerModule ?? process.env.REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE;
+    const runtimeCommand = this.options.command ?? process.env.COPILOT_RUNTIME_COMMAND;
+    const runtimeArgs = this.options.commandArgs?.join('\n') ?? process.env.COPILOT_RUNTIME_ARGS;
+    const providerModule = this.options.providerModule ?? process.env.AGENT_PROVIDER_MODULE;
     const agentSettings = JSON.stringify(this.agentSettings);
     return fork(this.options.workerPath, [], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       env: {
         ...process.env,
         ...this.options.commandEnv,
-        ...(runtimeCommand ? { REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND: runtimeCommand } : {}),
-        ...(runtimeArgs ? { REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS: runtimeArgs } : {}),
-        ...(providerModule ? { REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE: providerModule } : {}),
+        ...(runtimeCommand ? { COPILOT_RUNTIME_COMMAND: runtimeCommand } : {}),
+        ...(runtimeArgs ? { COPILOT_RUNTIME_ARGS: runtimeArgs } : {}),
+        ...(providerModule ? { AGENT_PROVIDER_MODULE: providerModule } : {}),
         AGENT_SETTINGS: agentSettings
       }
     });

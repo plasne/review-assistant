@@ -1729,8 +1729,8 @@ const setValueAtPointer = (data: unknown, path: string, value: unknown): void =>
 };
 
 const assertJsonPointer = (value: string): string => {
-  if (value === '') {
-    return value;
+  if (value === '' || value === '/') {
+    return '';
   }
   if (!value.startsWith('/')) {
     throw new Error('containerPath must be a JSON Pointer beginning with /.');
@@ -1740,8 +1740,8 @@ const assertJsonPointer = (value: string): string => {
 };
 
 const assertTurnTargetPointer = (value: string): string => {
-  if (value === '') {
-    return value;
+  if (value === '' || value === '/') {
+    return '';
   }
   if (!value.startsWith('/')) {
     throw new Error('targetPath must be a JSON Pointer beginning with /.');
@@ -1751,8 +1751,8 @@ const assertTurnTargetPointer = (value: string): string => {
 };
 
 const assertEvidenceContainerPointer = (value: string): string => {
-  if (value === '') {
-    return value;
+  if (value === '' || value === '/') {
+    return '';
   }
   if (!value.startsWith('/')) {
     throw new Error('evidenceContainerPath must be a JSON Pointer beginning with /.');
@@ -1762,8 +1762,8 @@ const assertEvidenceContainerPointer = (value: string): string => {
 };
 
 const assertSchemaPointer = (value: string): string => {
-  if (value === '') {
-    return value;
+  if (value === '' || value === '/') {
+    return '';
   }
   if (!value.startsWith('/')) {
     throw new Error('targetPath must be a JSON Pointer beginning with /.');

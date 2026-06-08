@@ -4,11 +4,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { getInferenceAppEnvPath } from '../../src/main/inference-cli';
+import { getInferenceAppEnvPath, resolveInferenceIterations } from '../../src/main/inference-cli';
 import {
   caseArtifactPath,
   createInferenceAgent,
   DETERMINISTIC_SEARCH_TOOL,
+  INFERENCE_PROMPT_TIMEOUT_MS,
+  INFERENCE_TIMEOUT_MS,
   loadGroundTruthCases,
   manifestBlobPath,
   runInference,
@@ -55,11 +57,10 @@ describe('inference ground truth loading', () => {
 });
 
 describe('inference CLI config', () => {
-  it('uses ground-truth/config/.env by default without changing the Electron app env path', async () => {
+  it('uses ground-truth/config/.env', async () => {
     const repoRoot = await createTempRepo();
 
-    expect(getInferenceAppEnvPath(repoRoot, {})).toBe(path.join(repoRoot, 'ground-truth', 'config', '.env'));
-    expect(getInferenceAppEnvPath(repoRoot, { REVIEW_ASSISTANT_APP_ENV: '/custom/.env' })).toBe('/custom/.env');
+    expect(getInferenceAppEnvPath(repoRoot)).toBe(path.join(repoRoot, 'ground-truth', 'config', '.env'));
   });
 
   it('passes inference config values into the default agent environment for headless Copilot auth', () => {
@@ -68,9 +69,26 @@ describe('inference CLI config', () => {
 
     expect(options.commandEnv).toEqual({ COPILOT_GITHUB_TOKEN: 'token', AZURE_STORAGE_ACCOUNT_NAME: 'account' });
   });
+
+  it('reads iterations from inference config values when no shell override is set', () => {
+    expect(resolveInferenceIterations({ ITERATIONS: '10' }, {})).toBe(10);
+  });
+
+  it('lets shell iterations override inference config values', () => {
+    expect(resolveInferenceIterations({ ITERATIONS: '10' }, { ITERATIONS: '3' })).toBe(3);
+  });
+
+  it('rejects invalid configured iteration counts', () => {
+    expect(() => resolveInferenceIterations({ ITERATIONS: '0' }, {})).toThrow('ITERATIONS must be a positive integer.');
+  });
 });
 
 describe('inference run artifacts', () => {
+  it('uses a long run budget and a separate per-prompt timeout by default', () => {
+    expect(INFERENCE_TIMEOUT_MS).toBe(60 * 60 * 1000);
+    expect(INFERENCE_PROMPT_TIMEOUT_MS).toBe(2 * 60 * 1000);
+  });
+
   it('runs every loaded case through staged local project storage and uploads case artifacts plus a manifest', async () => {
     const repoRoot = await createTempRepo();
     await fs.writeFile(
@@ -122,7 +140,8 @@ describe('inference run artifacts', () => {
         status: 'completed',
         ground_truth: expect.objectContaining({
           input: { question: 'What is supported?', evidence: [] },
-          output: { question: 'What is supported?', evidence: [{ title: 'Doc', url: 'https://example.com' }] }
+          output: { question: 'What is supported?', evidence: [{ title: 'Doc', url: 'https://example.com' }] },
+          schema: testSchema
         }),
         output: {
           question: 'What is supported?',
@@ -144,7 +163,8 @@ describe('inference run artifacts', () => {
     expect(writer.uploads[0].value).toEqual({
       ground_truth: expect.objectContaining({
         input: { question: 'What is supported?', evidence: [] },
-        output: { question: 'What is supported?', evidence: [{ title: 'Doc', url: 'https://example.com' }] }
+        output: { question: 'What is supported?', evidence: [{ title: 'Doc', url: 'https://example.com' }] },
+        schema: testSchema
       }),
       inference: expect.objectContaining({
         ref: 'ref-a',
@@ -174,6 +194,7 @@ describe('inference run artifacts', () => {
     expect(writtenInference).not.toHaveProperty('assistantTranscript');
     expect(writtenInference).not.toHaveProperty('toolCalls');
     expect(writtenInference).not.toHaveProperty('events');
+    expect(writtenInference).not.toHaveProperty('metrics');
     expect(writtenInference).not.toHaveProperty('runFolder');
     expect(writtenInference).not.toHaveProperty('caseId');
     expect(writtenInference).not.toHaveProperty('startedAt');
@@ -203,6 +224,142 @@ describe('inference run artifacts', () => {
     await expect(fs.readFile(sourceCasePath, 'utf8').then((content) => JSON.parse(content))).resolves.toMatchObject({
       input: { question: 'What is supported?', evidence: [] },
       prompts: ['Find supporting evidence.']
+    });
+  });
+
+  it('does not fail a completed case when the agent inspects the root schema as slash after updating output', async () => {
+    const repoRoot = await createTempRepo();
+    await fs.writeFile(
+      path.join(repoRoot, 'ground-truth', '00', 'case-a.json'),
+      `${JSON.stringify(
+        createCase({
+          caseId: 'case-a',
+          input: { question: 'What is supported?', evidence: [] },
+          output: { question: 'What is supported?', evidence: [{ title: 'Doc', url: 'https://example.com' }] }
+        }),
+        null,
+        2
+      )}\n`
+    );
+    const writer = new MemoryArtifactWriter();
+
+    const result = await runInference({
+      repoRoot,
+      runFolder: '1700000000000',
+      iterations: 1,
+      appConfigValues: {},
+      artifactWriter: writer,
+      agent: new RootSchemaAfterSaveAgent()
+    });
+
+    expect(result.cases[0]).toEqual(
+      expect.objectContaining({
+        status: 'completed',
+        output: expect.objectContaining({
+          evidence: expect.arrayContaining([expect.objectContaining({ title: 'Evidence workflow' })])
+        }),
+        transcript: expect.arrayContaining([
+          expect.objectContaining({ type: 'tool-call', success: true, tool: 'saveSearchResults' }),
+          expect.objectContaining({ type: 'tool-call', success: true, tool: 'getRecordSchema' }),
+          expect.objectContaining({ type: 'assistant-response', success: true, content: 'Saved evidence and inspected schema.' })
+        ])
+      })
+    );
+    expect(result.cases[0]).not.toHaveProperty('error');
+    expect(result.manifest.counts).toEqual({ completed: 1, failed: 0, timeout: 0 });
+    expect((writer.uploads[0].value as { inference: { status: string; error?: unknown } }).inference).toMatchObject({ status: 'completed' });
+    expect((writer.uploads[0].value as { inference: { error?: unknown } }).inference.error).toBeUndefined();
+  });
+
+  it('keeps recovered tool failures in the transcript without failing completed inference output', async () => {
+    const repoRoot = await createTempRepo();
+    await fs.writeFile(
+      path.join(repoRoot, 'ground-truth', '00', 'case-a.json'),
+      `${JSON.stringify(
+        createCase({
+          caseId: 'case-a',
+          input: { question: 'What is supported?', evidence: [] },
+          output: { question: 'What is supported?', evidence: [{ title: 'Doc', url: 'https://example.com' }] }
+        }),
+        null,
+        2
+      )}\n`
+    );
+    const writer = new MemoryArtifactWriter();
+
+    const result = await runInference({
+      repoRoot,
+      runFolder: '1700000000000',
+      iterations: 1,
+      appConfigValues: {},
+      artifactWriter: writer,
+      agent: new RecoveredToolFailureAgent()
+    });
+
+    expect(result.cases[0]).toEqual(
+      expect.objectContaining({
+        status: 'completed',
+        output: expect.objectContaining({
+          evidence: expect.arrayContaining([expect.objectContaining({ title: 'Evidence workflow' })])
+        }),
+        transcript: expect.arrayContaining([
+          expect.objectContaining({ type: 'tool-call', success: false, tool: 'getRecordSchema', error: { code: 'INVALID_TOOL_ARGUMENTS', message: 'No schema exists at /missing.' } }),
+          expect.objectContaining({ type: 'tool-call', success: true, tool: 'saveSearchResults' }),
+          expect.objectContaining({ type: 'assistant-response', success: true, content: 'Recovered and saved evidence.' })
+        ])
+      })
+    );
+    expect(result.cases[0]).not.toHaveProperty('error');
+    expect(result.manifest.counts).toEqual({ completed: 1, failed: 0, timeout: 0 });
+  });
+
+  it('writes a structured timeout artifact with the staged record output when a prompt times out', async () => {
+    const repoRoot = await createTempRepo();
+    await fs.writeFile(
+      path.join(repoRoot, 'ground-truth', '00', 'case-a.json'),
+      `${JSON.stringify(
+        createCase({
+          caseId: 'case-a',
+          input: { question: 'What is supported?', evidence: [] },
+          output: { question: 'What is supported?', evidence: [{ title: 'Doc', url: 'https://example.com' }] }
+        }),
+        null,
+        2
+      )}\n`
+    );
+    const writer = new MemoryArtifactWriter();
+    const agent = new NeverCompletingAgent();
+
+    const result = await runInference({
+      repoRoot,
+      runFolder: '1700000000000',
+      iterations: 1,
+      artifactWriter: writer,
+      agent,
+      promptTimeoutMs: 1
+    });
+
+    expect(agent.canceledRequestIds).toEqual(['request-1']);
+    expect(result.cases[0]).toEqual(
+      expect.objectContaining({
+        status: 'timeout',
+        error: { code: 'INFERENCE_TIMEOUT', message: 'Inference prompt timed out.' },
+        output: { question: 'What is supported?', evidence: [] },
+        transcript: expect.arrayContaining([
+          expect.objectContaining({ type: 'user-prompt', success: true, content: 'Find supporting evidence.' }),
+          expect.objectContaining({
+            type: 'event',
+            success: false,
+            metadata: { event: 'error' },
+            error: { code: 'INFERENCE_TIMEOUT', message: 'Inference prompt timed out.' }
+          })
+        ])
+      })
+    );
+    expect(result.manifest.counts).toEqual({ completed: 0, failed: 0, timeout: 1 });
+    expect((writer.uploads[0].value as { inference: { status: string; output: unknown } }).inference).toMatchObject({
+      status: 'timeout',
+      output: { question: 'What is supported?', evidence: [] }
     });
   });
 
@@ -372,6 +529,116 @@ class FixtureSavingAgent implements InferenceAgent {
   }
 
   cancel(): boolean {
+    return true;
+  }
+}
+
+class RootSchemaAfterSaveAgent implements InferenceAgent {
+  async start(_context: ChatContext, handlers: ChatStreamHandlers, tools: LocalToolRuntime): Promise<ChatStreamStartResult> {
+    queueMicrotask(async () => {
+      try {
+        const search = await tools.execute({
+          tool: DETERMINISTIC_SEARCH_TOOL,
+          requestId: 'search-1',
+          arguments: { query: 'supporting evidence' }
+        });
+        if (!search.ok || !isRecord(search.result) || !Array.isArray(search.result.results)) {
+          throw new Error(search.ok ? 'Invalid search fixture.' : search.error.message);
+        }
+        const save = await tools.execute({
+          tool: 'saveSearchResults',
+          requestId: 'save-1',
+          arguments: { containerPath: '/evidence', mode: 'replace', results: search.result.results }
+        });
+        if (!save.ok) {
+          throw new Error(save.error.message);
+        }
+        const schema = await tools.execute({
+          tool: 'getRecordSchema',
+          requestId: 'schema-1',
+          arguments: { targetPath: '/' }
+        });
+        if (!schema.ok) {
+          throw new Error(schema.error.message);
+        }
+        handlers.chunk({ requestId: 'request-1', messageId: 'message-1', content: 'Saved evidence and inspected schema.' });
+        handlers.complete({ requestId: 'request-1', messageId: 'message-1' });
+      } catch (error) {
+        handlers.error({
+          requestId: 'request-1',
+          messageId: 'message-1',
+          error: {
+            code: 'PROVIDER_ERROR',
+            message: error instanceof Error ? error.message : String(error),
+            retryable: false
+          }
+        });
+      }
+    });
+    return { requestId: 'request-1', messageId: 'message-1' };
+  }
+
+  cancel(): boolean {
+    return true;
+  }
+}
+
+class RecoveredToolFailureAgent implements InferenceAgent {
+  async start(_context: ChatContext, handlers: ChatStreamHandlers, tools: LocalToolRuntime): Promise<ChatStreamStartResult> {
+    queueMicrotask(async () => {
+      try {
+        await tools.execute({
+          tool: 'getRecordSchema',
+          requestId: 'schema-1',
+          arguments: { targetPath: '/missing' }
+        });
+        const search = await tools.execute({
+          tool: DETERMINISTIC_SEARCH_TOOL,
+          requestId: 'search-1',
+          arguments: { query: 'supporting evidence' }
+        });
+        if (!search.ok || !isRecord(search.result) || !Array.isArray(search.result.results)) {
+          throw new Error(search.ok ? 'Invalid search fixture.' : search.error.message);
+        }
+        const save = await tools.execute({
+          tool: 'saveSearchResults',
+          requestId: 'save-1',
+          arguments: { containerPath: '/evidence', mode: 'replace', results: search.result.results }
+        });
+        if (!save.ok) {
+          throw new Error(save.error.message);
+        }
+        handlers.chunk({ requestId: 'request-1', messageId: 'message-1', content: 'Recovered and saved evidence.' });
+        handlers.complete({ requestId: 'request-1', messageId: 'message-1' });
+      } catch (error) {
+        handlers.error({
+          requestId: 'request-1',
+          messageId: 'message-1',
+          error: {
+            code: 'PROVIDER_ERROR',
+            message: error instanceof Error ? error.message : String(error),
+            retryable: false
+          }
+        });
+      }
+    });
+    return { requestId: 'request-1', messageId: 'message-1' };
+  }
+
+  cancel(): boolean {
+    return true;
+  }
+}
+
+class NeverCompletingAgent implements InferenceAgent {
+  readonly canceledRequestIds: string[] = [];
+
+  async start(): Promise<ChatStreamStartResult> {
+    return { requestId: 'request-1', messageId: 'message-1' };
+  }
+
+  cancel(requestId: string): boolean {
+    this.canceledRequestIds.push(requestId);
     return true;
   }
 }

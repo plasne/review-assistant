@@ -5,7 +5,9 @@ description = "Azure Blob evaluation runner for Review Assistant inference artif
 requires-python = ">=3.11"
 dependencies = [
   "azure-identity>=1.17.0,<5",
-  "azure-storage-blob>=12.20.0,<13"
+  "azure-storage-blob>=12.20.0,<13",
+  "certifi>=2024.8.30",
+  "github-copilot-sdk>=1.0.0,<2"
 ]
 
 [tool.pytest.ini_options]

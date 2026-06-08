@@ -24,6 +24,10 @@ Local persistence tools such as `startTurn`, `completeTurn`, and `saveSearchResu
 
 Do not claim that prior results are unavailable when the conversation history contains enough query context to repeat the search.
 
+## Answer fact granularity
+
+When writing answer fields, preserve complete answer-level facts. Each sentence or bullet should be independently checkable and include the necessary subject, action, object, and important qualifiers. Do not fragment one answer point into tiny phrase fragments, and do not split coordinated mechanisms away from the main claim when they are needed to explain the answer.
+
 ## Conversation turn persistence
 
 When the user asks to save, add, or create a conversation turn, treat a turn as a human inquiry plus an assistant response. Creating a turn requires only the user’s inquiry; the response and evidence come later from your work. Do not ask the user for the assistant response.

@@ -17,7 +17,8 @@ import { parseExternalMcpServers } from './mcp';
 import { LocalStorageAdapter } from './storage';
 import { createLocalToolRuntime, discoverLocalToolPlugins, type LocalToolPlugin, type LocalToolRuntime } from './tools';
 
-export const INFERENCE_TIMEOUT_MS = 10 * 60 * 1000;
+export const INFERENCE_TIMEOUT_MS = 60 * 60 * 1000;
+export const INFERENCE_PROMPT_TIMEOUT_MS = 2 * 60 * 1000;
 export const DETERMINISTIC_SEARCH_TOOL = 'searchKnowledgeBase';
 
 export type GroundTruthCase = {
@@ -164,6 +165,7 @@ export type RunInferenceOptions = {
   iterations: number;
   appConfigValues?: Record<string, string>;
   timeoutMs?: number;
+  promptTimeoutMs?: number;
   agent?: InferenceAgent;
   artifactWriter: InferenceArtifactWriter;
 };
@@ -188,8 +190,11 @@ export const loadGroundTruthCases = async (repoRoot: string): Promise<GroundTrut
     const groupId = project.id;
     const groupRoot = path.join(root, groupId);
     let records: Array<{ id: string }>;
+    let schema: unknown;
     try {
-      records = (await storage.openProject(groupId)).records;
+      const openedProject = await storage.openProject(groupId);
+      records = openedProject.records;
+      schema = openedProject.schema;
     } catch (error) {
       loadErrors.push({
         fileName: `${groupId}/config`,
@@ -211,7 +216,7 @@ export const loadGroundTruthCases = async (repoRoot: string): Promise<GroundTrut
         >;
         cases.push({
           ...parsed,
-          groundTruth: cloneJson(parsed),
+          groundTruth: { ...cloneJson(parsed), schema: cloneJson(schema) },
           groupId,
           caseId: record.id
         });
@@ -241,6 +246,7 @@ export const runInference = async (options: RunInferenceOptions): Promise<Infere
   const startedAt = Date.now();
   const groundTruthRoot = path.join(options.repoRoot, 'ground-truth');
   const timeoutMs = options.timeoutMs ?? INFERENCE_TIMEOUT_MS;
+  const promptTimeoutMs = options.promptTimeoutMs ?? INFERENCE_PROMPT_TIMEOUT_MS;
   const deadline = startedAt + timeoutMs;
   const { cases, loadErrors } = await loadGroundTruthCases(options.repoRoot);
   assertUniqueCaseRefs(cases);
@@ -254,7 +260,8 @@ export const runInference = async (options: RunInferenceOptions): Promise<Infere
     iterations: options.iterations,
     caseCount: cases.length,
     loadErrorCount: loadErrors.length,
-    timeoutMs
+    timeoutMs,
+    promptTimeoutMs
   });
 
   for (let iterationIndex = 0; iterationIndex < options.iterations; iterationIndex += 1) {
@@ -284,7 +291,7 @@ export const runInference = async (options: RunInferenceOptions): Promise<Infere
         artifactBlobPaths.push(blobPath);
         continue;
       }
-      const artifact = await runCase(options, agent, localToolPlugins, groundTruthCase, iteration, deadline);
+      const artifact = await runCase(options, agent, localToolPlugins, groundTruthCase, iteration, promptTimeoutMs);
       const blobPath = caseArtifactPath(options.runFolder, artifact.ref, artifact.iteration);
       await options.artifactWriter.uploadJson(blobPath, toWrittenInferenceJson(artifact));
       artifacts.push(artifact);
@@ -358,7 +365,7 @@ const runCase = async (
   localToolPlugins: LocalToolPlugin[],
   groundTruthCase: GroundTruthCase,
   iteration: string,
-  deadline: number
+  promptTimeoutMs: number
 ): Promise<InferenceCaseArtifact> => {
   const started = Date.now();
   const startedAt = new Date(started).toISOString();
@@ -399,7 +406,7 @@ const runCase = async (
         success: true,
         content: prompt
       });
-      const response = await runPrompt(agent, tools, groundTruthCase, prompt, history, projectPrompt, mcpServers, Math.max(0, deadline - Date.now()));
+      const response = await runPrompt(agent, tools, groundTruthCase, prompt, history, projectPrompt, mcpServers, promptTimeoutMs);
       transcript.push({
         type: 'assistant-response',
         startedAt: response.startedAt,
@@ -411,10 +418,6 @@ const runCase = async (
       const now = new Date().toISOString();
       history.push({ id: randomUUID(), role: 'user', content: prompt, createdAt: now });
       history.push({ id: randomUUID(), role: 'assistant', content: response.content || '[no streamed response]', createdAt: now });
-      const failedToolCall = recorder.calls.find((call) => !call.ok);
-      if (failedToolCall) {
-        throw new Error(failedToolCall.error?.message ?? `Tool call failed: ${failedToolCall.tool}`);
-      }
     }
   } catch (caseError) {
     const message = caseError instanceof Error ? caseError.message : String(caseError);
@@ -444,6 +447,7 @@ const runCase = async (
   }
 
   const finished = Date.now();
+  const sortedTranscript = sortTranscript(transcript);
   const artifact: InferenceCaseArtifact = {
     ref: groundTruthCase.ref,
     iteration,
@@ -454,7 +458,7 @@ const runCase = async (
     elapsedMs: finished - started,
     ground_truth: cloneJson(groundTruthCase.groundTruth),
     output: await staged.storage.readRecordData(groundTruthCase.groupId, groundTruthCase.caseId),
-    transcript: sortTranscript(transcript),
+    transcript: sortedTranscript,
     status,
     ...(error ? { error } : {})
   };

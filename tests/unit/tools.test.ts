@@ -706,6 +706,27 @@ describe('local tool runtime', () => {
     });
   });
 
+  it('treats slash targetPath as the schema root for schema inspection', async () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        answer: { type: 'string' }
+      },
+      additionalProperties: false
+    };
+    const { adapter } = createRecordStorage(schema, { answer: 'A rooted answer.' });
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+
+    await expect(runtime.execute({ tool: 'getRecordSchema', requestId: 'tool-request-1', arguments: { targetPath: '/' } })).resolves.toMatchObject({
+      requestId: 'tool-request-1',
+      ok: true,
+      result: {
+        targetPath: '',
+        schema
+      }
+    });
+  });
+
   it('creates a turn by inferring an array target from the project schema', async () => {
     const schema = {
       type: 'object',
