@@ -303,7 +303,11 @@ const registerIpc = (): void => {
     const projectMcpServers = parseExternalMcpServers(projectMcpConfig, { ...appConfigValues, ...projectConfig });
     const mcpServers = mergeExternalMcpServers(appMcpServers, projectMcpServers);
     const toolStorage = validProjectId ? drafts.createStorageAdapter() : activeStorage;
-    const tools = createLocalToolRuntime({ storage: toolStorage, selectedProjectId: validProjectId, selectedRecordId: validRecordId });
+    const tools = createLocalToolRuntime({
+      storage: toolStorage,
+      selectedProjectId: validProjectId,
+      selectedRecordId: validRecordId
+    });
     const toolList = tools.listTools();
     logInfo('review-assistant.chat-start-context', {
       projectId: validProjectId ?? 'none',

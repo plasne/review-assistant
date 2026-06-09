@@ -102,7 +102,7 @@ export class LocalStorageAdapter implements StorageAdapter {
   async listProjects(): Promise<ProjectSummary[]> {
     const entries = await fs.readdir(this.root, { withFileTypes: true });
     return entries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== CONFIG_DIRECTORY)
       .map((entry) => ({ id: entry.name, name: entry.name }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -198,7 +198,6 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   async saveProjectSchema(projectId: string, schema: unknown): Promise<ProjectSchemaSaveResult> {
-    validateRecord(schema, {});
     const id = assertProjectId(projectId);
     const project = this.projectPath(id);
     const configPath = await this.projectConfigDirectoryPath(project);
@@ -485,7 +484,6 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   }
 
   async saveProjectSchema(projectId: string, schema: unknown): Promise<ProjectSchemaSaveResult> {
-    validateRecord(schema, {});
     const id = assertProjectId(projectId);
     const container = this.client.getContainerClient(id);
     const schemaBlob = container.getBlockBlobClient(PROJECT_SCHEMA_FILE);
@@ -754,7 +752,7 @@ const parseAzureProjectEnv = (content: string): Record<string, string> =>
 
 export const buildRecordDetail = (projectId: string, recordId: string, schema: unknown, data: unknown, displayConfig?: FeedbackConfig): RecordDetail => {
   const coreData = stripFeedbackProperties(data);
-  const validationIssues = validateRecord(schema, coreData);
+  const validationIssues = validateRecord(schema, coreData).filter((issue) => issue.keyword !== 'required');
   return {
     projectId,
     recordId,

@@ -320,7 +320,7 @@ const loadAgentProvider = async (): Promise<AgentProvider> => {
     normalizeProviderError,
     sendLog
   };
-  const providerModule = process.env.REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE;
+  const providerModule = process.env.AGENT_PROVIDER_MODULE;
   if (providerModule) {
     const imported = (await import(pathToFileURL(providerModule).href)) as {
       createAgentProvider?: (deps: AgentProviderFactoryDeps) => AgentProvider;

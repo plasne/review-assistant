@@ -29,10 +29,10 @@ if (process.env.FAKE_COPILOT_REQUIRE_EXTERNAL_MCP === '1') {
   const configPath = process.argv[configIndex + 1].slice(1);
   const config = JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(configPath, 'utf8')));
   const source = config.mcpServers.source;
-  const sourceArgs = JSON.parse(source?.env?.REVIEW_ASSISTANT_EXTERNAL_MCP_ARGS_JSON || '[]');
+  const sourceArgs = JSON.parse(source?.env?.EXTERNAL_MCP_ARGS_JSON || '[]');
   if (
     !source ||
-    source.env?.REVIEW_ASSISTANT_EXTERNAL_MCP_COMMAND !== 'source-mcp' ||
+    source.env?.EXTERNAL_MCP_COMMAND !== 'source-mcp' ||
     sourceArgs[0] !== 'stdio' ||
     source.args.some((arg) => arg.includes('secret-token')) ||
     source.env?.SOURCE_TOKEN !== 'secret-token' ||

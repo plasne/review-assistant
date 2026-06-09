@@ -65,7 +65,7 @@ export const selectBackend = (values: Record<string, string>): BackendKind => {
 };
 
 export const getAppEnvPath = (): string =>
-  process.env.REVIEW_ASSISTANT_APP_ENV ?? path.resolve(process.cwd(), 'config', '.env');
+  path.resolve(process.cwd(), 'config', '.env');
 
 export const loadAppConfig = (envPath = getAppEnvPath()): AppConfig => {
   const values = readEnvFile(envPath);

@@ -2204,7 +2204,7 @@ const RecordDetails = ({
           </ul>
         </section>
       ) : (
-        <p className="valid">Record passes schema validation.</p>
+        <p className="valid">Record loaded.</p>
       )}
       {showTurnTabs ? (
         <div className="node-tabs" role="tablist" aria-label="Record detail tabs">

@@ -119,6 +119,44 @@ Claude Sonnet 4.6 was used during testing and was reliable for Review Assistant 
 
 Streaming is always enabled and is not configurable.
 
+## Evaluation judge settings
+
+`npm run evaluation` uses the Python evaluator and the native GitHub Copilot Python SDK to extract comparable facts and score material equivalence. Set Copilot authentication and optional model settings in `ground-truth/config/.env` or the shell before running evaluation:
+
+```bash
+COPILOT_GITHUB_TOKEN=<token>
+AGENT_MODEL=gpt-5.5
+REASONING_EFFORT=medium
+```
+
+`AGENT_MODEL` and `REASONING_EFFORT` are optional and use the same validation as app agent settings. `EVALUATION_JUDGE_TIMEOUT_SECONDS` defaults to `120`.
+
+Ground truth records can declare evaluation settings under `evaluation`. `answer_path` identifies the answer field used by generation metrics. `evidence_path` and `evidence_key` identify the evidence collection and evidence field used for retrieval matching, such as `url`; when `evidence_key` is omitted, the evaluator does not compute `retrieval_recall`. Inference artifacts include the group's `config/schema.json` as the expected output shape; `evaluation.output_schema` is only needed when a case must override that schema. The evaluator reports this as `output_structure`, a schema-validity metric that checks required fields, types, item shape, and unexpected properties without comparing answer text or evidence content. Cases may declare `evaluation.ignored_output_structure_issues` as exact `{ "path", "keyword", "message" }` issue entries to suppress known-valid schema exceptions while keeping all other schema violations active.
+
+## Evaluation catalog metrics
+
+`npm run evaluation` derives three inference timing metrics from each inference artifact and includes them in the evaluation output:
+
+```json
+{
+  "meta_total_elapsed_ms": 12450,
+  "meta_model_elapsed_ms": 9800,
+  "meta_tool_elapsed_ms": 2100
+}
+```
+
+The evaluator reads catalog settings from `ground-truth/config/.env` or the shell. Set all three to enable unauthenticated metric publishing:
+
+```bash
+EXPERIMENT_CATALOG_URL=https://eval-catalog.salmonsky-371093b3.eastus2.azurecontainerapps.io/
+EXPERIMENT_CATALOG_PROJECT=review-assistant
+EXPERIMENT_CATALOG_EXPERIMENT=baseline
+```
+
+If `EXPERIMENT_CATALOG_URL` is unset, evaluation still writes `.eval.json` outputs but does not push metrics to the catalog.
+
+Catalog result sets are allocated from the inference run folder. The evaluator reads existing sets from the catalog and publishes each evaluation pass to the next `<run_folder>-A`, `<run_folder>-B`, `<run_folder>-C`, etc. set name.
+
 ## Example agent requests
 
 You can ask the agent for focused tasks in plain language. Example prompts:

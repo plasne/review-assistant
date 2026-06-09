@@ -3,11 +3,38 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { CopilotClient, RuntimeConnection, ToolSet } from '@github/copilot-sdk';
-import type { MCPServerConfig, PermissionHandler, SessionConfig, Tool, ToolResultObject } from '@github/copilot-sdk';
+import type {
+  AssistantReasoningDeltaEvent,
+  AssistantReasoningEvent,
+  AssistantTurnEndEvent,
+  AssistantTurnStartEvent,
+  AssistantUsageEvent,
+  MCPServerConfig,
+  ModelCallFailureEvent,
+  PermissionHandler,
+  SessionConfig,
+  Tool,
+  ToolExecutionCompleteEvent,
+  ToolExecutionStartEvent,
+  ToolResultObject
+} from '@github/copilot-sdk';
 import { configuredAgentSettingKeys } from '../shared/agent-settings';
 import type { AgentErrorEnvelope, AgentSettings, AgentStatusSnapshot, ExternalMcpServerConfig, LocalToolMetadata, ToolInvocationResponse } from '../shared/types';
 import { resolveCopilotRuntimePath } from '../main/copilot-runtime';
 import type { ActiveProviderRun, AgentProvider, AgentProviderFactoryDeps, ChatContext, ProviderStartRequest } from './provider';
+
+type ExternalMcpToolStart = {
+  startedAt: number;
+  server: string;
+  tool: string;
+  sdkToolName: string;
+};
+
+type ProviderTurnStart = {
+  startedAt: number;
+  reasoningDeltaChars: number;
+  reasoningDeltaCount: number;
+};
 
 export const createCopilotSdkProvider = (deps: AgentProviderFactoryDeps): AgentProvider => ({
   getStatus: async (_requestId) => {
@@ -43,6 +70,8 @@ const startSdkChat = async (deps: AgentProviderFactoryDeps, request: ProviderSta
   const client = createClient(tempDir);
   let session: Awaited<ReturnType<CopilotClient['createSession']>> | undefined;
   const unsubscribers: Array<() => void> = [];
+  const externalMcpToolStarts = new Map<string, ExternalMcpToolStart>();
+  const providerTurnStarts = new Map<string, ProviderTurnStart>();
   let disposed = false;
 
   const dispose = async (): Promise<void> => {
@@ -107,6 +136,55 @@ const startSdkChat = async (deps: AgentProviderFactoryDeps, request: ProviderSta
     unsubscribers.push(
       session.on('session.idle', () => {
         request.callbacks.complete();
+      })
+    );
+    unsubscribers.push(
+      session.on('tool.execution_start', (event) => {
+        logExternalMcpToolStarted(request, event, externalMcpToolStarts);
+      })
+    );
+    unsubscribers.push(
+      session.on('tool.execution_complete', (event) => {
+        logExternalMcpToolCompleted(request, event, externalMcpToolStarts);
+      })
+    );
+    unsubscribers.push(
+      session.on('assistant.turn_start', (event) => {
+        logProviderTurnStarted(request, event, providerTurnStarts);
+      })
+    );
+    unsubscribers.push(
+      session.on('assistant.turn_end', (event) => {
+        logProviderTurnCompleted(request, event, providerTurnStarts);
+      })
+    );
+    unsubscribers.push(
+      session.on('assistant.reasoning_delta', (event) => {
+        accumulateReasoningDelta(event, providerTurnStarts);
+      })
+    );
+    unsubscribers.push(
+      session.on('assistant.reasoning', (event) => {
+        logProviderReasoning(request, event);
+      })
+    );
+    unsubscribers.push(
+      session.on('assistant.message_start', (event) => {
+        request.callbacks.log('info', 'review-assistant.agent-provider-message-started', {
+          requestId: request.requestId,
+          providerMessageId: event.data.messageId,
+          phase: event.data.phase
+        });
+      })
+    );
+    unsubscribers.push(
+      session.on('assistant.usage', (event) => {
+        logProviderUsage(request, event);
+      })
+    );
+    unsubscribers.push(
+      session.on('model.call_failure', (event) => {
+        logProviderModelCallFailed(request, event);
       })
     );
     request.callbacks.log('info', 'review-assistant.agent-provider-spawned', {
@@ -216,9 +294,163 @@ const createSdkTools = (deps: AgentProviderFactoryDeps, chatRequestId: string, t
     }
   }));
 
+export const logExternalMcpToolStarted = (
+  request: ProviderStartRequest,
+  event: ToolExecutionStartEvent,
+  starts: Map<string, ExternalMcpToolStart>
+): void => {
+  if (!event.data.mcpServerName) {
+    return;
+  }
+  const tool = event.data.mcpToolName ?? event.data.toolName;
+  starts.set(event.data.toolCallId, {
+    startedAt: Date.now(),
+    server: event.data.mcpServerName,
+    tool,
+    sdkToolName: event.data.toolName
+  });
+  request.callbacks.log('info', 'review-assistant.external-mcp-tool-call-started', {
+    requestId: request.requestId,
+    toolRequestId: event.data.toolCallId,
+    server: event.data.mcpServerName,
+    tool,
+    sdkToolName: event.data.toolName,
+    turnId: event.data.turnId
+  });
+};
+
+export const logExternalMcpToolCompleted = (
+  request: ProviderStartRequest,
+  event: ToolExecutionCompleteEvent,
+  starts: Map<string, ExternalMcpToolStart>
+): void => {
+  const started = starts.get(event.data.toolCallId);
+  if (!started) {
+    return;
+  }
+  starts.delete(event.data.toolCallId);
+  const resultContent = event.data.result?.content;
+  const resultDetailedContent = event.data.result?.detailedContent;
+  request.callbacks.log(event.data.success ? 'info' : 'error', 'review-assistant.external-mcp-tool-call-completed', {
+    requestId: request.requestId,
+    toolRequestId: event.data.toolCallId,
+    server: started.server,
+    tool: started.tool,
+    sdkToolName: started.sdkToolName,
+    ok: event.data.success,
+    code: event.data.success ? undefined : event.data.error?.code,
+    resultChars: typeof resultContent === 'string' ? resultContent.length : undefined,
+    detailedResultChars: typeof resultDetailedContent === 'string' ? resultDetailedContent.length : undefined,
+    elapsedMs: Date.now() - started.startedAt,
+    turnId: event.data.turnId
+  });
+};
+
+export const logProviderTurnStarted = (
+  request: ProviderStartRequest,
+  event: AssistantTurnStartEvent,
+  starts: Map<string, ProviderTurnStart>
+): void => {
+  starts.set(event.data.turnId, {
+    startedAt: Date.now(),
+    reasoningDeltaChars: 0,
+    reasoningDeltaCount: 0
+  });
+  request.callbacks.log('info', 'review-assistant.agent-provider-turn-started', {
+    requestId: request.requestId,
+    turnId: event.data.turnId,
+    interactionId: event.data.interactionId,
+    agentId: event.agentId
+  });
+};
+
+export const logProviderTurnCompleted = (
+  request: ProviderStartRequest,
+  event: AssistantTurnEndEvent,
+  starts: Map<string, ProviderTurnStart>
+): void => {
+  const started = starts.get(event.data.turnId);
+  if (started) {
+    starts.delete(event.data.turnId);
+  }
+  request.callbacks.log('info', 'review-assistant.agent-provider-turn-completed', {
+    requestId: request.requestId,
+    turnId: event.data.turnId,
+    agentId: event.agentId,
+    elapsedMs: started ? Date.now() - started.startedAt : undefined,
+    reasoningDeltaCount: started?.reasoningDeltaCount,
+    reasoningDeltaChars: started?.reasoningDeltaChars
+  });
+};
+
+export const accumulateReasoningDelta = (event: AssistantReasoningDeltaEvent, starts: Map<string, ProviderTurnStart>): void => {
+  const turnId = reasoningTurnId(event.data.reasoningId);
+  if (!turnId) {
+    return;
+  }
+  const started = starts.get(turnId);
+  if (!started) {
+    return;
+  }
+  started.reasoningDeltaCount += 1;
+  started.reasoningDeltaChars += event.data.deltaContent.length;
+};
+
+export const logProviderReasoning = (request: ProviderStartRequest, event: AssistantReasoningEvent): void => {
+  request.callbacks.log('info', 'review-assistant.agent-provider-reasoning-completed', {
+    requestId: request.requestId,
+    reasoningId: event.data.reasoningId,
+    agentId: event.agentId,
+    reasoningChars: event.data.content.length
+  });
+};
+
+export const logProviderUsage = (request: ProviderStartRequest, event: AssistantUsageEvent): void => {
+  request.callbacks.log('info', 'review-assistant.agent-provider-usage', {
+    requestId: request.requestId,
+    agentId: event.agentId,
+    apiCallId: event.data.apiCallId,
+    apiEndpoint: event.data.apiEndpoint,
+    providerCallId: event.data.providerCallId,
+    serviceRequestId: event.data.serviceRequestId,
+    model: event.data.model,
+    reasoningEffort: event.data.reasoningEffort,
+    initiator: event.data.initiator,
+    inputTokens: event.data.inputTokens,
+    outputTokens: event.data.outputTokens,
+    reasoningTokens: event.data.reasoningTokens,
+    cacheReadTokens: event.data.cacheReadTokens,
+    cacheWriteTokens: event.data.cacheWriteTokens,
+    timeToFirstTokenMs: event.data.timeToFirstTokenMs,
+    interTokenLatencyMs: event.data.interTokenLatencyMs,
+    elapsedMs: event.data.duration
+  });
+};
+
+export const logProviderModelCallFailed = (request: ProviderStartRequest, event: ModelCallFailureEvent): void => {
+  request.callbacks.log('error', 'review-assistant.agent-provider-model-call-failed', {
+    requestId: request.requestId,
+    agentId: event.agentId,
+    apiCallId: event.data.apiCallId,
+    providerCallId: event.data.providerCallId,
+    serviceRequestId: event.data.serviceRequestId,
+    model: event.data.model,
+    initiator: event.data.initiator,
+    source: event.data.source,
+    statusCode: event.data.statusCode,
+    elapsedMs: event.data.durationMs,
+    errorMessageChars: event.data.errorMessage?.length
+  });
+};
+
+const reasoningTurnId = (reasoningId: string): string | undefined => {
+  const match = /^turn-(.+?)-reasoning(?:-|$)/.exec(reasoningId);
+  return match?.[1];
+};
+
 const createClient = (tempDir: string): CopilotClient => {
-  const command = process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND || process.env.REVIEW_ASSISTANT_COPILOT_COMMAND || resolveCopilotRuntimePath();
-  const args = parseRuntimeArgs(process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS ?? '');
+  const command = process.env.COPILOT_RUNTIME_COMMAND || resolveCopilotRuntimePath();
+  const args = parseRuntimeArgs(process.env.COPILOT_RUNTIME_ARGS ?? '');
   return new CopilotClient({
     connection: RuntimeConnection.forStdio({ path: command, args }),
     mode: 'empty',

@@ -1,0 +1,47 @@
+{
+  "ref": "d09",
+  "description": "A multi-turn correction flow where the user asks to improve an earlier answer with day/night timing details without creating a new turn.",
+  "input": {
+    "id": "",
+    "turns": []
+  },
+  "prompts": [
+    "How do hunter actions work in Fury of Dracula? Record answer and evidence.",
+    "That answer is incomplete, include day/night timing details and update the same turn."
+  ],
+  "output": {
+    "id": "",
+    "turns": [
+      {
+        "question": "How do hunter actions work in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-hunter-turn-actions",
+            "title": "Hunter turns and standard actions",
+            "url": "fury-of-dracula-4e://rules/hunter-actions",
+            "excerpt": "On a hunter action, the active hunter chooses one legal action and resolves it fully before the next hunter acts. Core hunter actions include move, supply, reserve a ticket, trade, rest, search, and character or card actions. A hunter must be in a legal space and satisfy timing restrictions for the chosen action. A hunter in a space with Dracula or with unresolved encounter threats may be prevented from taking peaceful actions such as resting, trading, or supplying until the threat is resolved. Card text can add actions, replace actions, restrict actions, or create exceptions. Hunters coordinate openly, may discuss deductions and plans, and may share public information, but they still resolve their own actions with their own resources.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-round-structure",
+            "title": "Round structure, time, day, and night",
+            "url": "fury-of-dracula-4e://rules/round-structure",
+            "excerpt": "Play advances through repeated rounds governed by the time track. Hunters act during day and night portions of the round, normally taking one action per hunter during the day and one action per hunter during the night. After the hunters complete their actions for the current time period, the game advances according to the time track and Dracula takes his phase at the required point in the sequence. The time of day changes how some actions work, especially supply, combat choices, Dracula card effects, event timing, and special restrictions. Day effects and night effects are not interchangeable; when a card or rule names a time, resolve it only in that timing window. If multiple effects would resolve at the same timing point, resolve mandatory effects before optional effects unless the official priority text says otherwise, and let the appropriate side choose among simultaneous effects it controls.",
+            "score": 0
+          }
+        ],
+        "answer": "Hunters resolve one legal action at a time from options like move, supply, reserve a ticket, trade, rest, search, or character/card abilities, but timing and threat conditions can restrict peaceful actions. Day/night timing is part of this action system: hunters normally act once per hunter during day and once per hunter during night, and card effects tied to day or night must be resolved only in their specified window."
+      }
+    ]
+  },
+  "evaluation": {
+    "evidence_path": "/turns/0/evidence",
+    "answer_path": "/turns/0/answer",
+    "evidence_key": "url"
+  },
+  "tags": [
+    "turns:multi",
+    "mapped:false",
+    "state:answer-revision"
+  ]
+}

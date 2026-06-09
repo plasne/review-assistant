@@ -1,0 +1,53 @@
+{
+  "ref": "c06",
+  "description": "A multi-turn explicit do-not-save search request where the assistant should search but keep the turn record unchanged.",
+  "input": {
+    "id": "",
+    "turns": [
+      {
+        "question": "How does supply work during day and night in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-supply-items-events",
+            "title": "Supply, item cards, and event cards",
+            "url": "fury-of-dracula-4e://rules/supply-items-events",
+            "excerpt": "The supply action represents hunters gathering equipment, weapons, allies, information, and events. Supply depends on the hunter location and time of day. During the day, hunters in cities usually draw from item resources, with large cities providing better selection than smaller cities. At night, supply usually interacts with the event deck instead of ordinary item gathering, and some event draws may benefit Dracula depending on the card back, icon, or rule instruction. Item cards are generally hunter equipment such as weapons, defenses, travel help, or tools used in combat and investigation. Event cards are timing-sensitive effects that may be kept or resolved according to their text and ownership rules. Hand limits, card-type restrictions, and discard instructions are enforced whenever a hunter draws, keeps, trades, uses, or loses cards. If a card conflicts with a general rule, follow the card for that specific situation unless another rule explicitly overrides it.",
+            "score": 0
+          }
+        ],
+        "answer": "Supply depends on both location and time: during day, hunters in cities usually draw item resources (with large cities giving better selection), while at night supply typically draws from event flow and can sometimes benefit Dracula depending on event ownership rules."
+      }
+    ]
+  },
+  "prompts": [
+    "Search for additional evidence about supply hand limits and card-type restrictions, but do not save results to the record."
+  ],
+  "output": {
+    "id": "",
+    "turns": [
+      {
+        "question": "How does supply work during day and night in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-supply-items-events",
+            "title": "Supply, item cards, and event cards",
+            "url": "fury-of-dracula-4e://rules/supply-items-events",
+            "excerpt": "The supply action represents hunters gathering equipment, weapons, allies, information, and events. Supply depends on the hunter location and time of day. During the day, hunters in cities usually draw from item resources, with large cities providing better selection than smaller cities. At night, supply usually interacts with the event deck instead of ordinary item gathering, and some event draws may benefit Dracula depending on the card back, icon, or rule instruction. Item cards are generally hunter equipment such as weapons, defenses, travel help, or tools used in combat and investigation. Event cards are timing-sensitive effects that may be kept or resolved according to their text and ownership rules. Hand limits, card-type restrictions, and discard instructions are enforced whenever a hunter draws, keeps, trades, uses, or loses cards. If a card conflicts with a general rule, follow the card for that specific situation unless another rule explicitly overrides it.",
+            "score": 0
+          }
+        ],
+        "answer": "Supply depends on both location and time: during day, hunters in cities usually draw item resources (with large cities giving better selection), while at night supply typically draws from event flow and can sometimes benefit Dracula depending on event ownership rules."
+      }
+    ]
+  },
+  "evaluation": {
+    "evidence_path": "/turns/0/evidence",
+    "answer_path": "/turns/0/answer",
+    "evidence_key": "url"
+  },
+  "tags": [
+    "turns:multi",
+    "mapped:true",
+    "state:search-no-save"
+  ]
+}

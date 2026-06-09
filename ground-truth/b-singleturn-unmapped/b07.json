@@ -1,0 +1,47 @@
+{
+  "ref": "b07",
+  "description": "A single-turn evidence replacement flow where the user explicitly asks to replace existing evidence instead of appending.",
+  "input": {
+    "id": "b07",
+    "bucket": "",
+    "question": "How can hunters move in Fury of Dracula?",
+    "evidence": [
+      {
+        "id": "fury-of-dracula-4e-hunter-movement",
+        "title": "Hunter movement by road, rail, and sea",
+        "url": "fury-of-dracula-4e://rules/hunter-movement",
+        "excerpt": "A hunter move action changes the hunter location by road, rail, or sea. Road movement moves along one connected road route to an adjacent city. Rail movement requires spending a train ticket and following the ticket result to determine how far the hunter may travel along connected rail routes; rail is useful for long repositioning but depends on tickets and legal rail connections. A hunter can reserve a ticket as a separate action by drawing ticket options and keeping a legal ticket according to the rules. Sea movement lets a hunter move between a port and an adjacent sea zone, or between connected sea zones, and usually causes damage or risk because hunters are vulnerable while traveling by sea. Hunters at sea have limited action options and often must keep moving until they return to land. Movement can trigger encounters, reveal information, or force combat if the hunter enters Dracula location or a space containing an encounter token.",
+        "score": 0
+      }
+    ],
+    "answer": "Hunters move by road, rail, or sea."
+  },
+  "prompts": [
+    "Search for movement evidence focused on map route constraints. Replace existing evidence with this new set. Update the answer to reflect the replacement evidence."
+  ],
+  "output": {
+    "id": "b07",
+    "bucket": "",
+    "question": "How can hunters move in Fury of Dracula?",
+    "evidence": [
+      {
+        "id": "fury-of-dracula-4e-components-map",
+        "title": "Map, spaces, routes, and public information",
+        "url": "fury-of-dracula-4e://rules/map-and-components",
+        "excerpt": "The map is divided into city spaces and sea zones connected by road, rail, and sea routes. Hunters occupy spaces openly on the board. Dracula tracks his current location secretly with location cards on his trail unless he is revealed. City sizes, ports, hospital locations, castles, and route types matter because they control movement choices, supply results, healing, and special effects. Road routes allow normal land movement. Rail routes require train tickets for hunters and are not available to Dracula. Sea routes connect ports and sea zones; sea travel is risky and can damage hunters or Dracula. Open information includes hunter locations, faceup cards, revealed trail cards, the time track, the influence track, defeated or discarded cards when visible, and any tokens placed openly by effects. Hidden information includes Dracula location cards that remain facedown, Dracula encounter choices, hidden cards in hands, and unrevealed trail information.",
+        "score": 0
+      }
+    ],
+    "answer": "Hunters move through map routes by road, rail, and sea, with rail requiring train tickets and sea travel carrying additional risk; route type and port connections determine legal movement options."
+  },
+  "evaluation": {
+    "evidence_path": "/evidence",
+    "answer_path": "/answer",
+    "evidence_key": "url"
+  },
+  "tags": [
+    "turns:single",
+    "mapped:false",
+    "state:evidence-replace"
+  ]
+}
