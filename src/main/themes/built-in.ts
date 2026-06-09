@@ -2,7 +2,7 @@ import type { Theme, ThemeTokens } from '../../shared/types';
 
 const systemSans = 'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
 
-const defaultThemeTokens: ThemeTokens = {
+const midnightThemeTokens: ThemeTokens = {
   bg: '#101827',
   bg2: '#0d1320',
   surface: '#182338',
@@ -19,44 +19,14 @@ const defaultThemeTokens: ThemeTokens = {
   fontSans: systemSans
 } as const;
 
-export const DEFAULT_THEME_ID = 'default';
+export const DEFAULT_THEME_ID = 'midnight';
 
 export const BUILT_IN_THEMES: Theme[] = [
   {
     id: DEFAULT_THEME_ID,
-    name: 'Default',
-    builtIn: true,
-    tokens: defaultThemeTokens
-  },
-  {
-    id: 'midnight',
     name: 'Midnight',
     builtIn: true,
-    tokens: {
-      ...defaultThemeTokens
-    }
-  },
-  {
-    id: 'editorial-atelier',
-    name: 'Editorial Atelier',
-    builtIn: true,
-    tokens: {
-      bg: '#f4ece0',
-      bg2: '#ece1d1',
-      surface: '#fbf6ee',
-      surface2: '#f7efe3',
-      border: '#d8cfc0',
-      text: '#1c1a17',
-      textDim: '#5c554c',
-      accent: '#9a3412',
-      accent2: '#1e5b4f',
-      success: '#1e5b4f',
-      warning: '#a8761f',
-      danger: '#b4533a',
-      focusRing: '#9a3412',
-      fontSans: '"Newsreader", Georgia, serif',
-      fontSerif: '"Fraunces", Georgia, serif'
-    }
+    tokens: midnightThemeTokens
   },
   {
     id: 'signal-terminal',
@@ -144,28 +114,6 @@ export const BUILT_IN_THEMES: Theme[] = [
       focusRing: '#6f8b6a',
       fontSans: '"Spline Sans", system-ui, sans-serif',
       fontSerif: '"Instrument Serif", Georgia, serif'
-    }
-  },
-  {
-    id: 'att-cyber-futurism',
-    name: 'AT&T Cyber-Futurism',
-    builtIn: true,
-    tokens: {
-      bg: '#03070f',
-      bg2: '#06101f',
-      surface: 'rgba(8,20,38,.92)',
-      surface2: 'rgba(12,28,52,.86)',
-      border: 'rgba(0,159,219,.34)',
-      text: '#dff1fb',
-      textDim: '#7fa6c4',
-      accent: '#009fdb',
-      accent2: '#3ec6ff',
-      success: '#5ff0b0',
-      warning: '#ffb547',
-      danger: '#ff5e7a',
-      focusRing: 'rgba(0,200,255,.72)',
-      fontSans: '"Archivo", system-ui, sans-serif',
-      fontSerif: '"Orbitron", system-ui, sans-serif'
     }
   },
   {

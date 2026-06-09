@@ -969,6 +969,11 @@ describe('review UI', () => {
     const createProjectButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Create project' });
     expect(createProjectButton).toHaveClass('header-action-button', 'action-icon-button');
     expect(createProjectButton).toHaveAttribute('data-tooltip', 'Create project');
+    const manageThemesButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Manage themes' });
+    expect(manageThemesButton).toHaveClass('secondary-button', 'header-action-button', 'action-icon-button');
+    expect(manageThemesButton).toHaveAttribute('data-tooltip', 'Manage themes');
+    expect(manageThemesButton).not.toHaveAttribute('data-tooltip-align');
+    expect(manageThemesButton.querySelector('.action-svg-icon')).not.toBeNull();
     expect(document.querySelector('.create-record-button')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Refresh records' })).not.toBeInTheDocument();
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
@@ -977,6 +982,7 @@ describe('review UI', () => {
     const configureButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Configure' });
     expect(configureButton).toHaveClass('header-action-button', 'action-icon-button');
     expect(configureButton).toHaveAttribute('data-tooltip', 'Configure project');
+    expect(configureButton.nextElementSibling).toBe(manageThemesButton);
     const createRecordButton = getRecordCreateButton();
     const refreshRecordsButton = screen.getByRole('button', { name: 'Refresh records' });
     expect(createRecordButton).toBeEnabled();

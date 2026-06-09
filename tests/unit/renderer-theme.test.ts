@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { applyTheme, applyThemeState } from '../../src/renderer/theme';
+import { BUILT_IN_THEMES } from '../../src/main/themes/built-in';
+import { applyTheme, applyThemeState, contrastRatio, readableTextColor } from '../../src/renderer/theme';
 import type { ThemeTokens } from '../../src/shared/types';
 
 const tokens: ThemeTokens = {
@@ -40,6 +41,10 @@ describe('renderer theme application', () => {
     expect(style.getPropertyValue('--focus-ring')).toBe('#c1c2c3');
     expect(style.getPropertyValue('--font-sans')).toBe('"Theme Sans", sans-serif');
     expect(style.getPropertyValue('--font-serif')).toBe('"Theme Serif", serif');
+    expect(style.getPropertyValue('--accent-text')).toBe(readableTextColor(tokens.accent, tokens));
+    expect(style.getPropertyValue('--success-text')).toBe(readableTextColor(tokens.success, tokens));
+    expect(style.getPropertyValue('--danger-text')).toBe(readableTextColor(tokens.danger, tokens));
+    expect(style.getPropertyValue('--warning-text')).toBe(readableTextColor(tokens.warning, tokens));
   });
 
   it('applies the active theme from bootstrap theme state', () => {
@@ -60,5 +65,16 @@ describe('renderer theme application', () => {
     expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#abcdef');
     expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#fedcba');
     expect(document.documentElement.style.getPropertyValue('--font-serif')).toBe('');
+  });
+
+  it('derives readable button text colors for every built-in filled button background', () => {
+    for (const theme of BUILT_IN_THEMES) {
+      for (const backgroundToken of ['accent', 'success', 'danger', 'warning'] as const) {
+        const textColor = readableTextColor(theme.tokens[backgroundToken], theme.tokens);
+        const ratio = contrastRatio(textColor, theme.tokens[backgroundToken]);
+
+        expect(ratio, `${theme.id} ${backgroundToken}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 });

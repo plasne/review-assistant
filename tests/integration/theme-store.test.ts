@@ -46,25 +46,15 @@ describe('theme store', () => {
     }
   });
 
-  it('seeds built-in themes and persists default as the active theme on first load', async () => {
+  it('seeds built-in themes and persists Midnight as the active theme on first load', async () => {
     const { store, statePath } = await createStore();
 
     const state = await store.getState();
     const persisted = await readJson(statePath);
 
-    expect(state.activeThemeId).toBe('default');
-    expect(state.themes.map((theme) => theme.id)).toEqual([
-      'default',
-      'midnight',
-      'editorial-atelier',
-      'signal-terminal',
-      'aurora-glass',
-      'neon-drive',
-      'quiet-study',
-      'att-cyber-futurism',
-      'endurance'
-    ]);
-    expect(persisted).toMatchObject({ active_theme_id: 'default' });
+    expect(state.activeThemeId).toBe('midnight');
+    expect(state.themes.map((theme) => theme.id)).toEqual(['midnight', 'signal-terminal', 'aurora-glass', 'neon-drive', 'quiet-study', 'endurance']);
+    expect(persisted).toMatchObject({ active_theme_id: 'midnight' });
   });
 
   it('round-trips custom themes and maps TypeScript camelCase to persisted snake_case', async () => {
@@ -125,7 +115,7 @@ describe('theme store', () => {
     await expect(store.deleteTheme('midnight')).rejects.toThrow('Built-in themes cannot be deleted');
   });
 
-  it('falls back to default when persisted active theme is no longer available', async () => {
+  it('falls back to Midnight when persisted active theme is no longer available', async () => {
     const { statePath } = await createStore();
     await fs.mkdir(path.dirname(statePath), { recursive: true });
     await fs.writeFile(
@@ -139,7 +129,7 @@ describe('theme store', () => {
 
     const state = await new ThemeStore({ statePath }).getState();
 
-    expect(state.activeThemeId).toBe('default');
+    expect(state.activeThemeId).toBe('midnight');
     expect(state.themes.every((theme) => theme.builtIn)).toBe(true);
   });
 

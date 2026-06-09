@@ -25,7 +25,7 @@ import type {
   ValidationIssue
 } from '../shared/types';
 import { CANONICAL_MAPPINGS, feedbackConfigEntryForPath, FEEDBACK_EDIT_MODES, FEEDBACK_MODES, FIELD_PRESENTATIONS } from '../shared/feedback';
-import { applyThemeState } from './theme';
+import { applyThemeState, readableTextColor } from './theme';
 import './styles.css';
 
 type Status = 'idle' | 'loading' | 'error';
@@ -1238,15 +1238,16 @@ const App = () => {
             <span aria-hidden="true">⚙</span>
           </button>
         ) : null}
-        <div className="header-spacer" aria-hidden="true" />
         <button
           type="button"
-          className="secondary-button header-action-button"
+          className="secondary-button header-action-button action-icon-button"
           aria-label="Manage themes"
+          data-tooltip="Manage themes"
           onClick={openThemeManager}
         >
-          Themes
+          <ThemeIcon />
         </button>
+        <div className="header-spacer" aria-hidden="true" />
         {selectedProjectId ? (
           <span className={projectUser?.valid === false ? 'username-badge invalid' : 'username-badge'} aria-label="Current feedback username">
             {projectUser === undefined
@@ -1401,7 +1402,7 @@ const App = () => {
                         <div style={{ background: themeDraft.tokens.bg, color: themeDraft.tokens.text, borderColor: themeDraft.tokens.border }}>
                           <strong>Preview</strong>
                           <span style={{ color: themeDraft.tokens.textDim }}>Surface and status tokens</span>
-                          <button type="button" style={{ background: themeDraft.tokens.accent, color: themeDraft.tokens.text }}>
+                          <button type="button" style={{ background: themeDraft.tokens.accent, color: readableTextColor(themeDraft.tokens.accent, themeDraft.tokens) }}>
                             Accent action
                           </button>
                         </div>
@@ -1895,6 +1896,15 @@ const ComputeTagsIcon = () => (
     <path
       fill="currentColor"
       d="M8 1.5 9.53 5l3.72.43-2.8 2.5.74 3.67L8 9.7l-3.19 1.9.74-3.67-2.8-2.5L6.47 5 8 1.5Zm0 3.02-.63 1.43-1.53.18 1.15 1.03-.3 1.51L8 7.89l1.31.78-.3-1.51 1.15-1.03-1.53-.18L8 4.52ZM2.5 12h11v1.5h-11V12Z"
+    />
+  </svg>
+);
+
+const ThemeIcon = () => (
+  <svg className="action-svg-icon" aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+    <path
+      fill="currentColor"
+      d="M8 1.25a6.75 6.75 0 0 0 0 13.5h.7c.89 0 1.55-.28 1.91-.8.36-.52.39-1.2.08-1.92-.13-.3-.11-.5.05-.66.17-.17.46-.26.81-.26H12A2.75 2.75 0 0 0 14.75 8.36 7.1 7.1 0 0 0 8 1.25Zm0 1.5a5.6 5.6 0 0 1 5.25 5.61c0 .69-.56 1.25-1.25 1.25h-.45c-.72 0-1.39.24-1.88.72-.57.56-.71 1.38-.36 2.29.1.24.09.41.07.45-.03.05-.21.18-.68.18H8a5.25 5.25 0 0 1 0-10.5ZM4.75 7a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm2.5-1.75a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM10.75 7a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM5.5 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
     />
   </svg>
 );
