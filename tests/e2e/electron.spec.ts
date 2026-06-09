@@ -4,8 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 const fakeProviderEnv = {
-  REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE: path.resolve('test-fixtures/fake-copilot-sdk-provider.mjs')
+  AGENT_PROVIDER_MODULE: path.resolve('test-fixtures/fake-copilot-sdk-provider.mjs')
 };
+const appRoot = path.resolve('.');
+const fixtureCwd = path.resolve('test-fixtures');
 
 const writeEnvFile = (filePath: string, content: string): void => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -20,12 +22,11 @@ const expectRecordSaved = async (page: import('@playwright/test').Page) => {
 test('real Electron app opens a local project and reviews a record', async () => {
   const createdProjectPath = path.resolve('test-fixtures/local-projects/e2e-created-project');
   fs.rmSync(createdProjectPath, { recursive: true, force: true });
-  const appEnv = path.resolve('test-fixtures/config/.env');
   const electronApp = await electron.launch({
-    args: ['.'],
+    args: [appRoot],
+    cwd: fixtureCwd,
     env: {
       ...process.env,
-      REVIEW_ASSISTANT_APP_ENV: appEnv,
       ...fakeProviderEnv
     }
   });
@@ -34,7 +35,7 @@ test('real Electron app opens a local project and reviews a record', async () =>
   await expect(page.getByText('Version')).toBeVisible();
   await page.getByLabel('Current project').selectOption('sample-project');
   await page.getByRole('button', { name: 'valid-record', exact: true }).click();
-  await expect(page.getByText('Record passes schema validation.')).toBeVisible();
+  await expect(page.getByText('Record loaded.')).toBeVisible();
   await expect(page.getByText('How do I run the harness?')).toBeVisible();
   const arrayItemSummaryMetrics = await page.evaluate(() => {
     const summary = document.querySelector('.collapsible-node summary');
@@ -87,10 +88,10 @@ test('records list scroll area reaches the records column edge and keeps content
   }
   writeEnvFile(appEnv, `LOCAL_PATH=${tempRoot}\n`);
   const electronApp = await electron.launch({
-    args: ['.'],
+    args: [appRoot],
+    cwd: tempRoot,
     env: {
       ...process.env,
-      REVIEW_ASSISTANT_APP_ENV: appEnv,
       ...fakeProviderEnv
     }
   });
@@ -138,10 +139,10 @@ test('workspace keeps filling the window after collapsible sections are toggled'
   const appEnv = path.join(tempRoot, 'config', '.env');
   writeEnvFile(appEnv, `LOCAL_PATH=${tempRoot}\nUSERNAME=layout@example.com\n`);
   const electronApp = await electron.launch({
-    args: ['.'],
+    args: [appRoot],
+    cwd: tempRoot,
     env: {
       ...process.env,
-      REVIEW_ASSISTANT_APP_ENV: appEnv,
       ...fakeProviderEnv
     }
   });
@@ -204,12 +205,11 @@ test('workspace keeps filling the window after collapsible sections are toggled'
 });
 
 test('real Electron app lets Copilot read the displayed record through the local tool', async () => {
-  const appEnv = path.resolve('test-fixtures/config/.env');
   const electronApp = await electron.launch({
-    args: ['.'],
+    args: [appRoot],
+    cwd: fixtureCwd,
     env: {
       ...process.env,
-      REVIEW_ASSISTANT_APP_ENV: appEnv,
       ...fakeProviderEnv,
       FAKE_COPILOT_REQUIRE_REVIEW_ASSISTANT_TOOLS: '1'
     }
@@ -244,10 +244,10 @@ test('real Electron app configures feedback and shows subsequent users collapsed
 
   const launch = () =>
     electron.launch({
-      args: ['.'],
+      args: [appRoot],
+      cwd: tempRoot,
       env: {
         ...process.env,
-        REVIEW_ASSISTANT_APP_ENV: appEnv,
         ...fakeProviderEnv
       }
     });

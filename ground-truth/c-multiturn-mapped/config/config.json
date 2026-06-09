@@ -1,0 +1,38 @@
+{
+  "properties": {
+    "/turns": {
+      "path": "/turns",
+      "target": "Turns",
+      "tab": "Main",
+      "feedback": "none",
+      "comments": false,
+      "mapping": "turns"
+    },
+    "/turns/*/question": {
+      "path": "/turns/*/question",
+      "target": "Turns > * > Question",
+      "tab": "inherit",
+      "feedback": "none",
+      "comments": false,
+      "mapping": "request",
+      "edit_mode": "none"
+    },
+    "/turns/*/evidence": {
+      "path": "/turns/*/evidence",
+      "target": "Turns > * > Evidence",
+      "tab": "inherit",
+      "feedback": "none",
+      "comments": false,
+      "mapping": "evidence"
+    },
+    "/turns/*/answer": {
+      "path": "/turns/*/answer",
+      "target": "Turns > * > Answer",
+      "tab": "inherit",
+      "feedback": "none",
+      "comments": false,
+      "mapping": "response",
+      "edit_mode": "none"
+    }
+  }
+}

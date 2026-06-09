@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { AgentErrorEnvelope, CanonicalMapping, FeedbackConfig, LocalToolMetadata, ToolInvocationRequest, ToolInvocationResponse } from '../shared/types';
 import { CANONICAL_MAPPINGS, stripFeedbackProperties } from '../shared/feedback';
 import { validateRecord } from './schema';
@@ -66,6 +69,7 @@ type ExistingTurnTarget =
       data: undefined;
       appendMessageFields: MessageHistoryFields;
       insertAfterIndex?: number;
+      replaceMessageIndex?: number;
     };
 type TurnFieldMapping = {
   inquiryField?: string;
@@ -233,7 +237,7 @@ const getRecordSchemaTool: LocalToolDefinition = {
 const saveGeneratedSchemaTool: LocalToolDefinition = {
   name: 'saveGeneratedSchema',
   description:
-    'Replace the selected project config/schema.json with a generated JSON Schema after validating it. Existing schemas are backed up as config/schema_1.json, config/schema_2.json, etc.; project identity always comes from trusted UI state.',
+    'Replace the selected project config/schema.json with a generated JSON Schema. Existing schemas are backed up as config/schema_1.json, config/schema_2.json, etc.; project identity always comes from trusted UI state.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -255,11 +259,6 @@ const saveGeneratedSchemaTool: LocalToolDefinition = {
     const schema = request.arguments.schema;
     if (!isPlainRecord(schema)) {
       return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'schema must be a JSON Schema object.', false);
-    }
-    try {
-      validateRecord(schema, {});
-    } catch (error) {
-      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', `schema must be a valid JSON Schema: ${errorMessage(error)}`, false);
     }
 
     try {
@@ -290,7 +289,7 @@ const saveSearchResultsTool: LocalToolDefinition = {
       results: {
         type: 'array',
         description:
-          'Search result entries to store. Each entry must match the target container item schema. URL-like fields should contain canonical user-facing locators returned by the source MCP tool, not synthesized provider URLs or API response endpoints.',
+          'Search result entries to store. URL-like fields should contain canonical user-facing locators returned by the source MCP tool, not synthesized provider URLs or API response endpoints.',
         items: {}
       },
       mode: {
@@ -338,7 +337,7 @@ const saveSearchResultsTool: LocalToolDefinition = {
       if (path !== '') {
         setValueAtPointer(nextData, path, nextContainer);
       }
-      const validationIssues = validateRecord(containerSchema, nextContainer);
+      const validationIssues = validateArrayItems(containerSchema, results);
       if (validationIssues.length > 0) {
         return toolError(
           request.requestId,
@@ -446,8 +445,8 @@ const startTurnTool: LocalToolDefinition = {
       const mapping = isTurnFieldMapping(fieldMapping) ? fieldMapping : undefined;
       const fields = resolveTurnFields(target, mapping);
       const turn = buildStartedTurn(target.schema, fields, inquiry, typeof response === 'string' ? response : undefined, additionalFields);
-      const { nextData, turnIndex, targetValue } = applyTurnToRecord(record.data, target, turn);
-      const validationIssues = validateTurnChange(target, targetValue);
+      const { nextData, turnIndex } = applyTurnToRecord(record.data, target, turn);
+      const validationIssues = validateWritableSchema(target.schema, turn);
       if (validationIssues.length > 0) {
         return toolError(
           request.requestId,
@@ -491,8 +490,13 @@ const completeTurnTool: LocalToolDefinition = {
       evidence: {
         type: 'array',
         description:
-          'Optional supporting evidence entries found while computing the response. Each entry must match the turn evidence field schema. Prefer passing evidence here with the response instead of calling a separate persistence tool.',
+          'Optional supporting evidence entries found while computing the response. If you used external MCP or search results to answer, pass the evidence entries here so they are saved with the answer. Each entry must match the turn or canonical evidence schema.',
         items: {}
+      },
+      evidenceContainerPath: {
+        type: 'string',
+        description:
+          'Optional JSON Pointer to the evidence array returned by discoverCanonicalSchemaMappings. Use this when the canonical evidence path is known.'
       },
       targetPath: {
         type: 'string',
@@ -523,129 +527,240 @@ const completeTurnTool: LocalToolDefinition = {
     required: ['response'],
     additionalProperties: false
   },
-  execute: async (request, context) => {
-    if (!context.storage) {
-      return toolError(request.requestId, 'BACKEND_UNAVAILABLE', 'No storage backend is available.', true);
-    }
-    if (!context.selectedProjectId || !context.selectedRecordId) {
-      return toolError(request.requestId, 'NO_RECORD_SELECTED', 'No record is currently displayed in the UI.', false);
-    }
-    const response = request.arguments.response;
-    const evidence = request.arguments.evidence;
-    const targetPath = request.arguments.targetPath;
-    const turnIndexArgument = request.arguments.turnIndex;
-    const fieldMapping = request.arguments.fieldMapping;
-    const additionalFields = request.arguments.additionalFields;
-    if (typeof response !== 'string') {
-      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'response must be a string.', false);
-    }
-    if (evidence !== undefined && !Array.isArray(evidence)) {
-      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'evidence must be an array when provided.', false);
-    }
-    if (targetPath !== undefined && typeof targetPath !== 'string') {
-      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'targetPath must be a JSON Pointer string when provided.', false);
-    }
-    if (turnIndexArgument !== undefined && (typeof turnIndexArgument !== 'number' || !Number.isInteger(turnIndexArgument) || turnIndexArgument < 0)) {
-      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'turnIndex must be a non-negative integer when provided.', false);
-    }
-    if (fieldMapping !== undefined && !isResponseFieldMapping(fieldMapping)) {
-      return toolError(
-        request.requestId,
-        'INVALID_TOOL_ARGUMENTS',
-        'fieldMapping must be an object with optional responseField and evidenceField string properties.',
-        false
-      );
-    }
-    if (additionalFields !== undefined && !isPlainRecord(additionalFields)) {
-      return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'additionalFields must be an object when provided.', false);
-    }
+  execute: async (request, context) => executeTurnResponseTool(request, context, 'complete')
+};
 
-    try {
-      const record = await context.storage.getRecord(context.selectedProjectId, context.selectedRecordId);
-      const target = resolveExistingTurnTarget(
-        record.schema,
-        record.data,
-        typeof targetPath === 'string' ? assertTurnTargetPointer(targetPath) : undefined,
-        typeof turnIndexArgument === 'number' ? turnIndexArgument : undefined
-      );
-      const responseField =
-        'appendMessageFields' in target
-          ? target.appendMessageFields.messageField
-          : isResponseFieldMapping(fieldMapping) && fieldMapping.responseField
-            ? fieldMapping.responseField
-            : resolveResponseField(target);
-      const evidenceField =
-        'appendMessageFields' in target
-          ? undefined
+const reviseTurnTool: LocalToolDefinition = {
+  name: 'reviseTurn',
+  description:
+    'Revise an existing conversation turn response without creating a new user turn. Use this when the user asks to recompute, improve, or update an existing answer using existing or new evidence. For object turns it updates the selected turn; for role/message history arrays it updates an existing assistant message row.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      response: {
+        type: 'string',
+        description: 'The revised assistant response, answer, reply, completion, or message to store for the existing turn.'
+      },
+      evidence: {
+        type: 'array',
+        description:
+          'Optional new supporting evidence entries used for the revision. Each entry must match the destination evidence schema.',
+        items: {}
+      },
+      evidenceContainerPath: {
+        type: 'string',
+        description:
+          'Optional JSON Pointer to the evidence array returned by discoverCanonicalSchemaMappings, such as /refs or /turns/*/references. Use this when new evidence should be saved with the revision.'
+      },
+      targetPath: {
+        type: 'string',
+        description:
+          'Optional JSON Pointer to an existing turn object or turn array. For object-turn arrays, provide turnIndex or omit targetPath to infer the latest turn. For role/message history arrays, turnIndex selects an assistant message row; omit it to revise the latest assistant message.'
+      },
+      turnIndex: {
+        type: 'integer',
+        minimum: 0,
+        description:
+          'Optional zero-based index. For object-turn arrays, this selects the turn object to update. For role/message history arrays, this selects the assistant-message row to update.'
+      },
+      fieldMapping: {
+        type: 'object',
+        description:
+          'Optional response and evidence field names for object-turn schemas that do not use common response/evidence names. Not needed for role/message history arrays.',
+        properties: {
+          responseField: { type: 'string' },
+          evidenceField: { type: 'string' }
+        },
+        additionalProperties: false
+      },
+      additionalFields: {
+        type: 'object',
+        description: 'Optional additional fields to merge into the existing turn or assistant message row while setting the revised response.'
+      }
+    },
+    required: ['response'],
+    additionalProperties: false
+  },
+  execute: async (request, context) => executeTurnResponseTool(request, context, 'revise')
+};
+
+const executeTurnResponseTool = async (
+  request: ToolInvocationRequest,
+  context: ToolExecutionContext,
+  mode: 'complete' | 'revise'
+): Promise<ToolInvocationResponse> => {
+  if (!context.storage) {
+    return toolError(request.requestId, 'BACKEND_UNAVAILABLE', 'No storage backend is available.', true);
+  }
+  if (!context.selectedProjectId || !context.selectedRecordId) {
+    return toolError(request.requestId, 'NO_RECORD_SELECTED', 'No record is currently displayed in the UI.', false);
+  }
+  const response = request.arguments.response;
+  const evidence = request.arguments.evidence;
+  const evidenceContainerPath = request.arguments.evidenceContainerPath;
+  const targetPath = request.arguments.targetPath;
+  const turnIndexArgument = request.arguments.turnIndex;
+  const fieldMapping = request.arguments.fieldMapping;
+  const additionalFields = request.arguments.additionalFields;
+  if (typeof response !== 'string') {
+    return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'response must be a string.', false);
+  }
+  if (evidence !== undefined && !Array.isArray(evidence)) {
+    return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'evidence must be an array when provided.', false);
+  }
+  const emptyEvidenceMessage = Array.isArray(evidence) ? validatePersistedObjectEntries(evidence, 'Evidence') : undefined;
+  if (emptyEvidenceMessage) {
+    return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', emptyEvidenceMessage, false);
+  }
+  if (evidenceContainerPath !== undefined && typeof evidenceContainerPath !== 'string') {
+    return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'evidenceContainerPath must be a JSON Pointer string when provided.', false);
+  }
+  if (targetPath !== undefined && typeof targetPath !== 'string') {
+    return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'targetPath must be a JSON Pointer string when provided.', false);
+  }
+  if (turnIndexArgument !== undefined && (typeof turnIndexArgument !== 'number' || !Number.isInteger(turnIndexArgument) || turnIndexArgument < 0)) {
+    return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'turnIndex must be a non-negative integer when provided.', false);
+  }
+  if (fieldMapping !== undefined && !isResponseFieldMapping(fieldMapping)) {
+    return toolError(
+      request.requestId,
+      'INVALID_TOOL_ARGUMENTS',
+      'fieldMapping must be an object with optional responseField and evidenceField string properties.',
+      false
+    );
+  }
+  if (additionalFields !== undefined && !isPlainRecord(additionalFields)) {
+    return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'additionalFields must be an object when provided.', false);
+  }
+
+  try {
+    const record = await context.storage.getRecord(context.selectedProjectId, context.selectedRecordId);
+    const assertedTargetPath = typeof targetPath === 'string' ? assertTurnTargetPointer(targetPath) : undefined;
+    const turnIndex = typeof turnIndexArgument === 'number' ? turnIndexArgument : undefined;
+    const target =
+      mode === 'revise'
+        ? resolveRevisionTurnTarget(record.schema, record.data, assertedTargetPath, turnIndex)
+        : resolveExistingTurnTarget(record.schema, record.data, assertedTargetPath, turnIndex);
+    const responseField =
+      'appendMessageFields' in target
+        ? target.appendMessageFields.messageField
+        : isResponseFieldMapping(fieldMapping) && fieldMapping.responseField
+          ? fieldMapping.responseField
+          : resolveResponseField(target);
+    const explicitEvidenceContainer =
+      typeof evidenceContainerPath === 'string' && Array.isArray(evidence) && evidence.length > 0
+        ? resolveEvidenceContainerPath(record.schema, target, assertEvidenceContainerPointer(evidenceContainerPath))
+        : undefined;
+    const standaloneEvidenceContainer =
+      explicitEvidenceContainer && !explicitEvidenceContainer.turnField
+        ? explicitEvidenceContainer
+        : 'appendMessageFields' in target && Array.isArray(evidence) && evidence.length > 0 && !explicitEvidenceContainer
+          ? resolveStandaloneEvidenceContainer(record.schema, await context.storage.getFeedbackConfig(context.selectedProjectId))
+          : undefined;
+    const evidenceField =
+      'appendMessageFields' in target
+        ? undefined
+        : explicitEvidenceContainer?.turnField
+          ? explicitEvidenceContainer.turnField
           : Array.isArray(evidence) && isResponseFieldMapping(fieldMapping) && fieldMapping.evidenceField
             ? fieldMapping.evidenceField
             : Array.isArray(evidence)
               ? resolveEvidenceField(target)
               : undefined;
-      if ('appendMessageFields' in target && Array.isArray(evidence) && evidence.length > 0) {
-        return toolError(
-          request.requestId,
-          'INVALID_TOOL_ARGUMENTS',
-          'This role/message history schema has no evidence field. Save evidence separately or omit evidence.',
-          false
-        );
+    const nextTurn =
+      'appendMessageFields' in target
+        ? {
+            ...(isPlainRecord(additionalFields) ? cloneJson(additionalFields) : {}),
+            [target.appendMessageFields.roleField]: 'assistant',
+            [target.appendMessageFields.messageField]: response
+          }
+        : {
+            ...target.data,
+            ...(isPlainRecord(additionalFields) ? cloneJson(additionalFields) : {}),
+            ...(evidenceField ? { [evidenceField]: cloneJson(evidence) } : {}),
+            [responseField]: response
+          };
+    const nextData = target.path === '' ? nextTurn : cloneJson(record.data);
+    let savedEvidenceCount = Array.isArray(evidence) && evidenceField ? evidence.length : 0;
+    let messageTurnIndex: number | undefined;
+    if ('appendMessageFields' in target) {
+      const currentValue = valueAtPointer(nextData, target.path);
+      if (currentValue !== undefined && !Array.isArray(currentValue)) {
+        return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', `Record value at ${target.path || '/'} is not an array container.`, false);
       }
-      const nextTurn =
-        'appendMessageFields' in target
-          ? {
-              ...(isPlainRecord(additionalFields) ? cloneJson(additionalFields) : {}),
-              [target.appendMessageFields.roleField]: 'assistant',
-              [target.appendMessageFields.messageField]: response
-            }
-          : {
-              ...target.data,
-              ...(isPlainRecord(additionalFields) ? cloneJson(additionalFields) : {}),
-              ...(evidenceField ? { [evidenceField]: cloneJson(evidence) } : {}),
-              [responseField]: response
-            };
-      const nextData = target.path === '' ? nextTurn : cloneJson(record.data);
-      if ('appendMessageFields' in target) {
-        const currentValue = valueAtPointer(nextData, target.path);
-        if (currentValue !== undefined && !Array.isArray(currentValue)) {
-          return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', `Record value at ${target.path || '/'} is not an array container.`, false);
+      const currentMessages = Array.isArray(currentValue) ? currentValue : [];
+      if (mode === 'revise') {
+        if (target.replaceMessageIndex === undefined) {
+          return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'No assistant message could be selected for revision.', false);
         }
-        const currentMessages = Array.isArray(currentValue) ? currentValue : [];
+        const nextMessages = [...currentMessages];
+        nextMessages[target.replaceMessageIndex] = nextTurn;
+        messageTurnIndex = target.replaceMessageIndex;
+        setValueAtPointer(nextData, target.path, nextMessages);
+      } else {
         const insertIndex = target.insertAfterIndex === undefined ? currentMessages.length : target.insertAfterIndex + 1;
+        messageTurnIndex = insertIndex;
         setValueAtPointer(nextData, target.path, [
           ...currentMessages.slice(0, insertIndex),
           nextTurn,
           ...currentMessages.slice(insertIndex)
         ]);
-      } else if (target.path !== '') {
-        setValueAtPointer(nextData, target.path, nextTurn);
       }
-      const validationIssues = validateRecord(target.schema, nextTurn);
-      if (validationIssues.length > 0) {
-        return toolError(
-          request.requestId,
-          'INVALID_TOOL_ARGUMENTS',
-          `Response does not match the turn schema: ${validationIssues.map((issue) => `${issue.path} ${issue.message}`).join('; ')}`,
-          false
-        );
-      }
-      const updatedRecord = await context.storage.updateRecord(context.selectedProjectId, context.selectedRecordId, nextData);
-      return {
-        requestId: request.requestId,
-        ok: true,
-        result: {
-          projectId: updatedRecord.projectId,
-          recordId: updatedRecord.recordId,
-          targetPath: target.path,
-          responseField,
-          ...('appendMessageFields' in target ? { turnIndex: target.insertAfterIndex === undefined ? undefined : target.insertAfterIndex + 1 } : {}),
-          ...(evidenceField ? { evidenceField, savedEvidenceCount: Array.isArray(evidence) ? evidence.length : 0 } : {}),
-          turn: nextTurn,
-          record: updatedRecord.data
+      if (standaloneEvidenceContainer && Array.isArray(evidence)) {
+        const currentEvidenceValue = valueAtPointer(nextData, standaloneEvidenceContainer.path);
+        if (currentEvidenceValue !== undefined && !Array.isArray(currentEvidenceValue)) {
+          return toolError(
+            request.requestId,
+            'INVALID_TOOL_ARGUMENTS',
+            `Record value at ${standaloneEvidenceContainer.path || '/'} is not an array container.`,
+            false
+          );
         }
-      };
-    } catch (error) {
-      return toolError(request.requestId, toolErrorCode(error), errorMessage(error), false);
+        const nextEvidenceContainer = [...(Array.isArray(currentEvidenceValue) ? currentEvidenceValue : []), ...evidence.map((item) => cloneJson(item))];
+        setValueAtPointer(nextData, standaloneEvidenceContainer.path, nextEvidenceContainer);
+        const evidenceValidationIssues = validateArrayItems(standaloneEvidenceContainer.schema, evidence);
+        if (evidenceValidationIssues.length > 0) {
+          return toolError(
+            request.requestId,
+            'INVALID_TOOL_ARGUMENTS',
+            `Evidence does not match the destination schema: ${evidenceValidationIssues.map((issue) => `${issue.path} ${issue.message}`).join('; ')}`,
+            false
+          );
+        }
+        savedEvidenceCount = evidence.length;
+      }
+    } else if (target.path !== '') {
+      setValueAtPointer(nextData, target.path, nextTurn);
     }
+    const validationIssues = validateWritableSchema(target.schema, writableTurnPatch(nextTurn, responseField, evidenceField, additionalFields));
+    if (validationIssues.length > 0) {
+      return toolError(
+        request.requestId,
+        'INVALID_TOOL_ARGUMENTS',
+        `Response does not match the turn schema: ${validationIssues.map((issue) => `${issue.path} ${issue.message}`).join('; ')}`,
+        false
+      );
+    }
+    const updatedRecord = await context.storage.updateRecord(context.selectedProjectId, context.selectedRecordId, nextData);
+    return {
+      requestId: request.requestId,
+      ok: true,
+      result: {
+        projectId: updatedRecord.projectId,
+        recordId: updatedRecord.recordId,
+        targetPath: target.path,
+        responseField,
+        ...('appendMessageFields' in target ? { turnIndex: messageTurnIndex } : {}),
+        ...(evidenceField ? { evidenceField, savedEvidenceCount: Array.isArray(evidence) ? evidence.length : 0 } : {}),
+        ...(explicitEvidenceContainer || standaloneEvidenceContainer
+          ? { evidenceContainerPath: (explicitEvidenceContainer ?? standaloneEvidenceContainer)?.path, savedEvidenceCount }
+          : {}),
+        turn: nextTurn,
+        record: updatedRecord.data
+      }
+    };
+  } catch (error) {
+    return toolError(request.requestId, toolErrorCode(error), errorMessage(error), false);
   }
 };
 
@@ -672,6 +787,7 @@ const builtInTools = [
   saveSearchResultsTool,
   startTurnTool,
   completeTurnTool,
+  reviseTurnTool,
   listToolsTool
 ];
 
@@ -698,6 +814,38 @@ export const createLocalToolRuntime = (context: ToolExecutionContext, plugins: L
   };
 };
 
+export const discoverLocalToolPlugins = async (directories: Array<string | undefined>): Promise<Array<LocalToolPlugin | Error>> => {
+  const files: string[] = [];
+  for (const directory of directories) {
+    if (!directory) {
+      continue;
+    }
+    const entries = await readOptionalDirectory(directory);
+    files.push(
+      ...entries
+        .filter((entry) => entry.isFile() && isPluginFile(entry.name))
+        .map((entry) => path.join(directory, entry.name))
+        .sort((left, right) => left.localeCompare(right))
+    );
+  }
+
+  const plugins: Array<LocalToolPlugin | Error> = [];
+  for (const file of files) {
+    try {
+      const module = (await import(/* @vite-ignore */ pathToFileURL(file).href)) as Record<string, unknown>;
+      const candidate = module.default ?? module.plugin ?? module;
+      if (isLocalToolPlugin(candidate)) {
+        plugins.push(candidate);
+      } else {
+        plugins.push(new Error(`Tool plugin ${path.basename(file)} must export { id, tools }.`));
+      }
+    } catch (error) {
+      plugins.push(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+  return plugins;
+};
+
 export const createToolRequest = (tool: string, args: Record<string, unknown>): ToolInvocationRequest => ({
   tool,
   requestId: randomUUID(),
@@ -717,6 +865,35 @@ const registerTools = (plugins: LocalToolPlugin[]): RegisteredTool[] => {
     }
   }
   return registeredTools;
+};
+
+const readOptionalDirectory = async (directory: string): Promise<import('node:fs').Dirent[]> => {
+  try {
+    return await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+};
+
+const isPluginFile = (fileName: string): boolean => fileName.endsWith('.mjs') && !fileName.startsWith('.');
+
+const isLocalToolPlugin = (value: unknown): value is LocalToolPlugin => {
+  if (!isPlainRecord(value) || typeof value.id !== 'string' || value.id.trim() === '' || !Array.isArray(value.tools)) {
+    return false;
+  }
+  return value.tools.every(
+    (tool) =>
+      isPlainRecord(tool) &&
+      typeof tool.name === 'string' &&
+      tool.name.trim() !== '' &&
+      typeof tool.description === 'string' &&
+      tool.description.trim() !== '' &&
+      isPlainRecord(tool.inputSchema) &&
+      typeof tool.execute === 'function'
+  );
 };
 
 const toolError = (
@@ -1021,8 +1198,6 @@ const buildStartedTurn = (
   };
   if (response !== undefined) {
     turn[fields.responseField] = response;
-  } else if (isRequiredField(schema, fields.responseField)) {
-    turn[fields.responseField] = '';
   }
   return turn;
 };
@@ -1093,6 +1268,72 @@ const resolveExistingTurnTarget = (schema: unknown, data: unknown, targetPath: s
   throw new Error('No existing turn could be inferred. Call completeTurn with targetPath and, for arrays, turnIndex.');
 };
 
+const resolveRevisionTurnTarget = (schema: unknown, data: unknown, targetPath: string | undefined, turnIndex: number | undefined): ExistingTurnTarget => {
+  if (targetPath !== undefined) {
+    const targetSchema = schemaAtPointer(schema, targetPath);
+    const resolved = resolveSchema(targetSchema);
+    if (isArraySchema(resolved)) {
+      if (!isSchema(resolved.items)) {
+        throw new Error(`Schema at ${targetPath || '/'} does not define object item schemas.`);
+      }
+      const itemSchema = resolveSchema(resolved.items);
+      const messageHistoryFields = detectMessageHistoryFields(itemSchema);
+      if (messageHistoryFields) {
+        const messages = valueAtPointer(data, targetPath);
+        const replaceMessageIndex = resolveAssistantMessageIndex(messages, messageHistoryFields, turnIndex);
+        return { path: targetPath, schema: itemSchema, data: undefined, appendMessageFields: messageHistoryFields, replaceMessageIndex };
+      }
+      if (turnIndex === undefined) {
+        throw new Error('turnIndex is required when targetPath points to a turn array.');
+      }
+      const turnPath = `${targetPath}/${turnIndex}`;
+      const turn = valueAtPointer(data, turnPath);
+      if (!isPlainRecord(turn)) {
+        throw new Error(`Record value at ${turnPath || '/'} is not an object turn target.`);
+      }
+      return { path: turnPath, schema: itemSchema, data: cloneJson(turn) };
+    }
+    if (turnIndex !== undefined) {
+      throw new Error('turnIndex can only be used when targetPath points to a turn array.');
+    }
+    const turn = valueAtPointer(data, targetPath);
+    if (!isPlainRecord(turn)) {
+      throw new Error(`Record value at ${targetPath || '/'} is not an object turn target.`);
+    }
+    return { path: targetPath, schema: resolved, data: cloneJson(turn) };
+  }
+
+  const candidates = listTurnTargetCandidates(schema, data)
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+  for (const candidate of candidates) {
+    if (candidate.mode === 'append-array') {
+      if (candidate.roleField && candidate.messageField) {
+        const messages = valueAtPointer(data, candidate.path);
+        const replaceMessageIndex = resolveAssistantMessageIndex(messages, { roleField: candidate.roleField, messageField: candidate.messageField }, turnIndex);
+        return {
+          path: candidate.path,
+          schema: candidate.schema,
+          data: undefined,
+          appendMessageFields: { roleField: candidate.roleField, messageField: candidate.messageField },
+          replaceMessageIndex
+        };
+      }
+      const turns = valueAtPointer(data, candidate.path);
+      if (Array.isArray(turns) && turns.length > 0) {
+        const index = turnIndex ?? turns.length - 1;
+        const turn = turns[index];
+        if (isPlainRecord(turn)) {
+          return { path: `${candidate.path}/${index}`, schema: candidate.schema, data: cloneJson(turn) };
+        }
+      }
+    } else if (isPlainRecord(candidate.data)) {
+      return { path: candidate.path, schema: candidate.schema, data: cloneJson(candidate.data) };
+    }
+  }
+  throw new Error('No existing turn could be inferred. Call reviseTurn with targetPath and, for arrays, turnIndex.');
+};
+
 const resolveResponseField = (target: ExistingTurnTarget): string => {
   if ('appendMessageFields' in target) {
     return target.appendMessageFields.messageField;
@@ -1111,6 +1352,63 @@ const resolveEvidenceField = (target: ExistingTurnTarget): string => {
     throw new Error('No evidence field could be inferred for this turn. Call completeTurn with fieldMapping.evidenceField.');
   }
   return evidenceField;
+};
+
+const resolveEvidenceContainerPath = (
+  schema: unknown,
+  target: ExistingTurnTarget,
+  path: string
+): CanonicalCandidate & { turnField?: string } => {
+  const containerSchema = schemaAtPointer(schema, path);
+  if (!isArraySchema(containerSchema)) {
+    throw new Error(`Schema at ${path || '/'} is not an evidence array container.`);
+  }
+  const materializedPath = materializeTurnScopedPath(path, target);
+  return {
+    path: materializedPath,
+    schema: containerSchema,
+    ...resolveTurnEvidenceField(target, materializedPath)
+  };
+};
+
+const resolveStandaloneEvidenceContainer = (schema: unknown, config: FeedbackConfig): CanonicalCandidate => {
+  const candidates = discoverCanonicalSchemaMappings(schema, config).evidence.candidates.filter((candidate) => !candidate.path.includes('*'));
+  const candidate = candidates.find((item) => isArraySchema(item.schema));
+  if (!candidate) {
+    throw new Error('No standalone evidence array could be inferred. Save evidence separately with saveSearchResults.');
+  }
+  return candidate;
+};
+
+const resolveTurnEvidenceField = (target: ExistingTurnTarget, evidencePath: string): { turnField?: string } => {
+  if ('appendMessageFields' in target) {
+    return {};
+  }
+  const targetSegments = pointerSegments(target.path);
+  const evidenceSegments = pointerSegments(evidencePath);
+  if (evidenceSegments.length !== targetSegments.length + 1) {
+    return {};
+  }
+  if (!targetSegments.every((segment, index) => evidenceSegments[index] === segment)) {
+    return {};
+  }
+  return { turnField: evidenceSegments[evidenceSegments.length - 1] };
+};
+
+const materializeTurnScopedPath = (path: string, target: ExistingTurnTarget): string => {
+  if (!path.includes('*')) {
+    return path;
+  }
+  if ('appendMessageFields' in target) {
+    throw new Error('Wildcard evidenceContainerPath cannot be used with role/message history arrays.');
+  }
+  const targetSegments = pointerSegments(target.path);
+  const pathSegments = pointerSegments(path);
+  const nextSegments = pathSegments.map((segment, index) => (segment === '*' ? targetSegments[index] : segment));
+  if (nextSegments.some((segment) => segment === undefined || segment === '*')) {
+    throw new Error('Wildcard evidenceContainerPath could not be resolved for the selected turn.');
+  }
+  return `/${nextSegments.map(escapePointer).join('/')}`;
 };
 
 const defaultTurnField = (target: TurnTargetCandidate, aliases: string[], fallback: string): string => {
@@ -1149,8 +1447,32 @@ const applyTurnToRecord = (
   return { nextData, targetValue: nextObject };
 };
 
-const validateTurnChange = (target: TurnTargetCandidate, targetValue: unknown): ReturnType<typeof validateRecord> =>
-  validateRecord(target.mode === 'append-array' ? (target.containerSchema ?? { type: 'array', items: target.schema }) : target.schema, targetValue);
+const validateWritableSchema = (schema: unknown, data: unknown) => validateRecord(schema, data).filter((issue) => issue.keyword !== 'required');
+
+const validateArrayItems = (containerSchema: JsonSchema, items: unknown[]) => {
+  const resolved = resolveSchema(containerSchema);
+  if (!isArraySchema(resolved) || !isSchema(resolved.items)) {
+    return [];
+  }
+  const itemSchema = resolveSchema(resolved.items);
+  return items.flatMap((item, index) =>
+    validateWritableSchema(itemSchema, item).map((issue) => ({
+      ...issue,
+      path: issue.path === '/' ? `/${index}` : `/${index}${issue.path}`
+    }))
+  );
+};
+
+const writableTurnPatch = (
+  turn: Record<string, unknown>,
+  responseField: string,
+  evidenceField: string | undefined,
+  additionalFields: unknown
+): Record<string, unknown> => ({
+  ...(isPlainRecord(additionalFields) ? cloneJson(additionalFields) : {}),
+  ...(evidenceField ? { [evidenceField]: turn[evidenceField] } : {}),
+  [responseField]: turn[responseField]
+});
 
 const inquiryFieldAliases = [
   'inquiry',
@@ -1236,10 +1558,41 @@ const resolvePendingUserMessageIndex = (
   throw new Error('No pending user message could be inferred for this role/message history.');
 };
 
+const resolveAssistantMessageIndex = (
+  messages: unknown,
+  fields: MessageHistoryFields,
+  requestedIndex: number | undefined
+): number => {
+  if (messages === undefined) {
+    throw new Error('No existing assistant message could be inferred for this role/message history.');
+  }
+  if (!Array.isArray(messages)) {
+    throw new Error('Record value at the history path is not an array container.');
+  }
+  if (requestedIndex !== undefined) {
+    assertAssistantMessageAtIndex(messages, fields, requestedIndex);
+    return requestedIndex;
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isPlainRecord(message) && message[fields.roleField] === 'assistant') {
+      return index;
+    }
+  }
+  throw new Error('No existing assistant message could be inferred for this role/message history.');
+};
+
 const assertUserMessageAtIndex = (messages: unknown[], fields: MessageHistoryFields, index: number): void => {
   const message = messages[index];
   if (!isPlainRecord(message) || message[fields.roleField] !== 'user') {
     throw new Error(`Record value at turnIndex ${index} is not a user message.`);
+  }
+};
+
+const assertAssistantMessageAtIndex = (messages: unknown[], fields: MessageHistoryFields, index: number): void => {
+  const message = messages[index];
+  if (!isPlainRecord(message) || message[fields.roleField] !== 'assistant') {
+    throw new Error(`Record value at turnIndex ${index} is not an assistant message.`);
   }
 };
 
@@ -1376,8 +1729,8 @@ const setValueAtPointer = (data: unknown, path: string, value: unknown): void =>
 };
 
 const assertJsonPointer = (value: string): string => {
-  if (value === '') {
-    return value;
+  if (value === '' || value === '/') {
+    return '';
   }
   if (!value.startsWith('/')) {
     throw new Error('containerPath must be a JSON Pointer beginning with /.');
@@ -1387,8 +1740,8 @@ const assertJsonPointer = (value: string): string => {
 };
 
 const assertTurnTargetPointer = (value: string): string => {
-  if (value === '') {
-    return value;
+  if (value === '' || value === '/') {
+    return '';
   }
   if (!value.startsWith('/')) {
     throw new Error('targetPath must be a JSON Pointer beginning with /.');
@@ -1397,9 +1750,20 @@ const assertTurnTargetPointer = (value: string): string => {
   return value;
 };
 
+const assertEvidenceContainerPointer = (value: string): string => {
+  if (value === '' || value === '/') {
+    return '';
+  }
+  if (!value.startsWith('/')) {
+    throw new Error('evidenceContainerPath must be a JSON Pointer beginning with /.');
+  }
+  pointerSegments(value);
+  return value;
+};
+
 const assertSchemaPointer = (value: string): string => {
-  if (value === '') {
-    return value;
+  if (value === '' || value === '/') {
+    return '';
   }
   if (!value.startsWith('/')) {
     throw new Error('targetPath must be a JSON Pointer beginning with /.');
@@ -1469,6 +1833,30 @@ const isSchemaMap = (value: unknown): value is Record<string, JsonSchema> =>
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const validatePersistedObjectEntries = (entries: unknown[], label: string): string | undefined => {
+  const emptyIndex = entries.findIndex((entry) => isPlainRecord(entry) && !hasMeaningfulJsonValue(entry));
+  return emptyIndex === -1 ? undefined : `${label} entries must not be empty objects. Entry ${emptyIndex} has no populated values.`;
+};
+
+const hasMeaningfulJsonValue = (value: unknown): boolean => {
+  if (typeof value === 'string') {
+    return value.trim() !== '';
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+  if (typeof value === 'boolean') {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.some(hasMeaningfulJsonValue);
+  }
+  if (isPlainRecord(value)) {
+    return Object.values(value).some(hasMeaningfulJsonValue);
+  }
+  return false;
+};
+
 const isTurnFieldMapping = (value: unknown): value is TurnFieldMapping => {
   if (!isPlainRecord(value)) {
     return false;
@@ -1505,6 +1893,7 @@ const toolErrorCode = (error: unknown): AgentErrorEnvelope['code'] => {
     message.includes('turn target') ||
     message.includes('turnindex') ||
     message.includes('existing turn') ||
+    message.includes('assistant message') ||
     message.includes('fieldmapping') ||
     message.includes('turn does not')
   ) {

@@ -1,0 +1,56 @@
+{
+  "ref": "c11",
+  "description": "A two-turn flow where a follow-up strategy question about Dracula sea travel is added as a new turn.",
+  "input": {
+    "id": "",
+    "turns": []
+  },
+  "prompts": [
+    "What happens when Dracula moves by sea in Fury of Dracula? Record answer and evidence.",
+    "Add a new turn to answer this follow-up: How can hunters exploit Dracula's sea movement in Fury of Dracula?"
+  ],
+  "output": {
+    "id": "",
+    "turns": [
+      {
+        "question": "What happens when Dracula moves by sea in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-dracula-sea-movement",
+            "title": "Dracula sea movement and sea damage",
+            "url": "fury-of-dracula-4e://rules/dracula-sea-movement",
+            "excerpt": "Dracula may move from a port to an adjacent sea zone or between connected sea zones when legal movement rules allow it. Sea travel is dangerous for Dracula and usually causes sea damage each time he spends the required time at sea, with timing defined by the movement sequence. Sea locations are recorded on the trail like other movement cards, and hunters can deduce likely routes from revealed trail information and timing. If Dracula remains at sea too long, accumulated sea damage can force defensive play or create opportunities for hunters to finish him in combat.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-trail-movement-limits",
+            "title": "Trail limits, legal moves, and repeated location restrictions",
+            "url": "fury-of-dracula-4e://rules/trail-movement-limits",
+            "excerpt": "Dracula movement is constrained by trail legality and special restrictions on repeating locations or using certain power cards. A move is illegal if it violates route connectivity, timing requirements, or trail-based restrictions that prevent immediate reuse of recent locations. At sea, these constraints combine with damage pressure, making repeated sea movement risky even when legal. When choosing a sea route, Dracula must still obey trail updates, reveal rules when discovered, and any card-specific exceptions that modify legal movement.",
+            "score": 0
+          }
+        ],
+        "answer": "When Dracula moves by sea, he records sea locations on his trail as normal but typically takes sea damage according to the movement timing rules, so extended sea travel creates real attrition risk. Sea moves must still satisfy route and trail legality, including restrictions on repeating recent locations."
+      },
+      {
+        "question": "How can hunters exploit Dracula's sea movement in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-hunter-response-sea-trail",
+            "title": "Hunter counterplay to Dracula sea routes",
+            "url": "fury-of-dracula-4e://rules/hunter-counterplay-sea",
+            "excerpt": "When Dracula commits to sea movement, hunters gain actionable information from timing gaps, port access, and probable route branches between connected sea zones. Coordinated hunters can cover likely landfall ports, preserve rail options for rapid interception, and force Dracula into predictable paths where combat is more likely. Because Dracula generally takes pressure from repeated sea travel, delaying actions that keep him offshore can improve hunter odds before direct combat. Search and movement planning should prioritize locations that intersect both the visible trail timeline and the fastest legal return-to-land routes.",
+            "score": 0
+          }
+        ],
+        "answer": "Hunters can exploit Dracula sea travel by using route deduction and port coverage: sea paths narrow Dracula's legal landfall options, and coordinated movement can intercept likely return points. Keeping pressure while he remains offshore can also capitalize on sea-travel attrition before combat."
+      }
+    ]
+  },
+  "evaluation": {
+    "evidence_path": "/turns/*/evidence",
+    "answer_path": "/turns/*/answer",
+    "evidence_key": "url"
+  },
+  "tags": ["turns:multi", "mapped:true", "state:new-turn"]
+}

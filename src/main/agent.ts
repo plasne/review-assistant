@@ -193,19 +193,18 @@ export class AgentRuntime {
   }
 
   private forkWorker(): ChildProcess {
-    const runtimeCommand = this.options.command ?? process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND;
-    const runtimeArgs =
-      this.options.commandArgs?.join('\n') ?? process.env.REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS ?? process.env.REVIEW_ASSISTANT_COPILOT_COMMAND_ARGS;
-    const providerModule = this.options.providerModule ?? process.env.REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE;
+    const runtimeCommand = this.options.command ?? process.env.COPILOT_RUNTIME_COMMAND;
+    const runtimeArgs = this.options.commandArgs?.join('\n') ?? process.env.COPILOT_RUNTIME_ARGS;
+    const providerModule = this.options.providerModule ?? process.env.AGENT_PROVIDER_MODULE;
     const agentSettings = JSON.stringify(this.agentSettings);
     return fork(this.options.workerPath, [], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       env: {
         ...process.env,
         ...this.options.commandEnv,
-        ...(runtimeCommand ? { REVIEW_ASSISTANT_COPILOT_RUNTIME_COMMAND: runtimeCommand } : {}),
-        ...(runtimeArgs ? { REVIEW_ASSISTANT_COPILOT_RUNTIME_ARGS: runtimeArgs } : {}),
-        ...(providerModule ? { REVIEW_ASSISTANT_AGENT_PROVIDER_MODULE: providerModule } : {}),
+        ...(runtimeCommand ? { COPILOT_RUNTIME_COMMAND: runtimeCommand } : {}),
+        ...(runtimeArgs ? { COPILOT_RUNTIME_ARGS: runtimeArgs } : {}),
+        ...(providerModule ? { AGENT_PROVIDER_MODULE: providerModule } : {}),
         AGENT_SETTINGS: agentSettings
       }
     });
@@ -281,7 +280,8 @@ export class AgentRuntime {
       toolRequestId: request.requestId,
       ok: response.ok,
       code: response.ok ? undefined : response.error.code,
-      elapsedMs: Date.now() - startedAt
+      elapsedMs: Date.now() - startedAt,
+      ...localToolResultLogFields(response)
     });
     pending.child.send({
       type: 'toolResponse',
@@ -316,6 +316,28 @@ export class AgentRuntimeError extends Error {
     this.name = 'AgentRuntimeError';
   }
 }
+
+export const localToolResultLogFields = (response: ToolInvocationResponse): Record<string, unknown> => {
+  if (!response.ok || !isRecord(response.result)) {
+    return {};
+  }
+  const result = response.result;
+  return {
+    targetPath: stringField(result.targetPath),
+    containerPath: stringField(result.containerPath),
+    responseField: stringField(result.responseField),
+    evidenceField: stringField(result.evidenceField),
+    evidenceContainerPath: stringField(result.evidenceContainerPath),
+    savedEvidenceCount: numberField(result.savedEvidenceCount),
+    savedItemCount: numberField(result.savedItemCount),
+    containerItemCount: numberField(result.containerItemCount),
+    turnIndex: numberField(result.turnIndex)
+  };
+};
+
+const stringField = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+const numberField = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 export const normalizeProviderError = (error: unknown): AgentErrorEnvelope => {
   const message = error instanceof Error ? error.message : String(error);

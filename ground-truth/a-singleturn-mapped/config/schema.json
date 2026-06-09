@@ -1,0 +1,51 @@
+{
+  "type": "object",
+  "description": "A single-turn answer record with one shared evidence collection.",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for the record, typically a UUID."
+    },
+    "bucket": {
+      "type": "string",
+      "enum": ["TPM", "developer", "SME"],
+      "description": "Bucket categorizing the record for organizational purposes."
+    },
+    "question": {
+      "type": "string",
+      "description": "The user question to answer."
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Evidence used to support the answer.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "excerpt": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          }
+        },
+        "required": ["id", "title", "url", "excerpt"],
+        "additionalProperties": false
+      }
+    },
+    "answer": {
+      "type": "string",
+      "description": "The answer supported by the evidence."
+    }
+  },
+  "required": ["id", "bucket", "question", "evidence", "answer"],
+  "additionalProperties": false
+}

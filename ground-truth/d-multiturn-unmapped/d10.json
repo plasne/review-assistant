@@ -1,0 +1,56 @@
+{
+  "ref": "d10",
+  "description": "A two-turn flow where a follow-up combat question is recorded as a new turn with separate evidence.",
+  "input": {
+    "id": "",
+    "turns": []
+  },
+  "prompts": [
+    "How does combat work in Fury of Dracula? Record answer and evidence.",
+    "Add a new turn for this follow-up question: What ends a combat encounter in Fury of Dracula?"
+  ],
+  "output": {
+    "id": "",
+    "turns": [
+      {
+        "question": "How does combat work in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-combat-overview",
+            "title": "Combat overview and timing",
+            "url": "fury-of-dracula-4e://rules/combat-overview",
+            "excerpt": "Combat begins when a hunter and Dracula are in the same location and rules timing calls for an encounter. Combat is resolved in rounds. In each round, both sides choose legal combat cards or effects, reveal in the required timing window, and resolve results in order. Card text can deal damage, cancel actions, force reveals, or apply temporary restrictions. If a side cannot or does not continue, combat can end early according to card outcomes, damage thresholds, or mandatory retreat effects. Resolve all immediate effects before checking whether another combat round occurs.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-combat-rounds",
+            "title": "Combat rounds, reveal windows, and retreats",
+            "url": "fury-of-dracula-4e://rules/combat-rounds",
+            "excerpt": "Each combat round follows a strict sequence: choose cards or effects, reveal at the required moment, resolve text and damage, then check for end conditions. Reveal timing matters because some cards only trigger if the opponent reveals a matching type or timing keyword. Hunters and Dracula may be forced to retreat by card effects or rule conditions, ending combat in that location. If Dracula escapes through a legal retreat outcome, hunters must resume pursuit through movement and deduction rather than continuing the same combat instance. If defeat thresholds are met, resolve defeat immediately instead of starting another round.",
+            "score": 0
+          }
+        ],
+        "answer": "Combat is resolved in rounds when a hunter and Dracula meet: both sides choose legal combat options, reveal at specific timing windows, resolve effects and damage in order, then check for retreat or defeat before another round starts."
+      },
+      {
+        "question": "What ends a combat encounter in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-combat-end-conditions",
+            "title": "Combat end conditions and immediate outcomes",
+            "url": "fury-of-dracula-4e://rules/combat-end-conditions",
+            "excerpt": "A combat encounter ends when an end condition is met at the close of resolution for the current step or round. Common end conditions include one side being defeated, a mandatory retreat effect resolving, a card text that ends combat immediately, or Dracula escaping by a legal effect. If Dracula escapes, the encounter ends and hunters must continue pursuit through normal movement and deduction. If a defeat threshold is reached, apply defeat procedure immediately and do not begin another combat round. Any pending mandatory effects from the current reveal window resolve before final cleanup unless a rule says the effect is canceled.",
+            "score": 0
+          }
+        ],
+        "answer": "Combat ends when a formal end condition occurs, most commonly defeat, mandatory retreat, or a card effect that ends or escapes combat. If defeat happens, resolve defeat immediately; if Dracula escapes, the encounter ends and pursuit continues on the map."
+      }
+    ]
+  },
+  "evaluation": {
+    "evidence_path": "/turns/*/evidence",
+    "answer_path": "/turns/*/answer",
+    "evidence_key": "url"
+  },
+  "tags": ["turns:multi", "mapped:false", "state:new-turn"]
+}
