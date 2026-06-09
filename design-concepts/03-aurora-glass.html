@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Review Assistant — Aurora Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg0:#070b16; --bg1:#0b1024; --glass:rgba(20,28,54,.55); --glass-2:rgba(30,40,72,.45);
+    --stroke:rgba(140,170,255,.16); --stroke-hi:rgba(140,200,255,.4);
+    --txt:#e8eefc; --dim:#9aa8cf;
+    --teal:#34e6c5; --violet:#8b8bff; --gold:#f0c66b; --rose:#ff8aa6;
+    --r:18px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg0);color:var(--txt);overflow:hidden;
+    font-family:"Manrope",system-ui,sans-serif;font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;
+  }
+  /* aurora mesh */
+  .aurora{position:fixed;inset:-20%;z-index:0;filter:blur(70px);opacity:.85;pointer-events:none}
+  .aurora i{position:absolute;border-radius:50%;mix-blend-mode:screen;animation:drift 18s ease-in-out infinite alternate}
+  .a1{width:46vw;height:46vw;left:-6%;top:-10%;background:radial-gradient(circle,#1f6fff,transparent 65%)}
+  .a2{width:40vw;height:40vw;right:-8%;top:-6%;background:radial-gradient(circle,#16c2a8,transparent 65%);animation-delay:-6s}
+  .a3{width:52vw;height:52vw;left:20%;bottom:-30%;background:radial-gradient(circle,#7b5bff,transparent 65%);animation-delay:-11s}
+  @keyframes drift{to{transform:translate3d(4%,5%,0) scale(1.12)}}
+
+  .app{position:relative;z-index:1;display:grid;grid-template-rows:auto 1fr auto;height:100%;padding:14px;gap:14px}
+
+  header{display:flex;align-items:center;gap:16px;padding:12px 18px;border-radius:var(--r);
+    background:var(--glass);backdrop-filter:blur(22px);border:1px solid var(--stroke);
+    box-shadow:0 8px 40px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.06)}
+  .brand{display:flex;align-items:center;gap:12px}
+  .orb{width:34px;height:34px;border-radius:11px;background:conic-gradient(from 200deg,var(--teal),var(--violet),var(--gold),var(--teal));box-shadow:0 0 24px rgba(52,230,197,.5)}
+  .brand h1{font-family:"Syne";font-weight:800;font-size:1.2rem;letter-spacing:-.01em;margin:0}
+  .brand h1 span{background:linear-gradient(90deg,var(--teal),var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .grow{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:8px;background:var(--glass-2);border:1px solid var(--stroke);border-radius:999px;padding:6px 12px}
+  .pill label{font-size:.66rem;text-transform:uppercase;letter-spacing:.14em;color:var(--dim)}
+  select.g{appearance:none;background:transparent;border:0;color:var(--txt);font-family:inherit;font-weight:600;font-size:.85rem;cursor:pointer;padding-right:14px;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0l4.5 6 4.5-6z' fill='%2334e6c5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right center}
+  select.g option{color:#111}
+  .who{display:inline-flex;align-items:center;gap:7px;font-size:.8rem;color:var(--dim)}
+  .who b{color:var(--teal)}
+  .avatar{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--violet),var(--rose))}
+  .cta{font-family:"Syne";font-weight:700;font-size:.82rem;border:0;cursor:pointer;color:#06120f;
+    padding:9px 16px;border-radius:11px;background:linear-gradient(135deg,var(--teal),#7be0c9);box-shadow:0 6px 20px rgba(52,230,197,.35)}
+  .cta:hover{filter:brightness(1.08)}
+
+  main{display:grid;grid-template-columns:300px minmax(0,1.7fr) minmax(310px,1fr);gap:14px;min-height:0}
+  .panel{border-radius:var(--r);background:var(--glass);backdrop-filter:blur(22px);border:1px solid var(--stroke);
+    box-shadow:0 10px 50px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.05);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .ph{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 10px}
+  .ph h2{font-family:"Syne";font-weight:700;font-size:.95rem;margin:0;letter-spacing:.01em}
+  .ph .badge{font-size:.66rem;color:var(--dim);background:var(--glass-2);border:1px solid var(--stroke);padding:3px 9px;border-radius:999px}
+  .scroll{overflow:auto;padding:0 12px 14px;min-height:0}
+
+  .card{position:relative;width:100%;text-align:left;cursor:pointer;color:inherit;
+    background:var(--glass-2);border:1px solid var(--stroke);border-radius:14px;padding:12px 14px;margin-bottom:10px;transition:.18s}
+  .card:hover{border-color:var(--stroke-hi);transform:translateY(-1px)}
+  .card.on{border-color:transparent;background:linear-gradient(var(--bg1),var(--bg1)) padding-box,linear-gradient(135deg,var(--teal),var(--violet)) border-box;border:1px solid transparent;box-shadow:0 0 0 1px rgba(52,230,197,.2),0 8px 30px rgba(52,230,197,.12)}
+  .card .r1{display:flex;justify-content:space-between;align-items:center}
+  .card .nm{font-weight:700;font-size:.92rem}
+  .card .sub{font-size:.74rem;color:var(--dim);margin-top:3px}
+  .dot{font-size:.62rem;font-weight:700;padding:3px 9px;border-radius:999px}
+  .dot.flag{color:#06120f;background:var(--rose)} .dot.pend{color:#06120f;background:var(--gold)} .dot.done{color:#06120f;background:var(--teal)}
+
+  .detail{padding:18px}
+  .eyebrow{font-size:.68rem;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)}
+  .htitle{font-family:"Syne";font-weight:800;font-size:1.7rem;margin:6px 0 2px;letter-spacing:-.02em}
+  .lead{color:var(--dim);max-width:62ch}
+  .ev{margin-top:16px;border-radius:16px;border:1px solid var(--stroke);overflow:hidden;background:linear-gradient(180deg,var(--glass-2),rgba(12,18,38,.5))}
+  .ev-h{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--stroke)}
+  .ev-h h3{font-family:"Syne";font-weight:700;font-size:1.02rem;margin:0}
+  .ev-h .eid{font-size:.7rem;color:var(--gold);letter-spacing:.1em}
+  .ev-b{padding:14px 16px;display:grid;gap:12px}
+  .tags{display:flex;flex-wrap:wrap;gap:8px}
+  .t{font-size:.72rem;color:var(--dim);background:rgba(255,255,255,.04);border:1px solid var(--stroke);border-radius:999px;padding:4px 10px}
+  .t b{color:var(--txt)}
+  .excerpt{border-left:2px solid var(--teal);padding:6px 0 6px 14px;color:#dfe7fb;font-size:.95rem}
+  .conf{display:flex;align-items:center;gap:10px}
+  .track{flex:1;height:7px;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden}
+  .track i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--teal),var(--violet))}
+  .conf .v{font-weight:700;color:var(--teal)}
+  .stars{display:inline-flex;gap:4px}
+  .stars button{background:none;border:0;cursor:pointer;font-size:1.15rem;color:rgba(255,255,255,.22);padding:0}
+  .stars button.on{color:var(--gold);text-shadow:0 0 12px rgba(240,198,107,.6)}
+
+  /* chat */
+  .chat{display:flex;flex-direction:column;min-height:0}
+  .thread{flex:1;overflow:auto;padding:4px 14px 14px;display:flex;flex-direction:column;gap:12px;min-height:0}
+  .msg{max-width:88%;padding:10px 13px;border-radius:16px;font-size:.88rem;line-height:1.45}
+  .msg.bot{align-self:flex-start;background:var(--glass-2);border:1px solid var(--stroke);border-bottom-left-radius:5px}
+  .msg.me{align-self:flex-end;color:#06120f;background:linear-gradient(135deg,var(--teal),#86e7d0);border-bottom-right-radius:5px}
+  .msg .nm{font-size:.62rem;text-transform:uppercase;letter-spacing:.14em;opacity:.7;margin-bottom:3px}
+  .composer{padding:12px 14px;border-top:1px solid var(--stroke);display:grid;gap:10px}
+  .composer textarea{background:rgba(255,255,255,.04);border:1px solid var(--stroke);border-radius:13px;color:var(--txt);font-family:inherit;font-size:.88rem;padding:10px 12px;resize:none;min-height:2.6rem}
+  .composer textarea:focus{outline:none;border-color:var(--stroke-hi)}
+  .composer .row{display:flex;gap:10px}
+  .composer button{flex:1;font-family:"Syne";font-weight:700;font-size:.82rem;border:0;cursor:pointer;border-radius:12px;padding:10px;color:#06120f;background:linear-gradient(135deg,var(--teal),#7be0c9)}
+  .composer button.ghost{background:rgba(255,255,255,.05);color:var(--txt);border:1px solid var(--stroke)}
+
+  footer{display:flex;justify-content:space-between;padding:9px 18px;border-radius:var(--r);background:var(--glass);backdrop-filter:blur(22px);border:1px solid var(--stroke);font-size:.72rem;color:var(--dim)}
+  footer .live{color:var(--teal)}
+  ::-webkit-scrollbar{width:9px}::-webkit-scrollbar-thumb{background:rgba(140,170,255,.2);border-radius:9px}
+</style>
+</head>
+<body>
+<div class="aurora"><i class="a1"></i><i class="a2"></i><i class="a3"></i></div>
+<div class="app">
+  <header>
+    <div class="brand"><div class="orb"></div><h1>Review&nbsp;<span>Assistant</span></h1></div>
+    <div class="grow"></div>
+    <span class="pill"><label>Project</label>
+      <select class="g"><option>contract-renewals-q3</option><option>vendor-intake</option><option>policy-audit</option></select>
+    </span>
+    <span class="who"><span class="avatar"></span>signed in as&nbsp;<b>@andrewDoing</b></span>
+    <button class="cta">Connect Copilot</button>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="ph"><h2>Records</h2><span class="badge">24 total</span></div>
+      <div class="scroll" id="recs">
+        <button class="card on"><div class="r1"><span class="nm">Acme Corp — Master Agreement</span><span class="dot flag">flag</span></div><div class="sub">3 evidence · §8.2 · 2h ago</div></button>
+        <button class="card"><div class="r1"><span class="nm">Globex Renewal Addendum</span><span class="dot pend">pending</span></div><div class="sub">1 evidence · §3.1 · 5h ago</div></button>
+        <button class="card"><div class="r1"><span class="nm">Initech SLA Schedule</span><span class="dot done">done</span></div><div class="sub">2 evidence · §5.4 · 1d ago</div></button>
+        <button class="card"><div class="r1"><span class="nm">Umbrella Data Terms</span><span class="dot flag">flag</span></div><div class="sub">5 evidence · §12 · 1d ago</div></button>
+        <button class="card"><div class="r1"><span class="nm">Soylent Pricing Exhibit</span><span class="dot pend">pending</span></div><div class="sub">0 evidence · §16 · 2d ago</div></button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="ph"><h2>Record Details</h2><span class="badge">REC-0001</span></div>
+      <div class="scroll detail">
+        <div class="eyebrow">Master Agreement</div>
+        <h1 class="htitle">Acme Corp</h1>
+        <p class="lead">The agent surfaced three evidence units. Liability and renewal cadence await your verdict — one falls below the confidence threshold.</p>
+
+        <div class="ev">
+          <div class="ev-h"><h3>Limitation of Liability</h3><span class="eid">EV-0114</span></div>
+          <div class="ev-b">
+            <div class="tags"><span class="t"><b>Target</b> §8.2</span><span class="t"><b>Type</b> clause</span><span class="t"><b>Editable</b> yes</span></div>
+            <blockquote class="excerpt">"…aggregate liability shall not exceed the fees paid in the twelve (12) months preceding the claim."</blockquote>
+            <div class="conf"><span class="t" style="border:0;background:none;padding:0;color:var(--dim)">Confidence</span><div class="track"><i style="width:91%"></i></div><span class="v">0.91</span></div>
+            <div class="stars" data-stars><button>★</button><button>★</button><button>★</button><button>★</button><button>★</button></div>
+          </div>
+        </div>
+
+        <div class="ev">
+          <div class="ev-h"><h3>Auto-Renewal Cadence</h3><span class="eid">EV-0115</span></div>
+          <div class="ev-b">
+            <div class="tags"><span class="t"><b>Target</b> §3.1</span><span class="t"><b>Type</b> clause</span><span class="t"><b>Editable</b> yes</span></div>
+            <blockquote class="excerpt">"…renews for successive one-year terms unless either party provides ninety (90) days' written notice."</blockquote>
+            <div class="conf"><span class="t" style="border:0;background:none;padding:0;color:var(--dim)">Confidence</span><div class="track"><i style="width:76%;background:linear-gradient(90deg,var(--gold),var(--teal))"></i></div><span class="v" style="color:var(--gold)">0.76</span></div>
+            <div class="stars" data-stars><button>★</button><button>★</button><button>★</button><button>★</button><button>★</button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel chat">
+      <div class="ph"><h2>Copilot</h2><span class="badge"><span style="color:var(--teal)">●</span> online</span></div>
+      <div class="thread">
+        <div class="msg bot"><div class="nm">Copilot</div>I reviewed §8.2 — the liability cap excludes IP infringement but not confidentiality breaches. Worth flagging.</div>
+        <div class="msg me"><div class="nm">You</div>Draft a redline adding confidentiality to the carve-outs.</div>
+        <div class="msg bot"><div class="nm">Copilot</div>Proposed: "…except for Sections 8, 9, and 11." Apply this revision to EV-0114?</div>
+      </div>
+      <form class="composer" onsubmit="return false">
+        <textarea placeholder="Message Copilot…"></textarea>
+        <div class="row"><button class="ghost" type="button">Clear</button><button type="submit">Send</button></div>
+      </form>
+    </section>
+  </main>
+
+  <footer><span><span class="live">●</span> Copilot connected · 42ms</span><span>All changes saved automatically</span></footer>
+</div>
+<script>
+  document.querySelectorAll('#recs .card').forEach(c=>c.addEventListener('click',()=>{
+    document.querySelectorAll('#recs .card').forEach(x=>x.classList.remove('on'));c.classList.add('on');}));
+  document.querySelectorAll('[data-stars]').forEach(g=>{const b=[...g.children];
+    b.forEach((btn,i)=>btn.addEventListener('click',()=>b.forEach((x,j)=>x.classList.toggle('on',j<=i))));});
+</script>
+</body>
+</html>

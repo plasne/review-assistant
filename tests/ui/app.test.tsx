@@ -3,7 +3,18 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App, RenderTree } from '../../src/renderer/main';
-import type { Api, ChatCanceled, ChatStreamChunk, ChatStreamComplete, ChatStreamError, GitHubLoginCompletion, RenderNode } from '../../src/shared/types';
+import type {
+  Api,
+  ChatCanceled,
+  ChatStreamChunk,
+  ChatStreamComplete,
+  ChatStreamError,
+  GitHubLoginCompletion,
+  RenderNode,
+  Theme,
+  ThemeState,
+  ThemeTokens
+} from '../../src/shared/types';
 
 type ListenerMap = {
   chunk: ((chunk: ChatStreamChunk) => void)[];
@@ -37,6 +48,10 @@ const api: Api = {
   discardRecordChanges: vi.fn(),
   getFeedbackConfig: vi.fn(),
   saveFeedbackConfig: vi.fn(),
+  getThemeState: vi.fn(),
+  saveTheme: vi.fn(),
+  deleteTheme: vi.fn(),
+  setActiveTheme: vi.fn(),
   getProjectUser: vi.fn(),
   submitFeedback: vi.fn(),
   getAgentStatus: vi.fn(),
@@ -84,8 +99,55 @@ const api: Api = {
   })
 };
 
+const bootstrapThemeTokens: ThemeTokens = {
+  bg: '#201122',
+  bg2: '#241628',
+  surface: '#2b1830',
+  surface2: '#362040',
+  border: '#6d4b78',
+  text: '#f9efff',
+  textDim: '#c8afd1',
+  accent: '#ff8bd8',
+  accent2: '#8bd3ff',
+  success: '#8be69c',
+  warning: '#ffd166',
+  danger: '#ff9aa8',
+  focusRing: '#f4a7ff',
+  fontSans: '"Bootstrap Sans", sans-serif',
+  fontSerif: '"Bootstrap Serif", serif'
+};
+
+const alternateThemeTokens: ThemeTokens = {
+  ...bootstrapThemeTokens,
+  bg: '#042a2b',
+  bg2: '#063536',
+  surface: '#0b4446',
+  surface2: '#0f5658',
+  text: '#e6fffb',
+  accent: '#2dd4bf'
+};
+
+const createThemeState = (): ThemeState => ({
+  activeThemeId: 'bootstrap-theme',
+  themes: [
+    {
+      id: 'bootstrap-theme',
+      name: 'Bootstrap Theme',
+      builtIn: true,
+      tokens: bootstrapThemeTokens
+    },
+    {
+      id: 'warm-theme',
+      name: 'Warm Theme',
+      builtIn: true,
+      tokens: alternateThemeTokens
+    }
+  ]
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
+  document.documentElement.removeAttribute('style');
   listeners.chunk = [];
   listeners.complete = [];
   listeners.error = [];
@@ -138,6 +200,100 @@ const findRecordCreateButton = async (): Promise<HTMLElement> => {
 };
 
 describe('review UI', () => {
+  it('applies the active bootstrap theme before rendering loaded UI state', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [],
+      themeState: {
+        activeThemeId: 'bootstrap-theme',
+        themes: [
+          {
+            id: 'bootstrap-theme',
+            name: 'Bootstrap Theme',
+            builtIn: false,
+            tokens: bootstrapThemeTokens
+          }
+        ]
+      },
+      version: 'v0.1.0-test'
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#201122'));
+    expect(document.documentElement.style.getPropertyValue('--surface')).toBe('#2b1830');
+    expect(document.documentElement.style.getPropertyValue('--text')).toBe('#f9efff');
+    expect(document.documentElement.style.getPropertyValue('--font-sans')).toBe('"Bootstrap Sans", sans-serif');
+    expect(await screen.findByLabelText('Current project')).toBeInTheDocument();
+  });
+
+  it('selects a built-in theme through the typed preload API and applies it immediately', async () => {
+    const initialThemeState = createThemeState();
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [],
+      themeState: initialThemeState,
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.setActiveTheme).mockImplementation(async (themeId) => ({ ...initialThemeState, activeThemeId: themeId }));
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Manage themes' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Themes' });
+
+    await userEvent.selectOptions(within(dialog).getByLabelText('Active theme'), 'warm-theme');
+
+    expect(api.setActiveTheme).toHaveBeenCalledWith('warm-theme');
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#042a2b'));
+    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#2dd4bf');
+  });
+
+  it('authors a custom theme, saves it through preload, and applies the persisted selection', async () => {
+    const initialThemeState = createThemeState();
+    let savedTheme: Theme | undefined;
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [],
+      themeState: initialThemeState,
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.saveTheme).mockImplementation(async (theme) => {
+      savedTheme = theme;
+      return { activeThemeId: initialThemeState.activeThemeId, themes: [...initialThemeState.themes, theme] };
+    });
+    vi.mocked(api.setActiveTheme).mockImplementation(async (themeId) => ({
+      activeThemeId: themeId,
+      themes: savedTheme ? [...initialThemeState.themes, savedTheme] : initialThemeState.themes
+    }));
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Manage themes' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Themes' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'New custom theme' }));
+    await userEvent.clear(within(dialog).getByLabelText('Name'));
+    await userEvent.type(within(dialog).getByLabelText('Name'), 'Custom Ocean');
+    await userEvent.clear(within(dialog).getByLabelText('Identifier'));
+    await userEvent.type(within(dialog).getByLabelText('Identifier'), 'custom-ocean');
+    await userEvent.clear(within(dialog).getByLabelText('Background'));
+    await userEvent.type(within(dialog).getByLabelText('Background'), '#001122');
+    await userEvent.clear(within(dialog).getByLabelText('Accent'));
+    await userEvent.type(within(dialog).getByLabelText('Accent'), '#33ddff');
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save and apply' }));
+
+    expect(api.saveTheme).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'custom-ocean',
+        name: 'Custom Ocean',
+        builtIn: false,
+        tokens: expect.objectContaining({ bg: '#001122', accent: '#33ddff' })
+      })
+    );
+    expect(api.setActiveTheme).toHaveBeenCalledWith('custom-ocean');
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#001122'));
+    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#33ddff');
+  });
+
   it('renders request and response presentations with distinct classes', () => {
     render(
       <RenderTree
@@ -813,6 +969,11 @@ describe('review UI', () => {
     const createProjectButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Create project' });
     expect(createProjectButton).toHaveClass('header-action-button', 'action-icon-button');
     expect(createProjectButton).toHaveAttribute('data-tooltip', 'Create project');
+    const manageThemesButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Manage themes' });
+    expect(manageThemesButton).toHaveClass('secondary-button', 'header-action-button', 'action-icon-button');
+    expect(manageThemesButton).toHaveAttribute('data-tooltip', 'Manage themes');
+    expect(manageThemesButton).not.toHaveAttribute('data-tooltip-align');
+    expect(manageThemesButton.querySelector('.action-svg-icon')).not.toBeNull();
     expect(document.querySelector('.create-record-button')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Refresh records' })).not.toBeInTheDocument();
     await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'sample-project');
@@ -821,6 +982,7 @@ describe('review UI', () => {
     const configureButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Configure' });
     expect(configureButton).toHaveClass('header-action-button', 'action-icon-button');
     expect(configureButton).toHaveAttribute('data-tooltip', 'Configure project');
+    expect(configureButton.nextElementSibling).toBe(manageThemesButton);
     const createRecordButton = getRecordCreateButton();
     const refreshRecordsButton = screen.getByRole('button', { name: 'Refresh records' });
     expect(createRecordButton).toBeEnabled();

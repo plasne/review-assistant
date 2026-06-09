@@ -29,7 +29,10 @@ import {
   assertRecordDetail,
   assertRecordSaveResult,
   assertRecordId,
-  assertChatAttachmentId
+  assertChatAttachmentId,
+  assertTheme,
+  assertThemeId,
+  assertThemeState
 } from '../shared/validators';
 import { ConfigError, loadAppConfig } from './env';
 import { createStorageAdapter, type StorageAdapter } from './storage';
@@ -38,6 +41,7 @@ import { createLocalToolRuntime } from './tools';
 import { mergeExternalMcpServers, parseExternalMcpServers } from './mcp';
 import { startCopilotLogin } from './copilot-auth';
 import { RecordDraftStore } from './drafts';
+import { ThemeStore } from './theme-store';
 
 let mainWindow: BrowserWindow | undefined;
 let storage: StorageAdapter | undefined;
@@ -47,6 +51,7 @@ let appConfigValues: Record<string, string> = {};
 let appMcpConfigPath: string | undefined;
 let appPromptPath: string | undefined;
 let allowClose = false;
+let themeStore: ThemeStore | undefined;
 const agent = new AgentRuntime({ workerPath: path.join(__dirname, '../agent/agent-process.js') });
 const attachmentCache = new Map<string, ChatAttachmentContent>();
 const MAX_ATTACHMENT_BYTES = 64 * 1024;
@@ -109,6 +114,13 @@ const requireStorage = (): StorageAdapter => {
   return storage;
 };
 
+const requireThemeStore = (): ThemeStore => {
+  if (!themeStore) {
+    throw new Error('Theme store is not configured.');
+  }
+  return themeStore;
+};
+
 const drafts = new RecordDraftStore(requireStorage);
 
 const readOptionalTextFile = async (filePath: string | undefined): Promise<string | undefined> => {
@@ -169,7 +181,8 @@ const resolveCachedAttachments = (attachments: unknown): ChatAttachmentContent[]
 const registerIpc = (): void => {
   ipcMain.handle('app:getBootstrap', async () => {
     const projects = storage ? await storage.listProjects() : [];
-    return assertBootstrap({ configError: bootstrapError, backendKind, projects, version: APP_VERSION });
+    const themeState = await requireThemeStore().getState();
+    return assertBootstrap({ configError: bootstrapError, backendKind, projects, themeState, version: APP_VERSION });
   });
   ipcMain.handle('projects:list', async () => assertProjectSummaries(await requireStorage().listProjects()));
   ipcMain.handle('projects:create', async (_event, projectId: unknown) =>
@@ -205,6 +218,10 @@ const registerIpc = (): void => {
   ipcMain.handle('feedback:saveConfig', async (_event, projectId: unknown, config: unknown) =>
     assertFeedbackConfig(await requireStorage().saveFeedbackConfig(assertProjectId(projectId), assertFeedbackConfig(config)))
   );
+  ipcMain.handle('theme:getState', async () => assertThemeState(await requireThemeStore().getState()));
+  ipcMain.handle('theme:save', async (_event, theme: unknown) => assertThemeState(await requireThemeStore().saveTheme(assertTheme(theme))));
+  ipcMain.handle('theme:delete', async (_event, themeId: unknown) => assertThemeState(await requireThemeStore().deleteTheme(assertThemeId(themeId))));
+  ipcMain.handle('theme:setActive', async (_event, themeId: unknown) => assertThemeState(await requireThemeStore().setActiveTheme(assertThemeId(themeId))));
   ipcMain.handle('feedback:getProjectUser', async (_event, projectId: unknown) =>
     assertProjectUser(await requireStorage().getProjectUser(assertProjectId(projectId)))
   );
@@ -344,6 +361,7 @@ const registerIpc = (): void => {
 };
 
 app.whenReady().then(async () => {
+  themeStore = new ThemeStore({ userDataPath: app.getPath('userData') });
   initializeBackend();
   registerIpc();
   await createWindow();

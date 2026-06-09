@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Review Assistant — Signal Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#0a0e0d; --panel:#0e1413; --panel-2:#121a18; --grid:#16201d;
+    --edge:#1f2c28; --txt:#c8d6cf; --dim:#6f8178;
+    --amber:#ffb000; --green:#39ff7a; --cyan:#28e0c8; --red:#ff5d5d;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg);color:var(--txt);
+    font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:13.5px;line-height:1.45;
+  }
+  /* scanline + grid atmosphere */
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;
+    background:repeating-linear-gradient(0deg,rgba(57,255,122,.025) 0 1px,transparent 1px 3px);mix-blend-mode:overlay}
+  .app{display:grid;grid-template-rows:auto 1fr auto;height:100%;
+    background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:26px 26px;background-position:center}
+
+  header{display:flex;align-items:center;gap:1rem;padding:.55rem .9rem;border-bottom:1px solid var(--edge);background:linear-gradient(180deg,#0d1412,#0a0e0d)}
+  .logo{display:flex;align-items:center;gap:.6rem;font-weight:700;letter-spacing:.06em}
+  .logo .blip{width:.7rem;height:.7rem;background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 1.6s infinite}
+  @keyframes pulse{50%{opacity:.35}}
+  .logo b{color:var(--green)}
+  .logo b::before{content:"▌"}
+  .sep{flex:1}
+  .term-field{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--dim)}
+  .term-field::before{content:"❯";color:var(--green)}
+  select.tm{background:#06100d;color:var(--green);border:1px solid var(--edge);font-family:inherit;font-size:.78rem;padding:.25rem 1.4rem .25rem .5rem;appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0l4.5 6 4.5-6z' fill='%2339ff7a'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right .45rem center}
+  .tag{border:1px solid var(--edge);padding:.18rem .5rem;font-size:.72rem;color:var(--cyan)}
+  .tag.user{color:var(--amber);border-color:#3a2f12}
+  .auth{background:#06100d;border:1px solid var(--green);color:var(--green);font-family:inherit;font-size:.74rem;font-weight:600;padding:.3rem .7rem;cursor:pointer;text-transform:uppercase;letter-spacing:.08em}
+  .auth:hover{background:var(--green);color:#06100d}
+
+  main{display:grid;grid-template-columns:248px minmax(0,1.7fr) minmax(280px,1fr);min-height:0}
+  .pane{min-height:0;overflow:auto;border-right:1px solid var(--edge);background:rgba(10,14,13,.72)}
+  .pane:last-child{border-right:0}
+  .pane-head{position:sticky;top:0;background:#0c1210;border-bottom:1px solid var(--edge);padding:.45rem .7rem;font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);display:flex;justify-content:space-between;z-index:2}
+  .pane-head .k{color:var(--amber)}
+
+  .rec{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--grid);color:var(--txt);font-family:inherit;cursor:pointer;padding:.55rem .7rem}
+  .rec:hover{background:#0f1816}
+  .rec.on{background:#0f1816;border-left:3px solid var(--green);padding-left:calc(.7rem - 3px)}
+  .rec .top{display:flex;justify-content:space-between;font-size:.72rem;color:var(--dim)}
+  .rec .nm{font-weight:600;color:var(--txt);margin:.15rem 0}
+  .st{font-size:.66rem;padding:.05rem .4rem;border:1px solid currentColor}
+  .st.flag{color:var(--red)} .st.pend{color:var(--amber)} .st.done{color:var(--green)}
+
+  .detail{padding:.9rem 1.1rem}
+  .rid{font-size:.72rem;color:var(--dim);letter-spacing:.1em}
+  .rid b{color:var(--green)}
+  h2.title{font-family:"IBM Plex Sans",sans-serif;font-weight:700;font-size:1.5rem;margin:.25rem 0 .1rem;letter-spacing:-.01em;color:#eafff4}
+  .summary{color:var(--dim);max-width:60ch;margin:.3rem 0 1.1rem}
+
+  .ev{border:1px solid var(--edge);background:linear-gradient(180deg,var(--panel-2),var(--panel));margin:.9rem 0;position:relative}
+  .ev::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--cyan);box-shadow:0 0 12px var(--cyan)}
+  .ev-head{display:flex;justify-content:space-between;align-items:center;padding:.55rem .8rem;border-bottom:1px solid var(--grid)}
+  .ev-head h3{font-family:"IBM Plex Sans";font-size:.98rem;margin:0;color:#eafff4}
+  .ev-head .eid{font-size:.68rem;color:var(--cyan)}
+  .ev-body{padding:.7rem .8rem;display:grid;gap:.7rem}
+  .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.45rem}
+  .kv div{border:1px solid var(--grid);padding:.35rem .5rem;background:#0a100e}
+  .kv .lab{font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .kv .val{color:var(--txt)}
+  .payload{background:#06100d;border:1px solid var(--grid);padding:.55rem .65rem;color:var(--green);white-space:pre-wrap;font-size:.82rem}
+  .payload .cmt{color:var(--dim)}
+  .meter{display:flex;align-items:center;gap:.5rem}
+  .meter .bar{flex:1;height:.5rem;background:#0a100e;border:1px solid var(--grid);position:relative;overflow:hidden}
+  .meter .bar i{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--green),var(--cyan))}
+  .verdict{display:flex;gap:.4rem;flex-wrap:wrap}
+  .verdict button{background:#0a100e;border:1px solid var(--edge);color:var(--dim);font-family:inherit;font-size:.74rem;padding:.3rem .6rem;cursor:pointer;text-transform:uppercase;letter-spacing:.06em}
+  .verdict button[data-v="ok"].on{color:var(--green);border-color:var(--green);box-shadow:0 0 8px rgba(57,255,122,.4)}
+  .verdict button[data-v="warn"].on{color:var(--amber);border-color:var(--amber)}
+  .verdict button[data-v="rej"].on{color:var(--red);border-color:var(--red)}
+
+  /* chat */
+  .chat{display:flex;flex-direction:column;height:100%}
+  .log{flex:1;min-height:0;overflow:auto;padding:.7rem .8rem;display:flex;flex-direction:column;gap:.55rem}
+  .ln{font-size:.84rem;white-space:pre-wrap}
+  .ln .who{color:var(--dim)}
+  .ln.usr .who{color:var(--amber)} .ln.usr{color:#e7f3ec}
+  .ln.sys .who{color:var(--cyan)} .ln.sys{color:var(--txt)}
+  .ln .who::after{content:" ❯ "}
+  .input{border-top:1px solid var(--edge);padding:.6rem;display:flex;gap:.5rem;background:#0c1210}
+  .input span{color:var(--green);padding-top:.45rem}
+  .input textarea{flex:1;background:#06100d;border:1px solid var(--edge);color:var(--txt);font-family:inherit;font-size:.84rem;padding:.45rem;resize:none;min-height:2.4rem}
+  .input button{background:var(--green);border:0;color:#06100d;font-family:inherit;font-weight:700;padding:0 .9rem;cursor:pointer;text-transform:uppercase}
+
+  footer{border-top:1px solid var(--edge);padding:.3rem .9rem;font-size:.68rem;color:var(--dim);display:flex;justify-content:space-between;background:#0c1210}
+  footer .ok{color:var(--green)}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--edge)}::-webkit-scrollbar-track{background:#06100d}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo"><span class="blip"></span>REVIEW<b></b>ASSISTANT</div>
+    <span class="tag">v2.4.0</span>
+    <div class="sep"></div>
+    <div class="term-field"><span>load --project</span>
+      <select class="tm"><option>contract-renewals-q3</option><option>vendor-intake</option><option>policy-audit</option></select>
+    </div>
+    <span class="tag user">@andrewDoing</span>
+    <button class="auth">connect copilot</button>
+  </header>
+
+  <main>
+    <section class="pane">
+      <div class="pane-head"><span>records.db</span><span class="k">[24]</span></div>
+      <button class="rec on"><div class="top"><span>REC-0001</span><span class="st flag">FLAG</span></div><div class="nm">Acme Corp — Master Agreement</div><div class="top"><span>3 evidence</span><span>0x8.2</span></div></button>
+      <button class="rec"><div class="top"><span>REC-0002</span><span class="st pend">PEND</span></div><div class="nm">Globex Renewal Addendum</div><div class="top"><span>1 evidence</span><span>0x3.1</span></div></button>
+      <button class="rec"><div class="top"><span>REC-0003</span><span class="st done">DONE</span></div><div class="nm">Initech SLA Schedule</div><div class="top"><span>2 evidence</span><span>0x5.4</span></div></button>
+      <button class="rec"><div class="top"><span>REC-0004</span><span class="st flag">FLAG</span></div><div class="nm">Umbrella Data Terms</div><div class="top"><span>5 evidence</span><span>0x12.0</span></div></button>
+      <button class="rec"><div class="top"><span>REC-0005</span><span class="st pend">PEND</span></div><div class="nm">Soylent Pricing Exhibit</div><div class="top"><span>0 evidence</span><span>0x16</span></div></button>
+    </section>
+
+    <section class="pane">
+      <div class="pane-head"><span>record.inspect</span><span class="k">REC-0001</span></div>
+      <div class="detail">
+        <div class="rid">// id <b>REC-0001</b> · sha 4f2a9c · updated 2h ago</div>
+        <h2 class="title">Acme Corp — Master Agreement</h2>
+        <p class="summary">Agent extracted 3 evidence units. Liability cap and renewal cadence require human verdict. Confidence below threshold on §3.1.</p>
+
+        <div class="ev">
+          <div class="ev-head"><h3>Limitation of Liability</h3><span class="eid">EV-0114</span></div>
+          <div class="ev-body">
+            <div class="kv">
+              <div><div class="lab">target</div><div class="val">§8.2</div></div>
+              <div><div class="lab">type</div><div class="val">clause</div></div>
+              <div><div class="lab">editable</div><div class="val">true</div></div>
+            </div>
+            <div class="payload"><span class="cmt"># extracted_text</span>
+In no event shall either party's aggregate liability exceed the fees paid in the twelve (12) months preceding the claim.</div>
+            <div class="meter"><span class="lab" style="font-size:.62rem;color:var(--dim)">CONF</span><div class="bar"><i style="width:91%"></i></div><span style="color:var(--green)">0.91</span></div>
+            <div class="verdict" data-verdict><button data-v="ok">accept</button><button data-v="warn">revise</button><button data-v="rej">reject</button></div>
+          </div>
+        </div>
+
+        <div class="ev">
+          <div class="ev-head"><h3>Auto-Renewal Cadence</h3><span class="eid">EV-0115</span></div>
+          <div class="ev-body">
+            <div class="kv">
+              <div><div class="lab">target</div><div class="val">§3.1</div></div>
+              <div><div class="lab">type</div><div class="val">clause</div></div>
+              <div><div class="lab">editable</div><div class="val">true</div></div>
+            </div>
+            <div class="payload"><span class="cmt"># extracted_text</span>
+This Agreement renews for successive one-year terms unless either party provides ninety (90) days' written notice.</div>
+            <div class="meter"><span class="lab" style="font-size:.62rem;color:var(--dim)">CONF</span><div class="bar"><i style="width:76%;background:linear-gradient(90deg,var(--amber),var(--green))"></i></div><span style="color:var(--amber)">0.76</span></div>
+            <div class="verdict" data-verdict><button data-v="ok">accept</button><button data-v="warn">revise</button><button data-v="rej">reject</button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="pane chat">
+      <div class="pane-head"><span>copilot.stream</span><span class="k">live</span></div>
+      <div class="log">
+        <div class="ln sys"><span class="who">copilot</span>Parsed §8.2. Liability cap excludes IP but not confidentiality. Recommend flag.</div>
+        <div class="ln usr"><span class="who">you</span>generate redline adding confidentiality carve-out</div>
+        <div class="ln sys"><span class="who">copilot</span>diff staged → "…except Sections 8, 9, 11." apply to EV-0114? [y/n]</div>
+        <div class="ln usr"><span class="who">you</span>y</div>
+        <div class="ln sys"><span class="who">copilot</span>✓ applied. EV-0114 marked revised.</div>
+      </div>
+      <div class="input"><span>❯</span><textarea placeholder="type command or message…"></textarea><button>run</button></div>
+    </section>
+  </main>
+
+  <footer><span>conn: <span class="ok">●</span> copilot/gpt · latency 42ms</span><span>autosave on · 0 errors</span></footer>
+</div>
+<script>
+  document.querySelectorAll('.rec').forEach(r=>r.addEventListener('click',()=>{
+    document.querySelectorAll('.rec').forEach(x=>x.classList.remove('on'));r.classList.add('on');}));
+  document.querySelectorAll('[data-verdict]').forEach(g=>g.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+    g.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');})));
+</script>
+</body>
+</html>
