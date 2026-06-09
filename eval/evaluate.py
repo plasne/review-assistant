@@ -51,7 +51,9 @@ DEFAULT_JUDGE_TIMEOUT_SECONDS = 120
 class EvaluationPaths:
     evidence_path: str
     answer_path: str
+    evidence_key: str | None
     output_schema: dict[str, JsonValue] | None
+    ignored_output_structure_issues: tuple[dict[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -64,7 +66,9 @@ class ExperimentCatalogConfig:
 DEFAULT_PATHS = EvaluationPaths(
     evidence_path="/evidence",
     answer_path="/answer",
+    evidence_key=None,
     output_schema=None,
+    ignored_output_structure_issues=(),
 )
 
 
@@ -258,12 +262,9 @@ def evaluate_artifact(artifact: JsonValue, *, fact_judge: FactJudge, source_blob
             )
 
         actual_record = actual_output
-        expected_evidence = as_list(resolve_json_pointer(expected_output, paths.evidence_path))
-        actual_evidence = as_list(resolve_json_pointer(actual_output, paths.evidence_path))
-        expected_answer = as_text(resolve_json_pointer(expected_output, paths.answer_path))
-        actual_answer = as_text(resolve_json_pointer(actual_output, paths.answer_path))
-        generation_metrics = generation_metrics_for_answers(expected_answer, actual_answer, fact_judge=fact_judge)
+        generation_scores = generation_metrics(expected_output, actual_output, paths.answer_path, fact_judge=fact_judge)
         inference_timing = inference_timing_metrics(inference)
+        retrieval_metrics = retrieval_recall_metrics(expected_output, actual_output, paths)
 
         return {
             "source_blob": source_blob,
@@ -272,9 +273,13 @@ def evaluate_artifact(artifact: JsonValue, *, fact_judge: FactJudge, source_blob
             "source_status": inference_status,
             "paths": paths_to_dict(paths),
             "metrics": {
-                "retrieval_recall": retrieval_recall(expected_evidence, actual_evidence),
-                **generation_metrics,
-                "output_structure": output_structure(actual_record, paths.output_schema),
+                **retrieval_metrics,
+                **generation_scores,
+                "output_structure": output_structure(
+                    actual_record,
+                    paths.output_schema,
+                    paths.ignored_output_structure_issues,
+                ),
                 **inference_timing,
             },
         }
@@ -296,7 +301,6 @@ def evaluate_non_completed_artifact(
     actual_output: JsonValue,
     paths: EvaluationPaths,
 ) -> dict[str, JsonValue]:
-    expected_evidence = as_list(resolve_json_pointer(expected_output, paths.evidence_path))
     actual_record = actual_output if isinstance(actual_output, dict) else {}
     return {
         "source_blob": source_blob,
@@ -305,9 +309,13 @@ def evaluate_non_completed_artifact(
         "source_status": inference.get("status"),
         "paths": paths_to_dict(paths),
         "metrics": {
-            "retrieval_recall": retrieval_recall(expected_evidence, []),
+            **retrieval_recall_metrics(expected_output, None, paths),
             **non_completed_generation_metrics(inference.get("status")),
-            "output_structure": output_structure(actual_record, paths.output_schema),
+            "output_structure": output_structure(
+                actual_record,
+                paths.output_schema,
+                paths.ignored_output_structure_issues,
+            ),
             **inference_timing_metrics(inference),
         },
     }
@@ -357,14 +365,27 @@ def read_evaluation_paths(ground_truth: dict[str, JsonValue]) -> EvaluationPaths
         return EvaluationPaths(
             evidence_path=DEFAULT_PATHS.evidence_path,
             answer_path=DEFAULT_PATHS.answer_path,
+            evidence_key=DEFAULT_PATHS.evidence_key,
             output_schema=read_ground_truth_schema(ground_truth),
+            ignored_output_structure_issues=DEFAULT_PATHS.ignored_output_structure_issues,
         )
 
     return EvaluationPaths(
         evidence_path=str(config.get("evidence_path", DEFAULT_PATHS.evidence_path)),
         answer_path=str(config.get("answer_path", DEFAULT_PATHS.answer_path)),
+        evidence_key=read_evidence_key(config),
         output_schema=read_output_schema(config) or read_ground_truth_schema(ground_truth),
+        ignored_output_structure_issues=read_ignored_output_structure_issues(config),
     )
+
+
+def read_evidence_key(config: dict[str, JsonValue]) -> str | None:
+    raw_key = config.get("evidence_key")
+    if raw_key is None:
+        return None
+    if not isinstance(raw_key, str) or not raw_key.strip():
+        raise ValueError("evaluation.evidence_key must be a non-empty string.")
+    return raw_key.strip()
 
 
 def read_output_schema(config: dict[str, JsonValue]) -> dict[str, JsonValue] | None:
@@ -374,6 +395,33 @@ def read_output_schema(config: dict[str, JsonValue]) -> dict[str, JsonValue] | N
     if not isinstance(raw_schema, dict):
         raise ValueError("evaluation.output_schema must be a JSON Schema object.")
     return raw_schema
+
+
+def read_ignored_output_structure_issues(config: dict[str, JsonValue]) -> tuple[dict[str, str], ...]:
+    raw_issues = config.get("ignored_output_structure_issues")
+    if raw_issues is None:
+        return ()
+    if not isinstance(raw_issues, list):
+        raise ValueError("evaluation.ignored_output_structure_issues must be an array.")
+
+    issues: list[dict[str, str]] = []
+    for index, raw_issue in enumerate(raw_issues):
+        if not isinstance(raw_issue, dict):
+            raise ValueError(f"evaluation.ignored_output_structure_issues[{index}] must be an object.")
+        path = raw_issue.get("path")
+        keyword = raw_issue.get("keyword")
+        message = raw_issue.get("message")
+        if not isinstance(path, str) or not path:
+            raise ValueError(f"evaluation.ignored_output_structure_issues[{index}].path must be a non-empty string.")
+        if not isinstance(keyword, str) or not keyword:
+            raise ValueError(f"evaluation.ignored_output_structure_issues[{index}].keyword must be a non-empty string.")
+        if message is not None and not isinstance(message, str):
+            raise ValueError(f"evaluation.ignored_output_structure_issues[{index}].message must be a string when provided.")
+        issue = {"path": path, "keyword": keyword}
+        if message is not None:
+            issue["message"] = message
+        issues.append(issue)
+    return tuple(issues)
 
 
 def read_ground_truth_schema(ground_truth: dict[str, JsonValue]) -> dict[str, JsonValue] | None:
@@ -389,7 +437,9 @@ def paths_to_dict(paths: EvaluationPaths) -> dict[str, JsonValue]:
     return {
         "evidence_path": paths.evidence_path,
         "answer_path": paths.answer_path,
+        "evidence_key": paths.evidence_key,
         "has_output_schema": paths.output_schema is not None,
+        "ignored_output_structure_issue_count": len(paths.ignored_output_structure_issues),
     }
 
 
@@ -430,6 +480,10 @@ def as_text(value: JsonValue) -> str:
     raise ValueError("Expected an answer string.")
 
 
+def resolve_answer_texts(value: JsonValue, pointer: str) -> list[str]:
+    return [as_text(item) for item in resolve_json_pointer_many(value, pointer)]
+
+
 def inference_timing_metrics(inference: dict[str, JsonValue]) -> dict[str, int]:
     return {
         "meta_total_elapsed_ms": as_non_negative_int(inference.get("elapsed_ms"), "inference.elapsed_ms"),
@@ -457,11 +511,84 @@ def as_non_negative_int(value: JsonValue, path: str) -> int:
     return value
 
 
-def retrieval_recall(expected_evidence: list[JsonValue], actual_evidence: list[JsonValue]) -> dict[str, JsonValue]:
-    expected_keys = {evidence_identity(item) for item in expected_evidence}
-    actual_keys = {evidence_identity(item) for item in actual_evidence}
-    expected_keys.discard("")
-    actual_keys.discard("")
+def retrieval_recall_metrics(expected_output: JsonValue, actual_output: JsonValue | None, paths: EvaluationPaths) -> dict[str, JsonValue]:
+    if paths.evidence_key is None:
+        return {}
+    expected_evidence_lists = resolve_evidence_lists(expected_output, paths.evidence_path)
+    if actual_output is None:
+        actual_evidence_lists = [[] for _ in expected_evidence_lists]
+    else:
+        actual_evidence_lists = resolve_evidence_lists(actual_output, paths.evidence_path)
+
+    if len(expected_evidence_lists) == 1 and len(actual_evidence_lists) <= 1:
+        actual_evidence = actual_evidence_lists[0] if actual_evidence_lists else []
+        return {"retrieval_recall": retrieval_recall(expected_evidence_lists[0], actual_evidence, paths.evidence_key)}
+
+    per_turn: list[dict[str, JsonValue]] = []
+    for turn_index, expected_evidence in enumerate(expected_evidence_lists):
+        actual_evidence = actual_evidence_lists[turn_index] if turn_index < len(actual_evidence_lists) else []
+        turn_metric = retrieval_recall(expected_evidence, actual_evidence, paths.evidence_key)
+        per_turn.append({"turn_index": turn_index, **turn_metric})
+
+    score = 1.0 if not per_turn else sum(float(metric["score"]) for metric in per_turn) / len(per_turn)
+    return {
+        "retrieval_recall": {
+            "score": round(score, 6),
+            "method": "per_turn_macro_average",
+            "turn_count": len(per_turn),
+            "expected_evidence_count": sum(int(metric["expected_evidence_count"]) for metric in per_turn),
+            "actual_evidence_count": sum(int(metric["actual_evidence_count"]) for metric in per_turn),
+            "retrieved_relevant_count": sum(int(metric["retrieved_relevant_count"]) for metric in per_turn),
+            "per_turn": per_turn,
+        }
+    }
+
+
+def resolve_evidence_lists(value: JsonValue, pointer: str) -> list[list[JsonValue]]:
+    resolved = resolve_json_pointer_many(value, pointer)
+    return [as_list(item) for item in resolved]
+
+
+def resolve_json_pointer_many(value: JsonValue, pointer: str) -> list[JsonValue]:
+    if "*" not in pointer:
+        return [resolve_json_pointer(value, pointer)]
+    if not pointer.startswith("/"):
+        raise ValueError(f"JSON pointer must start with '/': {pointer}")
+
+    current_values: list[JsonValue] = [value]
+    for raw_part in pointer.split("/")[1:]:
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        next_values: list[JsonValue] = []
+        if part == "*":
+            for current in current_values:
+                if not isinstance(current, list):
+                    raise ValueError(f"JSON pointer wildcard segment requires a list: {pointer}")
+                next_values.extend(current)
+            current_values = next_values
+            continue
+
+        for current in current_values:
+            if isinstance(current, dict):
+                if part not in current:
+                    raise ValueError(f"JSON pointer not found: {pointer}")
+                next_values.append(current[part])
+            elif isinstance(current, list):
+                if not part.isdigit():
+                    raise ValueError(f"JSON pointer list segment must be an index: {pointer}")
+                index = int(part)
+                if index >= len(current):
+                    raise ValueError(f"JSON pointer index out of range: {pointer}")
+                next_values.append(current[index])
+            else:
+                raise ValueError(f"JSON pointer cannot traverse scalar value: {pointer}")
+        current_values = next_values
+
+    return current_values
+
+
+def retrieval_recall(expected_evidence: list[JsonValue], actual_evidence: list[JsonValue], evidence_key: str) -> dict[str, JsonValue]:
+    expected_keys = evidence_identities(expected_evidence, evidence_key, include_missing_configured_key=True)
+    actual_keys = evidence_identities(actual_evidence, evidence_key, include_missing_configured_key=False)
     matched = len(expected_keys & actual_keys)
     total = len(expected_keys)
     score = 1.0 if total == 0 else matched / total
@@ -474,14 +601,22 @@ def retrieval_recall(expected_evidence: list[JsonValue], actual_evidence: list[J
     }
 
 
-def evidence_identity(item: JsonValue) -> str:
+def evidence_identities(evidence: list[JsonValue], evidence_key: str, *, include_missing_configured_key: bool) -> set[str]:
+    identities: set[str] = set()
+    for index, item in enumerate(evidence):
+        identity = evidence_identity(item, evidence_key)
+        if identity:
+            identities.add(identity)
+        elif include_missing_configured_key:
+            identities.add(f"{evidence_key}:<missing:{index}>")
+    return identities
+
+
+def evidence_identity(item: JsonValue, evidence_key: str) -> str:
     if isinstance(item, dict):
-        for key in ("id", "url", "uri", "source"):
-            value = item.get(key)
-            if isinstance(value, str) and value.strip():
-                return f"{key}:{value.strip().lower()}"
-        return json.dumps(item, sort_keys=True, separators=(",", ":")).lower()
-    return json.dumps(item, sort_keys=True, separators=(",", ":")).lower()
+        value = item.get(evidence_key)
+        return f"{evidence_key}:{value.strip().lower()}" if isinstance(value, str) and value.strip() else ""
+    return ""
 
 
 class CopilotSdkFactJudge:
@@ -597,6 +732,8 @@ def build_judge_request(expected_answer: str, actual_answer: str) -> dict[str, J
             Compare meaning, not exact wording. Mark a ground-truth fact equivalent when the inference materially asserts the
             same claim, partial when it covers only part of the claim or omits an important qualifier, contradicted when it
             conflicts, and missing when no inference fact supports it.
+            For no-results search answers, treat "no official/source rule exists or was found" as materially supporting
+            "no supporting evidence was found or recorded" when the answer's evidence is sourced from those rules.
             Return only JSON matching the requested schema. Do not include Markdown.
             """
         ).strip(),
@@ -635,6 +772,97 @@ def build_judge_request(expected_answer: str, actual_answer: str) -> dict[str, J
 
 def generation_metrics_for_answers(expected_answer: str, actual_answer: str, *, fact_judge: FactJudge) -> dict[str, JsonValue]:
     return judge_generation_metrics(fact_judge(expected_answer, actual_answer))
+
+
+def generation_metrics(
+    expected_output: JsonValue,
+    actual_output: JsonValue,
+    answer_path: str,
+    *,
+    fact_judge: FactJudge,
+) -> dict[str, JsonValue]:
+    expected_answers = resolve_answer_texts(expected_output, answer_path)
+    actual_answers = resolve_answer_texts(actual_output, answer_path)
+
+    if len(expected_answers) == 1 and len(actual_answers) <= 1:
+        actual_answer = actual_answers[0] if actual_answers else ""
+        return generation_metrics_for_answers(expected_answers[0], actual_answer, fact_judge=fact_judge)
+
+    per_turn_generation_metrics = []
+    for turn_index, expected_answer in enumerate(expected_answers):
+        actual_answer = actual_answers[turn_index] if turn_index < len(actual_answers) else ""
+        per_turn_generation_metrics.append(
+            {"turn_index": turn_index, **generation_metrics_for_answers(expected_answer, actual_answer, fact_judge=fact_judge)}
+        )
+
+    return {
+        "generation_accuracy": aggregate_generation_metric("generation_accuracy", per_turn_generation_metrics),
+        "generation_recall": aggregate_generation_metric("generation_recall", per_turn_generation_metrics),
+        "generation_precision": aggregate_generation_metric("generation_precision", per_turn_generation_metrics),
+    }
+
+
+def aggregate_generation_metric(metric_name: str, per_turn_generation_metrics: list[dict[str, JsonValue]]) -> dict[str, JsonValue]:
+    per_turn_metrics: list[dict[str, JsonValue]] = []
+    for entry in per_turn_generation_metrics:
+        turn_index = entry.get("turn_index")
+        turn_metric = entry.get(metric_name)
+        if isinstance(turn_index, int) and isinstance(turn_metric, dict):
+            per_turn_metrics.append({"turn_index": turn_index, **turn_metric})
+
+    score = 1.0 if not per_turn_metrics else sum(float(metric["score"]) for metric in per_turn_metrics) / len(per_turn_metrics)
+    aggregated: dict[str, JsonValue] = {
+        "score": round(score, 6),
+        "method": "per_turn_macro_average",
+        "turn_count": len(per_turn_metrics),
+        "numerator": sum(int(metric["numerator"]) for metric in per_turn_metrics if isinstance(metric.get("numerator"), int)),
+        "denominator": sum(
+            int(metric["denominator"]) for metric in per_turn_metrics if isinstance(metric.get("denominator"), int)
+        ),
+        "per_turn": per_turn_metrics,
+    }
+
+    schema_versions = {
+        metric.get("schema_version") for metric in per_turn_metrics if isinstance(metric.get("schema_version"), str)
+    }
+    if len(schema_versions) == 1:
+        aggregated["schema_version"] = next(iter(schema_versions))
+
+    if metric_name == "generation_accuracy":
+        aggregated["supported_fact_count"] = sum(
+            int(metric["supported_fact_count"])
+            for metric in per_turn_metrics
+            if isinstance(metric.get("supported_fact_count"), int)
+        )
+        aggregated["total_fact_count"] = sum(
+            int(metric["total_fact_count"])
+            for metric in per_turn_metrics
+            if isinstance(metric.get("total_fact_count"), int)
+        )
+    elif metric_name == "generation_recall":
+        aggregated["supported_ground_truth_fact_count"] = sum(
+            int(metric["supported_ground_truth_fact_count"])
+            for metric in per_turn_metrics
+            if isinstance(metric.get("supported_ground_truth_fact_count"), int)
+        )
+        aggregated["ground_truth_fact_count"] = sum(
+            int(metric["ground_truth_fact_count"])
+            for metric in per_turn_metrics
+            if isinstance(metric.get("ground_truth_fact_count"), int)
+        )
+    elif metric_name == "generation_precision":
+        aggregated["supported_inference_fact_count"] = sum(
+            int(metric["supported_inference_fact_count"])
+            for metric in per_turn_metrics
+            if isinstance(metric.get("supported_inference_fact_count"), int)
+        )
+        aggregated["inference_fact_count"] = sum(
+            int(metric["inference_fact_count"])
+            for metric in per_turn_metrics
+            if isinstance(metric.get("inference_fact_count"), int)
+        )
+
+    return aggregated
 
 
 def judge_generation_metrics(judge_output: dict[str, JsonValue]) -> dict[str, JsonValue]:
@@ -924,21 +1152,51 @@ def parse_judge_comparisons(
     return comparisons
 
 
-def output_structure(actual_record: JsonValue, output_schema: dict[str, JsonValue] | None) -> dict[str, JsonValue]:
+def output_structure(
+    actual_record: JsonValue,
+    output_schema: dict[str, JsonValue] | None,
+    ignored_issues: tuple[dict[str, str], ...] = (),
+) -> dict[str, JsonValue]:
     if output_schema is None:
-        return {
-            "score": 0.0,
-            "valid": False,
-            "issue_count": 1,
-            "issues": [{"path": "/", "keyword": "schema", "message": "No ground_truth.schema or evaluation.output_schema configured."}],
-        }
-    issues = validate_json_schema(output_schema, actual_record)
-    return {
-        "score": 1.0 if not issues else 0.0,
-        "valid": not issues,
-        "issue_count": len(issues),
-        "issues": issues,
+        issues = [{"path": "/", "keyword": "schema", "message": "No ground_truth.schema or evaluation.output_schema configured."}]
+    else:
+        issues = validate_json_schema(output_schema, actual_record)
+    ignored, active = partition_ignored_output_structure_issues(issues, ignored_issues)
+    metric: dict[str, JsonValue] = {
+        "score": 1.0 if not active else 0.0,
+        "valid": not active,
+        "issue_count": len(active),
+        "issues": active,
     }
+    if ignored:
+        metric["ignored_issue_count"] = len(ignored)
+        metric["ignored_issues"] = ignored
+    return metric
+
+
+def partition_ignored_output_structure_issues(
+    issues: list[dict[str, str]],
+    ignored_issues: tuple[dict[str, str], ...],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    ignored: list[dict[str, str]] = []
+    active: list[dict[str, str]] = []
+    for issue in issues:
+        if any(output_structure_issue_matches(issue, ignored_issue) for ignored_issue in ignored_issues):
+            ignored.append(issue)
+        else:
+            active.append(issue)
+    return ignored, active
+
+
+def output_structure_issue_matches(issue: dict[str, str], ignored_issue: dict[str, str]) -> bool:
+    if issue.get("path") != ignored_issue.get("path"):
+        return False
+    if issue.get("keyword") != ignored_issue.get("keyword"):
+        return False
+    ignored_message = ignored_issue.get("message")
+    if ignored_message is not None and issue.get("message") != ignored_message:
+        return False
+    return True
 
 
 def validate_json_schema(schema: JsonValue, value: JsonValue, path: str = "/") -> list[dict[str, str]]:

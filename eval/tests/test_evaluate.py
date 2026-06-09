@@ -8,6 +8,7 @@ from eval.evaluate import (
     DEFAULT_JUDGE_TIMEOUT_SECONDS,
     CopilotSdkFactJudge,
     ExperimentCatalogConfig,
+    build_judge_request,
     create_fact_judge_from_env,
     evaluate_artifact,
     evaluation_blob_name,
@@ -27,6 +28,7 @@ from eval.evaluate import (
     publish_experiment_catalog_result,
     output_structure,
     retrieval_recall,
+    resolve_json_pointer_many,
     resolve_json_pointer,
     unquote_env_value,
 )
@@ -93,13 +95,47 @@ class EvaluateMetricsTests(unittest.TestCase):
         value = {"turns": [{"answer": "done"}]}
         self.assertEqual(resolve_json_pointer(value, "/turns/0/answer"), "done")
 
+    def test_json_pointer_many_supports_wildcard_segments(self):
+        value = {
+            "turns": [
+                {"evidence": [{"id": "doc-a"}]},
+                {"evidence": [{"id": "doc-b"}]},
+            ]
+        }
+
+        self.assertEqual(
+            resolve_json_pointer_many(value, "/turns/*/evidence"),
+            [[{"id": "doc-a"}], [{"id": "doc-b"}]],
+        )
+
     def test_retrieval_recall_matches_expected_evidence_by_id(self):
         metric = retrieval_recall(
             [{"id": "doc-a"}, {"id": "doc-b"}],
             [{"id": "doc-a"}, {"id": "doc-c"}],
+            "id",
         )
         self.assertEqual(metric["score"], 0.5)
         self.assertEqual(metric["missing_evidence"], ["id:doc-b"])
+
+    def test_retrieval_recall_can_match_expected_evidence_by_configured_key(self):
+        metric = retrieval_recall(
+            [{"id": "expected-a", "url": "https://example.com/a"}, {"id": "expected-b", "url": "https://example.com/b"}],
+            [{"id": "actual-a", "url": "https://example.com/a"}, {"id": "actual-c", "url": "https://example.com/c"}],
+            "url",
+        )
+
+        self.assertEqual(metric["score"], 0.5)
+        self.assertEqual(metric["missing_evidence"], ["url:https://example.com/b"])
+
+    def test_retrieval_recall_counts_expected_evidence_missing_configured_key(self):
+        metric = retrieval_recall(
+            [{"id": "expected-a", "url": "https://example.com/a"}, {"id": "expected-b"}],
+            [{"id": "actual-a", "url": "https://example.com/a"}],
+            "url",
+        )
+
+        self.assertEqual(metric["score"], 0.5)
+        self.assertEqual(metric["missing_evidence"], ["url:<missing:1>"])
 
     def test_generation_metrics_use_judge_for_material_equivalence(self):
         def fact_judge(expected_answer, actual_answer):
@@ -259,6 +295,17 @@ class EvaluateMetricsTests(unittest.TestCase):
 
         self.assertEqual(parsed["schema_version"], "review-assistant.fact-judge.v1")
 
+    def test_judge_request_treats_no_rule_as_supporting_no_evidence(self):
+        request = build_judge_request(
+            "No supporting evidence was found for an official helicopter movement rule, so no evidence entries were recorded.",
+            "There is no official Fury of Dracula rule about helicopter movement between cities.",
+        )
+
+        self.assertIn(
+            'treat "no official/source rule exists or was found" as materially supporting',
+            request["instructions"],
+        )
+
     def test_create_fact_judge_from_env_uses_copilot_sdk_defaults(self):
         with patch.dict(os.environ, {}, clear=True):
             judge = create_fact_judge_from_env()
@@ -327,6 +374,53 @@ class EvaluateMetricsTests(unittest.TestCase):
             ],
         )
         self.assertEqual(metric["score"], 0.0)
+
+    def test_output_structure_ignores_configured_issues_only(self):
+        metric = output_structure(
+            {"turns": [{"question": "Search?", "answer": "Search answer."}, {"question": "Synthesize?", "answer": 42}]},
+            {
+                "type": "object",
+                "properties": {
+                    "turns": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": {"type": "string"},
+                                "evidence": {"type": "array"},
+                                "answer": {"type": "string"},
+                            },
+                            "required": ["question", "evidence", "answer"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["turns"],
+                "additionalProperties": False,
+            },
+            (
+                {
+                    "path": "/turns/0",
+                    "keyword": "required",
+                    "message": "Missing required property: evidence.",
+                },
+            ),
+        )
+
+        self.assertFalse(metric["valid"])
+        self.assertEqual(metric["score"], 0.0)
+        self.assertEqual(metric["ignored_issue_count"], 1)
+        self.assertEqual(
+            metric["ignored_issues"],
+            [{"path": "/turns/0", "keyword": "required", "message": "Missing required property: evidence."}],
+        )
+        self.assertEqual(
+            metric["issues"],
+            [
+                {"path": "/turns/1", "keyword": "required", "message": "Missing required property: evidence."},
+                {"path": "/turns/1/answer", "keyword": "type", "message": "Expected string, got integer."},
+            ],
+        )
 
     def test_inference_timing_metrics_are_derived_from_inference_transcript(self):
         metrics = inference_timing_metrics(
@@ -458,13 +552,14 @@ class EvaluateMetricsTests(unittest.TestCase):
                     "turns": [
                         {
                             "answer": "Dracula wins by advancing influence.",
-                            "evidence": [{"id": "objective"}],
+                            "evidence": [{"id": "expected-objective", "url": "fury-of-dracula-4e://rules/objective"}],
                         }
                     ]
                 },
                 "evaluation": {
                     "evidence_path": "/turns/0/evidence",
                     "answer_path": "/turns/0/answer",
+                    "evidence_key": "url",
                     "output_schema": {
                         "type": "object",
                         "properties": {
@@ -478,8 +573,8 @@ class EvaluateMetricsTests(unittest.TestCase):
                                             "type": "array",
                                             "items": {
                                                 "type": "object",
-                                                "properties": {"id": {"type": "string"}},
-                                                "required": ["id"],
+                                                "properties": {"id": {"type": "string"}, "url": {"type": "string"}},
+                                                "required": ["id", "url"],
                                                 "additionalProperties": False,
                                             },
                                         },
@@ -503,7 +598,7 @@ class EvaluateMetricsTests(unittest.TestCase):
                     "turns": [
                         {
                             "answer": "Dracula wins by advancing influence.",
-                            "evidence": [{"id": "objective"}],
+                            "evidence": [{"id": "actual-objective", "url": "fury-of-dracula-4e://rules/objective"}],
                         }
                     ]
                 },
@@ -528,12 +623,148 @@ class EvaluateMetricsTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["meta_model_elapsed_ms"], 900)
         self.assertEqual(result["metrics"]["meta_tool_elapsed_ms"], 250)
 
+    def test_evaluate_artifact_computes_per_turn_retrieval_recall_macro_average(self):
+        artifact = {
+            "ground_truth": {
+                "output": {
+                    "turns": [
+                        {
+                            "answer": "Turn 0 answer.",
+                            "evidence": [{"id": "expected-a", "url": "fury-of-dracula-4e://rules/objective"}],
+                        },
+                        {
+                            "answer": "Turn 1 answer.",
+                            "evidence": [{"id": "expected-b", "url": "fury-of-dracula-4e://rules/combat-overview"}],
+                        },
+                    ]
+                },
+                "evaluation": {
+                    "evidence_path": "/turns/*/evidence",
+                    "answer_path": "/turns/0/answer",
+                    "evidence_key": "url",
+                },
+            },
+            "inference": {
+                "ref": "ref-a",
+                "run_folder": "run",
+                "status": "completed",
+                "elapsed_ms": 1234,
+                "output": {
+                    "turns": [
+                        {
+                            "answer": "Turn 0 answer.",
+                            "evidence": [{"id": "actual-a", "url": "fury-of-dracula-4e://rules/objective"}],
+                        },
+                        {
+                            "answer": "Turn 1 answer.",
+                            "evidence": [{"id": "actual-c", "url": "fury-of-dracula-4e://rules/missing"}],
+                        },
+                    ]
+                },
+                "transcript": [
+                    {"type": "tool-call", "elapsed_ms": 250},
+                    {"type": "assistant-response", "elapsed_ms": 900},
+                ],
+            },
+        }
+
+        result = evaluate_artifact(artifact, source_blob="run/c10-0.json", fact_judge=equivalent_fact_judge)
+
+        self.assertEqual(result["status"], "evaluated")
+        self.assertEqual(result["metrics"]["retrieval_recall"]["method"], "per_turn_macro_average")
+        self.assertEqual(result["metrics"]["retrieval_recall"]["turn_count"], 2)
+        self.assertEqual(result["metrics"]["retrieval_recall"]["score"], 0.5)
+        self.assertEqual(
+            result["metrics"]["retrieval_recall"]["per_turn"],
+            [
+                {
+                    "turn_index": 0,
+                    "score": 1.0,
+                    "expected_evidence_count": 1,
+                    "actual_evidence_count": 1,
+                    "retrieved_relevant_count": 1,
+                    "missing_evidence": [],
+                },
+                {
+                    "turn_index": 1,
+                    "score": 0.0,
+                    "expected_evidence_count": 1,
+                    "actual_evidence_count": 1,
+                    "retrieved_relevant_count": 0,
+                    "missing_evidence": ["url:fury-of-dracula-4e://rules/combat-overview"],
+                },
+            ],
+        )
+
+    def test_evaluate_artifact_computes_per_turn_generation_macro_average(self):
+        def fact_judge(expected_answer, actual_answer):
+            is_equivalent = expected_answer == actual_answer
+            return {
+                "schema_version": "review-assistant.fact-judge.v1",
+                "ground_truth_facts": [{"id": "gt-1", "fact": expected_answer}],
+                "inference_facts": [{"id": "inf-1", "fact": actual_answer}],
+                "comparisons": [
+                    {
+                        "ground_truth_fact_id": "gt-1",
+                        "inference_fact_ids": ["inf-1"] if is_equivalent else [],
+                        "label": "equivalent" if is_equivalent else "missing",
+                        "rationale": "string match" if is_equivalent else "string mismatch",
+                    }
+                ],
+            }
+
+        artifact = {
+            "ground_truth": {
+                "output": {
+                    "turns": [
+                        {"answer": "Turn 0 expected.", "evidence": []},
+                        {"answer": "Turn 1 expected.", "evidence": []},
+                    ]
+                },
+                "evaluation": {
+                    "evidence_path": "/turns/*/evidence",
+                    "answer_path": "/turns/*/answer",
+                    "evidence_key": "url",
+                },
+            },
+            "inference": {
+                "ref": "ref-a",
+                "run_folder": "run",
+                "status": "completed",
+                "elapsed_ms": 1234,
+                "output": {
+                    "turns": [
+                        {"answer": "Turn 0 expected.", "evidence": []},
+                        {"answer": "Turn 1 different.", "evidence": []},
+                    ]
+                },
+                "transcript": [
+                    {"type": "tool-call", "elapsed_ms": 250},
+                    {"type": "assistant-response", "elapsed_ms": 900},
+                ],
+            },
+        }
+
+        result = evaluate_artifact(artifact, source_blob="run/c11-0.json", fact_judge=fact_judge)
+
+        self.assertEqual(result["status"], "evaluated")
+        self.assertEqual(result["metrics"]["generation_accuracy"]["method"], "per_turn_macro_average")
+        self.assertEqual(result["metrics"]["generation_accuracy"]["turn_count"], 2)
+        self.assertEqual(result["metrics"]["generation_accuracy"]["score"], 0.5)
+        self.assertEqual(
+            [metric["score"] for metric in result["metrics"]["generation_accuracy"]["per_turn"]],
+            [1.0, 0.0],
+        )
+        self.assertEqual(result["metrics"]["generation_recall"]["score"], 0.5)
+        self.assertEqual(result["metrics"]["generation_precision"]["score"], 0.5)
+        self.assertEqual(experiment_catalog_metrics(result)["generation_accuracy"], 0.5)
+
     def test_evaluate_artifact_uses_ground_truth_schema_when_output_schema_is_omitted(self):
         artifact = {
             "ground_truth": {
                 "output": {
                     "answer": "Dracula wins by advancing influence.",
-                    "evidence": [{"id": "objective"}],
+                    "evidence": [{"id": "expected-objective", "url": "fury-of-dracula-4e://rules/objective"}],
                 },
                 "schema": {
                     "type": "object",
@@ -543,8 +774,8 @@ class EvaluateMetricsTests(unittest.TestCase):
                             "type": "array",
                             "items": {
                                 "type": "object",
-                                "properties": {"id": {"type": "string"}},
-                                "required": ["id"],
+                                "properties": {"id": {"type": "string"}, "url": {"type": "string"}},
+                                "required": ["id", "url"],
                                 "additionalProperties": False,
                             },
                         },
@@ -555,6 +786,136 @@ class EvaluateMetricsTests(unittest.TestCase):
                 "evaluation": {
                     "evidence_path": "/evidence",
                     "answer_path": "/answer",
+                    "evidence_key": "url",
+                },
+            },
+            "inference": {
+                "ref": "ref-a",
+                "run_folder": "run",
+                "status": "completed",
+                "elapsed_ms": 1234,
+                "output": {
+                    "answer": "Dracula wins by advancing influence.",
+                    "evidence": [{"id": "actual-objective", "url": "fury-of-dracula-4e://rules/objective"}],
+                },
+                "transcript": [
+                    {"type": "tool-call", "elapsed_ms": 250},
+                    {"type": "assistant-response", "elapsed_ms": 900},
+                ],
+            },
+        }
+
+        result = evaluate_artifact(artifact, source_blob="run/b00-0.json", fact_judge=equivalent_fact_judge)
+
+        self.assertEqual(result["status"], "evaluated")
+        self.assertEqual(result["metrics"]["output_structure"]["score"], 1.0)
+        self.assertEqual(result["paths"]["has_output_schema"], True)
+
+    def test_evaluate_artifact_applies_ignored_output_structure_issues(self):
+        artifact = {
+            "ground_truth": {
+                "output": {
+                    "turns": [
+                        {
+                            "question": "How does Dracula gain influence?",
+                            "answer": "Through matured encounters.",
+                            "evidence": [{"id": "expected-objective", "url": "fury-of-dracula-4e://rules/objective"}],
+                        }
+                    ]
+                },
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "turns": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "question": {"type": "string"},
+                                    "evidence": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {"id": {"type": "string"}, "url": {"type": "string"}},
+                                            "required": ["id", "url"],
+                                            "additionalProperties": False,
+                                        },
+                                    },
+                                    "answer": {"type": "string"},
+                                },
+                                "required": ["question", "evidence", "answer"],
+                                "additionalProperties": False,
+                            },
+                        }
+                    },
+                    "required": ["turns"],
+                    "additionalProperties": False,
+                },
+                "evaluation": {
+                    "evidence_path": "/turns/0/evidence",
+                    "answer_path": "/turns/0/answer",
+                    "evidence_key": "url",
+                    "ignored_output_structure_issues": [
+                        {
+                            "path": "/turns/1",
+                            "keyword": "required",
+                            "message": "Missing required property: evidence.",
+                        }
+                    ],
+                },
+            },
+            "inference": {
+                "ref": "ref-a",
+                "run_folder": "run",
+                "status": "completed",
+                "elapsed_ms": 1234,
+                "output": {
+                    "turns": [
+                        {
+                            "question": "How does Dracula gain influence?",
+                            "answer": "Through matured encounters.",
+                            "evidence": [{"id": "actual-objective", "url": "fury-of-dracula-4e://rules/objective"}],
+                        },
+                        {
+                            "question": "Generate a new answer based on this evidence.",
+                            "answer": "Dracula gains influence through matured encounters.",
+                        },
+                    ]
+                },
+                "transcript": [
+                    {"type": "tool-call", "elapsed_ms": 250},
+                    {"type": "assistant-response", "elapsed_ms": 900},
+                ],
+            },
+        }
+
+        result = evaluate_artifact(artifact, source_blob="run/c05-0.json", fact_judge=equivalent_fact_judge)
+
+        self.assertEqual(result["status"], "evaluated")
+        self.assertEqual(result["metrics"]["output_structure"]["score"], 1.0)
+        self.assertEqual(result["metrics"]["output_structure"]["issue_count"], 0)
+        self.assertEqual(result["metrics"]["output_structure"]["ignored_issue_count"], 1)
+        self.assertEqual(result["paths"]["ignored_output_structure_issue_count"], 1)
+
+    def test_evaluate_artifact_omits_retrieval_recall_when_evidence_key_is_omitted(self):
+        artifact = {
+            "ground_truth": {
+                "output": {
+                    "answer": "Dracula wins by advancing influence.",
+                    "evidence": [{"id": "objective"}],
+                },
+                "evaluation": {
+                    "evidence_path": "/evidence",
+                    "answer_path": "/answer",
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {
+                            "answer": {"type": "string"},
+                            "evidence": {"type": "array"},
+                        },
+                        "required": ["answer", "evidence"],
+                        "additionalProperties": False,
+                    },
                 },
             },
             "inference": {
@@ -573,11 +934,11 @@ class EvaluateMetricsTests(unittest.TestCase):
             },
         }
 
-        result = evaluate_artifact(artifact, source_blob="run/b00-0.json", fact_judge=equivalent_fact_judge)
+        result = evaluate_artifact(artifact, source_blob="run/no-evidence-key-0.json", fact_judge=equivalent_fact_judge)
 
         self.assertEqual(result["status"], "evaluated")
-        self.assertEqual(result["metrics"]["output_structure"]["score"], 1.0)
-        self.assertEqual(result["paths"]["has_output_schema"], True)
+        self.assertIsNone(result["paths"]["evidence_key"])
+        self.assertNotIn("retrieval_recall", result["metrics"])
 
     def test_evaluate_artifact_keeps_timeout_outputs_catalog_publishable(self):
         def fail_if_called(_expected_answer, _actual_answer):
@@ -619,7 +980,7 @@ class EvaluateMetricsTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "evaluated")
         self.assertEqual(result["source_status"], "timeout")
-        self.assertEqual(result["metrics"]["retrieval_recall"]["score"], 0.0)
+        self.assertNotIn("retrieval_recall", result["metrics"])
         self.assertEqual(result["metrics"]["generation_accuracy"]["score"], 0.0)
         self.assertEqual(result["metrics"]["generation_recall"]["score"], 0.0)
         self.assertEqual(result["metrics"]["generation_precision"]["score"], 0.0)
@@ -627,7 +988,6 @@ class EvaluateMetricsTests(unittest.TestCase):
         self.assertEqual(
             experiment_catalog_metrics(result),
             {
-                "retrieval_recall": 0.0,
                 "generation_accuracy": 0.0,
                 "generation_recall": 0.0,
                 "generation_precision": 0.0,

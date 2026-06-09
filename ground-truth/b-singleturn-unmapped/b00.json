@@ -1,18 +1,18 @@
 {
-  "ref": "a00",
+  "ref": "b00",
   "description": "A simple single-turn question about Dracula's objective that stores the question, evidence, and answer at the record root.",
   "input": {
-    "id": "a00",
+    "id": "b00",
     "bucket": "",
     "question": "",
     "evidence": [],
     "answer": ""
   },
   "prompts": [
-    "What is Dracula trying to do in Fury of Dracula? Search the knowledge base, then update this record with the question, evidence, and answer."
+    "answer this question: What is Dracula trying to do in Fury of Dracula?"
   ],
   "output": {
-    "id": "a00",
+    "id": "b00",
     "bucket": "",
     "question": "What is Dracula trying to do in Fury of Dracula?",
     "evidence": [
@@ -28,7 +28,8 @@
   },
   "evaluation": {
     "evidence_path": "/evidence",
-    "answer_path": "/answer"
+    "answer_path": "/answer",
+    "evidence_key": "url"
   },
-  "tags": ["turns:single", "mapped:true", "state:new-question"]
+  "tags": ["turns:single", "mapped:false", "state:new-question"]
 }

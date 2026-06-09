@@ -131,7 +131,7 @@ REASONING_EFFORT=medium
 
 `AGENT_MODEL` and `REASONING_EFFORT` are optional and use the same validation as app agent settings. `EVALUATION_JUDGE_TIMEOUT_SECONDS` defaults to `120`.
 
-Ground truth records can declare evaluation settings under `evaluation`. `evidence_path` and `answer_path` identify the fields used by retrieval and generation metrics. Inference artifacts include the group's `config/schema.json` as the expected output shape; `evaluation.output_schema` is only needed when a case must override that schema. The evaluator reports this as `output_structure`, a schema-validity metric that checks required fields, types, item shape, and unexpected properties without comparing answer text or evidence content.
+Ground truth records can declare evaluation settings under `evaluation`. `answer_path` identifies the answer field used by generation metrics. `evidence_path` and `evidence_key` identify the evidence collection and evidence field used for retrieval matching, such as `url`; when `evidence_key` is omitted, the evaluator does not compute `retrieval_recall`. Inference artifacts include the group's `config/schema.json` as the expected output shape; `evaluation.output_schema` is only needed when a case must override that schema. The evaluator reports this as `output_structure`, a schema-validity metric that checks required fields, types, item shape, and unexpected properties without comparing answer text or evidence content. Cases may declare `evaluation.ignored_output_structure_issues` as exact `{ "path", "keyword", "message" }` issue entries to suppress known-valid schema exceptions while keeping all other schema violations active.
 
 ## Evaluation catalog metrics
 

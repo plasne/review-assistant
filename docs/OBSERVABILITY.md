@@ -57,7 +57,7 @@ Long-running chat and tool workflows should also include:
 | `review-assistant.agent-provider-cancel-failed` | Provider cancellation failed. |
 | `review-assistant.agent-provider-disconnect-failed` | SDK session disconnect failed during cleanup. |
 | `review-assistant.agent-provider-stop-failed` | SDK runtime stop returned cleanup errors. |
-| `review-assistant.inference-run-started` | Inference harness started a full inference run, including `runFolder`, iteration count, case counts, and timeout. |
+| `review-assistant.inference-run-started` | Inference harness started a full inference run, including `runFolder`, iteration count, case counts, and per-prompt timeout. |
 | `review-assistant.inference-case-started` | Inference harness started one ground truth case, including `runFolder`, `caseId`, and prompt count. |
 | `review-assistant.inference-case-completed` | Inference harness completed one case, including status, elapsed time, and tool call count. |
 | `review-assistant.inference-case-failed` | Inference harness failed one case with a structured code and elapsed time. |

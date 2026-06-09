@@ -10,7 +10,6 @@ import {
   createInferenceAgent,
   DETERMINISTIC_SEARCH_TOOL,
   INFERENCE_PROMPT_TIMEOUT_MS,
-  INFERENCE_TIMEOUT_MS,
   loadGroundTruthCases,
   manifestBlobPath,
   runInference,
@@ -84,8 +83,7 @@ describe('inference CLI config', () => {
 });
 
 describe('inference run artifacts', () => {
-  it('uses a long run budget and a separate per-prompt timeout by default', () => {
-    expect(INFERENCE_TIMEOUT_MS).toBe(60 * 60 * 1000);
+  it('uses a per-prompt timeout by default', () => {
     expect(INFERENCE_PROMPT_TIMEOUT_MS).toBe(2 * 60 * 1000);
   });
 

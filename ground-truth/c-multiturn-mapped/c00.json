@@ -1,12 +1,12 @@
 {
-  "ref": "d00",
+  "ref": "c00",
   "description": "A variation of the Dracula objective question using a multi-turn schema with turn-scoped evidence.",
   "input": {
     "id": "",
     "turns": []
   },
   "prompts": [
-    "In Fury of Dracula, what is Dracula's goal? Search the knowledge base, then add a turn with the question, evidence, and answer."
+    "answer this question: What is Dracula trying to do in Fury of Dracula?"
   ],
   "output": {
     "id": "",
@@ -28,7 +28,8 @@
   },
   "evaluation": {
     "evidence_path": "/turns/0/evidence",
-    "answer_path": "/turns/0/answer"
+    "answer_path": "/turns/0/answer",
+    "evidence_key": "url"
   },
-  "tags": ["turns:multi", "mapped:false", "state:new-question"]
+  "tags": ["turns:multi", "mapped:true", "state:new-question"]
 }

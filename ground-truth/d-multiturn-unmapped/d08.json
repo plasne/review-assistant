@@ -1,0 +1,31 @@
+{
+  "ref": "d08",
+  "description": "A multi-turn no-results search flow where the assistant records a safe outcome without fabricating evidence.",
+  "input": {
+    "id": "",
+    "turns": []
+  },
+  "prompts": [
+    "Search for an official Fury of Dracula rule about helicopter movement between cities and record the outcome in this record."
+  ],
+  "output": {
+    "id": "",
+    "turns": [
+      {
+        "question": "Is there an official Fury of Dracula rule about helicopter movement between cities?",
+        "evidence": [],
+        "answer": "No supporting evidence was found for an official helicopter movement rule in the available Fury of Dracula rules source, so no evidence entries were recorded."
+      }
+    ]
+  },
+  "evaluation": {
+    "evidence_path": "/turns/0/evidence",
+    "answer_path": "/turns/0/answer",
+    "evidence_key": "url"
+  },
+  "tags": [
+    "turns:multi",
+    "mapped:false",
+    "state:no-results"
+  ]
+}

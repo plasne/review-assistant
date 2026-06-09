@@ -17,7 +17,6 @@ import { parseExternalMcpServers } from './mcp';
 import { LocalStorageAdapter } from './storage';
 import { createLocalToolRuntime, discoverLocalToolPlugins, type LocalToolPlugin, type LocalToolRuntime } from './tools';
 
-export const INFERENCE_TIMEOUT_MS = 60 * 60 * 1000;
 export const INFERENCE_PROMPT_TIMEOUT_MS = 2 * 60 * 1000;
 export const DETERMINISTIC_SEARCH_TOOL = 'searchKnowledgeBase';
 
@@ -164,7 +163,6 @@ export type RunInferenceOptions = {
   runFolder: string;
   iterations: number;
   appConfigValues?: Record<string, string>;
-  timeoutMs?: number;
   promptTimeoutMs?: number;
   agent?: InferenceAgent;
   artifactWriter: InferenceArtifactWriter;
@@ -245,9 +243,7 @@ const createGroundTruthStorage = (localPath: string): LocalStorageAdapter =>
 export const runInference = async (options: RunInferenceOptions): Promise<InferenceRunResult> => {
   const startedAt = Date.now();
   const groundTruthRoot = path.join(options.repoRoot, 'ground-truth');
-  const timeoutMs = options.timeoutMs ?? INFERENCE_TIMEOUT_MS;
   const promptTimeoutMs = options.promptTimeoutMs ?? INFERENCE_PROMPT_TIMEOUT_MS;
-  const deadline = startedAt + timeoutMs;
   const { cases, loadErrors } = await loadGroundTruthCases(options.repoRoot);
   assertUniqueCaseRefs(cases);
   const localToolPlugins = await loadGroundTruthLocalToolPlugins(options.repoRoot);
@@ -260,7 +256,6 @@ export const runInference = async (options: RunInferenceOptions): Promise<Infere
     iterations: options.iterations,
     caseCount: cases.length,
     loadErrorCount: loadErrors.length,
-    timeoutMs,
     promptTimeoutMs
   });
 
@@ -274,23 +269,6 @@ export const runInference = async (options: RunInferenceOptions): Promise<Infere
       artifactBlobPaths.push(blobPath);
     }
     for (const groundTruthCase of cases) {
-      if (Date.now() >= deadline) {
-        const artifact = createFailedCaseArtifact(
-          options,
-          iteration,
-          groundTruthCase.ref,
-          groundTruthCase.caseId,
-          { code: 'INFERENCE_TIMEOUT', message: 'Inference run timed out before this case started.' },
-          groundTruthRoot,
-          'timeout',
-          groundTruthCase.groundTruth
-        );
-        const blobPath = caseArtifactPath(options.runFolder, artifact.ref, artifact.iteration);
-        await options.artifactWriter.uploadJson(blobPath, toWrittenInferenceJson(artifact));
-        artifacts.push(artifact);
-        artifactBlobPaths.push(blobPath);
-        continue;
-      }
       const artifact = await runCase(options, agent, localToolPlugins, groundTruthCase, iteration, promptTimeoutMs);
       const blobPath = caseArtifactPath(options.runFolder, artifact.ref, artifact.iteration);
       await options.artifactWriter.uploadJson(blobPath, toWrittenInferenceJson(artifact));
