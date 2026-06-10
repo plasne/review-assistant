@@ -133,6 +133,25 @@ describe('record draft store', () => {
     expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: true });
   });
 
+  it('rejects saving a draft when the persisted record changed after loading but before staging', async () => {
+    let stored: unknown = { answer: 'Original' };
+    const storage = createStorage(() => stored, (next) => {
+      stored = next;
+    });
+    const drafts = new RecordDraftStore(() => storage);
+
+    await expect(drafts.getRecord('sample-project', 'record-1')).resolves.toMatchObject({
+      data: { answer: 'Original' }
+    });
+    stored = { answer: 'Blob edit' };
+    await drafts.updateRecord('sample-project', 'record-1', { answer: 'Local edit' });
+
+    await expect(drafts.saveDraft('sample-project', 'record-1')).rejects.toThrow('Record changed after this draft was staged');
+
+    expect(stored).toEqual({ answer: 'Blob edit' });
+    expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: true });
+  });
+
   it('passes project schema saves through without staging a record draft', async () => {
     let savedSchema: unknown;
     const storage = createStorage(
@@ -162,6 +181,9 @@ const createStorage = (read: () => unknown, write: (value: unknown) => void): St
   listProjects: async () => [],
   createProject: async (projectId) => ({ id: projectId, name: projectId }),
   openProject: async (projectId) => ({ project: { id: projectId, name: projectId }, schema: {}, records: [], projectConfig: {} }),
+  getAppPrompt: async () => undefined,
+  getAppConfig: async () => ({}),
+  getAppMcpConfig: async () => undefined,
   getRecord: async (projectId, recordId) => createRecordDetail(projectId, recordId, read()),
   readRecordData: async (_projectId, recordId) => {
     const value = read();

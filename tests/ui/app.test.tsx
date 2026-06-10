@@ -996,7 +996,7 @@ describe('review UI', () => {
     const recordButton = await screen.findByRole('button', { name: 'valid-record' });
     expect(recordList).toContainElement(recordButton);
     await userEvent.click(recordButton);
-    expect(await screen.findByText('Record loaded.')).toBeInTheDocument();
+    expect(await screen.findByText('How?')).toBeInTheDocument();
     const saveRecordButton = screen.getByRole('button', { name: 'Save' });
     expect(saveRecordButton).toHaveClass('create-record-button', 'action-icon-button');
     expect(saveRecordButton).toHaveAttribute('data-tooltip', 'Save record');

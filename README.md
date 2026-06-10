@@ -6,16 +6,16 @@ Review Assistant is an Electron desktop app for reviewing inference records, col
 
 ```bash
 npm install
-mkdir -p config
-printf 'LOCAL_PATH=$PWD/data' > config/.env
+mkdir -p data/config
+printf 'LOCAL_PATH=$PWD/data' > .env
 npm run electron
 ```
 
-`LOCAL_PATH` points at a directory of projects. Each project is a folder with:
+Root `.env` selects the project backend with `LOCAL_PATH`, `AZURE_STORAGE_ACCOUNT_CONNSTRING`, or `AZURE_STORAGE_ACCOUNT_NAME` plus `AZURE_STORAGE_CONTAINER`. `LOCAL_PATH` points at a directory of projects. App-level settings, defaults, and plug-ins live in `LOCAL_PATH/config`. Azure Blob storage uses the same logical layout inside `AZURE_STORAGE_CONTAINER`: root `config/` for app-level files and one folder per project. Each project is a folder with:
 
 | File                 | Purpose                                               |
 | -------------------- | ----------------------------------------------------- |
-| `config/.env`        | Optional app/project environment settings.            |
+| `config/.env`        | Optional project environment settings.                |
 | `config/schema.json` | JSON Schema for all record JSON files in the project. |
 | `config/config.json` | Optional schema-path review configuration.            |
 | `config/mcp.json`    | Optional external MCP connectors.                     |
@@ -23,7 +23,9 @@ npm run electron
 | `config/tags.json`   | Optional manual tag definitions.                      |
 | `*.json`             | Review records.                                       |
 
-App-level tag defaults and computed tag plug-ins can live in the app `config/` folder next to `config/.env`. Project-level `config/tags.json` files take precedence over app-level manual tag definitions with the same tag name. Executable computed tag plug-ins are loaded only from the app-level `config/` folder so opening a project never executes project-supplied code.
+Local storage uses atomic file writes for record and schema updates. Azure Blob storage uses Blob ETags and conditional uploads for drafted record saves, new-record creation, and generated schema saves so stale writes fail instead of overwriting newer blob revisions.
+
+App-level tag defaults and computed tag plug-ins can live in the app `LOCAL_PATH/config/` folder next to `LOCAL_PATH/config/.env`. Project-level `config/tags.json` files take precedence over app-level manual tag definitions with the same tag name. Executable computed tag plug-ins are loaded only from the app-level config folder so opening a project never executes project-supplied code.
 
 ### Manual tags
 
@@ -42,7 +44,7 @@ Each definition needs a non-empty `name` and `description`. Names are trimmed, c
 
 ### Computed tag plug-ins
 
-Place computed tag plug-ins in app-level `config/*.mjs` next to the app `config/.env`. JavaScript files inside project `config/` folders are ignored. A plug-in must export an object with a synchronous `tag(record, context)` function:
+Place computed tag plug-ins in app-level `config/*.mjs` next to the app `config/.env`. JavaScript files inside project `config/` folders are ignored. Blob-backed app-level plug-ins are not executed; computed tag plug-ins run only from trusted local app config folders. A plug-in must export an object with a synchronous `tag(record, context)` function:
 
 ```js
 const readTags = (record, pointer) => {
@@ -100,13 +102,13 @@ When adding schema-dependent behavior, include at least one regression that uses
 
 ## Agent prompts
 
-Place `config/prompt.md` next to the app `config/.env` to define default app instructions. A project can provide its own `config/prompt.md`; when present, Review Assistant appends the app and project prompts in order for that request.
+Place `prompt.md` next to the app `LOCAL_PATH/config/.env` to define default app instructions. A project can provide its own `config/prompt.md`; when present, Review Assistant appends the app and project prompts in order for that request.
 
 The generated request still appends current project/record identifiers, selected attachments, local Review Assistant tools, plugin tools, and external MCP server metadata after the selected prompt text.
 
 ## Agent settings
 
-Set optional agent parameters in the app-level `config/.env` next to `LOCAL_PATH` or Azure storage settings:
+Set backend location keys in root `.env`. Azure storage also requires `AZURE_STORAGE_CONTAINER`, the single container that holds root `config/` and project folders. Set optional agent parameters in the app-level `config/.env` (`LOCAL_PATH/config/.env` for local storage, or root `config/.env` inside the Azure container):
 
 ```bash
 AGENT_MODEL=gpt-5.5
@@ -131,7 +133,7 @@ REASONING_EFFORT=medium
 
 `AGENT_MODEL` and `REASONING_EFFORT` are optional and use the same validation as app agent settings. `EVALUATION_JUDGE_TIMEOUT_SECONDS` defaults to `120`.
 
-Ground truth records can declare evaluation settings under `evaluation`. `answer_path` identifies the answer field used by generation metrics. `evidence_path` and `evidence_key` identify the evidence collection and evidence field used for retrieval matching, such as `url`; when `evidence_key` is omitted, the evaluator does not compute `retrieval_recall`. Inference artifacts include the group's `config/schema.json` as the expected output shape; `evaluation.output_schema` is only needed when a case must override that schema. The evaluator reports this as `output_structure`, a schema-validity metric that checks required fields, types, item shape, and unexpected properties without comparing answer text or evidence content. Cases may declare `evaluation.ignored_output_structure_issues` as exact `{ "path", "keyword", "message" }` issue entries to suppress known-valid schema exceptions while keeping all other schema violations active.
+Ground truth records can declare evaluation settings under `evaluation`. `answer_path` identifies the answer field used by generation metrics. `evidence_path` and `evidence_key` identify the evidence collection and evidence field used for retrieval matching, such as `url`; when `evidence_key` is omitted, the evaluator does not compute `retrieval_recall`. Inference artifacts include the project's `config/schema.json` as the expected output shape; `evaluation.output_schema` is only needed when a case must override that schema. The evaluator reports this as `output_structure`, a schema-validity metric that checks required fields, types, item shape, and unexpected properties without comparing answer text or evidence content. Cases may declare `evaluation.ignored_output_structure_issues` as exact `{ "path", "keyword", "message" }` issue entries to suppress known-valid schema exceptions while keeping all other schema violations active.
 
 ## Evaluation catalog metrics
 
@@ -177,7 +179,7 @@ The renderer can request text attachments through the preload API, but main owns
 
 ## External MCP connectors
 
-Drop a `config/mcp.json` file next to the app `config/.env` to define MCP sources shared by all projects, or into a project's `config/` folder to define project-specific sources. The file uses the standard `mcpServers` shape:
+Drop an `mcp.json` file next to the app `LOCAL_PATH/config/.env` to define MCP sources shared by all projects, or into a project's `config/` folder to define project-specific sources. The file uses the standard `mcpServers` shape:
 
 ```json
 {

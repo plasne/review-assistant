@@ -23,7 +23,7 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 - Preload validates request arguments before invoking allowlisted IPC channels and validates responses/events before exposing them to renderer code.
 - Main validates project identifiers, record identifiers, chat messages, and IPC payloads before crossing into storage or agent orchestration.
 - Storage adapters implement one stable project contract: `listProjects`, `createProject`, `openProject`, `getRecord`, and `getProjectPrompt`.
-- Agent instructions come from `config/prompt.md` beside the app `config/.env` plus the selected project's `config/prompt.md` when present.
+- Root `.env` selects the storage backend and location. Agent instructions come from app-level `config/prompt.md` plus the selected project's `config/prompt.md` when present. For local storage, app-level config is `LOCAL_PATH/config`; for Azure Blob storage, app-level config is root `config/` inside `AZURE_STORAGE_CONTAINER`.
 - Local tool responses use `ToolInvocationResponse` with stable `requestId`, `ok`, `result`, and structured `error` fields.
 - Project-level local tools, such as generated schema saves, use the selected project from trusted UI state and never accept project paths or identifiers from model-provided tool arguments.
 
@@ -34,7 +34,7 @@ Review Assistant uses a secure Electron split with strict ownership across rende
 3. The renderer may request text file attachments through preload; main opens the system picker, reads selected text files, and caches their contents by attachment identifier.
 4. The renderer starts chat by sending the user message plus selected project/record identifiers and attachment metadata.
 5. Main resolves attachment identifiers from its cache, then assembles the selected app/project prompt, selected record context identifiers, attachment content, and local tool metadata.
-6. Main resolves app-level external MCP connectors from `config/mcp.json` beside the app `config/.env` and project-scoped connectors from the selected project's `config/mcp.json`, including environment placeholders from app/project configuration.
+6. Main resolves app-level external MCP connectors from app-level `config/mcp.json` and project-scoped connectors from the selected project's `config/mcp.json`, including environment placeholders from app/project configuration.
 7. The agent worker launches GitHub Copilot with an isolated temporary workspace and MCP configuration.
 8. Copilot calls Review Assistant MCP tools when it needs selected record contents and may call allowlisted external MCP tools.
 9. Local tool calls return through the worker to main, where the trusted UI-selected project and record determine storage access.

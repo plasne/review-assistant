@@ -19,6 +19,7 @@ export type RecordDraftStatus = {
 
 export class RecordDraftStore {
   private readonly drafts = new Map<DraftKey, RecordDraft>();
+  private readonly loadedRecords = new Map<DraftKey, unknown>();
 
   constructor(private readonly getStorage: () => StorageAdapter) {}
 
@@ -29,6 +30,9 @@ export class RecordDraftStore {
       listProjects: () => storage.listProjects(),
       createProject: (projectId) => storage.createProject(projectId),
       openProject: (projectId) => storage.openProject(projectId),
+      getAppPrompt: () => storage.getAppPrompt(),
+      getAppConfig: () => storage.getAppConfig(),
+      getAppMcpConfig: () => storage.getAppMcpConfig(),
       getRecord: (projectId, recordId) => store.getRecord(projectId, recordId),
       readRecordData: (projectId, recordId) => store.readRecordData(projectId, recordId),
       renderRecordData: (projectId, recordId, data) => store.renderRecordData(projectId, recordId, data),
@@ -52,7 +56,14 @@ export class RecordDraftStore {
   }
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
-    return this.renderRecordData(projectId, recordId, await this.readRecordData(projectId, recordId));
+    const key = this.key(projectId, recordId);
+    const draft = this.drafts.get(key);
+    if (draft) {
+      return this.renderRecordData(projectId, recordId, cloneJson(draft.data));
+    }
+    const data = cloneJson(await this.requireDraftCapableStorage().readRecordData(projectId, recordId));
+    this.loadedRecords.set(key, cloneJson(data));
+    return this.renderRecordData(projectId, recordId, data);
   }
 
   async createRecord(projectId: string, recordId: string): Promise<RecordDetail> {
@@ -78,6 +89,9 @@ export class RecordDraftStore {
     const draft = this.drafts.get(key);
     if (draft) {
       return cloneJson(draft.data);
+    }
+    if (this.loadedRecords.has(key)) {
+      return cloneJson(this.loadedRecords.get(key));
     }
     return cloneJson(await this.requireDraftCapableStorage().readRecordData(projectId, recordId));
   }
@@ -126,6 +140,7 @@ export class RecordDraftStore {
     const reconciled = await this.getStorage().reconcileRecordTags(projectId, data);
     const record = await this.requireDraftCapableStorage().writeRecordDataIfUnchanged(projectId, recordId, reconciled.data, draft.baseData);
     this.drafts.delete(key);
+    this.loadedRecords.set(key, cloneJson(reconciled.data));
     return { record, ...(reconciled.pluginErrors.length > 0 ? { tagPluginWarning: tagPluginWarning(reconciled.pluginErrors) } : {}) };
   }
 
@@ -159,8 +174,9 @@ export class RecordDraftStore {
   private async stageDraft(projectId: string, recordId: string, data: unknown): Promise<void> {
     const key = this.key(projectId, recordId);
     const current = this.drafts.get(key);
+    const baseData = current ? current.baseData : this.loadedRecords.has(key) ? this.loadedRecords.get(key) : await this.requireDraftCapableStorage().readRecordData(projectId, recordId);
     this.drafts.set(key, {
-      baseData: current ? current.baseData : cloneJson(await this.requireDraftCapableStorage().readRecordData(projectId, recordId)),
+      baseData: cloneJson(baseData),
       data: cloneJson(data)
     });
   }

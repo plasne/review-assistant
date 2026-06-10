@@ -6,6 +6,9 @@ const storage: StorageAdapter = {
   listProjects: async () => [],
   createProject: async (projectId) => ({ id: projectId, name: projectId }),
   openProject: async (projectId) => ({ project: { id: projectId, name: projectId }, schema: {}, records: [], projectConfig: {} }),
+  getAppPrompt: async () => undefined,
+  getAppConfig: async () => ({}),
+  getAppMcpConfig: async () => undefined,
   getProjectPrompt: async () => undefined,
   getFeedbackConfig: async () => ({ properties: {} }),
   saveFeedbackConfig: async (_projectId, config) => config,
@@ -233,6 +236,29 @@ describe('local tool runtime', () => {
       }
     });
     expect(savedSchemas).toEqual([schema]);
+  });
+
+  it('passes the inspected schema baseline when saving a generated schema', async () => {
+    const savedSchemas: Array<{ schema: unknown; expectedSchema: unknown }> = [];
+    const adapter: StorageAdapter = {
+      ...storage,
+      saveProjectSchema: async (projectId, schema, expectedSchema) => {
+        savedSchemas.push({ schema: clone(schema), expectedSchema: clone(expectedSchema) });
+        return { projectId, schemaPath: 'config/schema.json', schema };
+      }
+    };
+    const runtime = createLocalToolRuntime({ storage: adapter, selectedProjectId: 'sample-project', selectedRecordId: 'valid-record' });
+    const schema = { type: 'object', properties: { answer: { type: 'string' } } };
+
+    await expect(runtime.execute({ tool: 'getRecordSchema', requestId: 'tool-request-baseline', arguments: {} })).resolves.toMatchObject({
+      ok: true,
+      result: { schema: { type: 'object' } }
+    });
+    await expect(runtime.execute({ tool: 'saveGeneratedSchema', requestId: 'tool-request-1', arguments: { schema } })).resolves.toMatchObject({
+      ok: true
+    });
+
+    expect(savedSchemas).toEqual([{ schema, expectedSchema: { type: 'object' } }]);
   });
 
   it('rejects generated schema saves without a selected project or non-object schema input', async () => {

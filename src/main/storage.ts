@@ -41,6 +41,9 @@ export interface StorageAdapter {
   listProjects(): Promise<ProjectSummary[]>;
   createProject(projectId: string): Promise<ProjectSummary>;
   openProject(projectId: string): Promise<OpenProjectResult>;
+  getAppPrompt(): Promise<string | undefined>;
+  getAppConfig(): Promise<Record<string, string>>;
+  getAppMcpConfig(): Promise<string | undefined>;
   getRecord(projectId: string, recordId: string): Promise<RecordDetail>;
   readRecordData?(projectId: string, recordId: string): Promise<unknown>;
   renderRecordData?(projectId: string, recordId: string, data: unknown): Promise<RecordDetail>;
@@ -48,7 +51,7 @@ export interface StorageAdapter {
   writeRecordDataIfUnchanged?(projectId: string, recordId: string, data: unknown, expectedData: unknown): Promise<RecordDetail>;
   getFeedbackConfig(projectId: string): Promise<FeedbackConfig>;
   saveFeedbackConfig(projectId: string, config: FeedbackConfig): Promise<FeedbackConfig>;
-  saveProjectSchema(projectId: string, schema: unknown): Promise<ProjectSchemaSaveResult>;
+  saveProjectSchema(projectId: string, schema: unknown, expectedSchema?: unknown): Promise<ProjectSchemaSaveResult>;
   getProjectUser(projectId: string): Promise<ProjectUser>;
   submitFeedback(projectId: string, recordId: string, input: FeedbackSubmissionInput): Promise<FeedbackSubmissionResult>;
   updateRecord(projectId: string, recordId: string, data: unknown): Promise<RecordDetail>;
@@ -73,7 +76,7 @@ const NEW_PROJECT_SCHEMA = {
 };
 export const RECORD_DRAFT_CONFLICT_MESSAGE =
   'Record changed after this draft was staged. Refresh the record, review the latest changes, and stage your edits again.';
-const BACKEND_KEYS = new Set(['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'LOCAL_PATH']);
+const BACKEND_KEYS = new Set(['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'AZURE_STORAGE_CONTAINER', 'LOCAL_PATH']);
 const CONFIG_DIRECTORY = 'config';
 const PROJECT_CONFIG_FILE = `${CONFIG_DIRECTORY}/config.json`;
 const PROJECT_ENV_FILE = `${CONFIG_DIRECTORY}/.env`;
@@ -132,6 +135,18 @@ export class LocalStorageAdapter implements StorageAdapter {
       .map((entry): RecordSummary => ({ id: path.basename(entry.name, '.json'), displayName: path.basename(entry.name, '.json') }))
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
     return { project: { id: projectId, name: projectId }, schema, records, projectConfig, feedbackConfig, tagDefinitions };
+  }
+
+  async getAppPrompt(): Promise<string | undefined> {
+    return readOptionalTextFile(path.join(this.appConfigPath(), 'prompt.md'));
+  }
+
+  async getAppConfig(): Promise<Record<string, string>> {
+    return { ...this.config.values, ...readRuntimeEnvValues(this.config.appEnvPath) };
+  }
+
+  async getAppMcpConfig(): Promise<string | undefined> {
+    return readOptionalTextFile(path.join(this.appConfigPath(), 'mcp.json'));
   }
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
@@ -198,7 +213,7 @@ export class LocalStorageAdapter implements StorageAdapter {
     return normalized;
   }
 
-  async saveProjectSchema(projectId: string, schema: unknown): Promise<ProjectSchemaSaveResult> {
+  async saveProjectSchema(projectId: string, schema: unknown, expectedSchema?: unknown): Promise<ProjectSchemaSaveResult> {
     const id = assertProjectId(projectId);
     const project = this.projectPath(id);
     const configPath = await this.projectConfigDirectoryPath(project);
@@ -212,6 +227,10 @@ export class LocalStorageAdapter implements StorageAdapter {
     let backupSchemaPath: string | undefined;
     try {
       if (await fileExists(schemaPath)) {
+        const currentSchema = await readJsonFile(schemaPath, `Project schema not found: ${id}`);
+        if (expectedSchema !== undefined && !jsonEqual(currentSchema, expectedSchema)) {
+          throw new Error('Project schema changed while saving. Refresh the project and try again.');
+        }
         backupSchemaPath = await nextSchemaBackupName(project);
         await fs.copyFile(schemaPath, path.join(project, backupSchemaPath), fsConstants.COPYFILE_EXCL);
         await fs.unlink(schemaPath);
@@ -343,8 +362,20 @@ export class LocalStorageAdapter implements StorageAdapter {
 
 export class AzureBlobStorageAdapter implements StorageAdapter {
   private readonly client: BlobServiceClient;
+  private readonly containerName: string;
+  private readonly recordBaselines = new Map<string, { data: unknown; etag: string }>();
+  private readonly schemaBaselines = new Map<string, { content: string; schema: unknown; etag: string }>();
 
-  constructor(private readonly config: AppConfig) {
+  constructor(private readonly config: AppConfig, client?: BlobServiceClient) {
+    const containerName = config.values.AZURE_STORAGE_CONTAINER;
+    if (!containerName) {
+      throw new Error('AZURE_STORAGE_CONTAINER is required for Azure Blob storage.');
+    }
+    this.containerName = containerName;
+    if (client) {
+      this.client = client;
+      return;
+    }
     if (config.backendKind === 'azure-connection-string') {
       this.client = BlobServiceClient.fromConnectionString(config.values.AZURE_STORAGE_ACCOUNT_CONNSTRING);
       return;
@@ -357,40 +388,49 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   }
 
   async listProjects(): Promise<ProjectSummary[]> {
-    const projects: ProjectSummary[] = [];
-    for await (const container of this.client.listContainers()) {
-      projects.push({ id: container.name, name: container.name });
+    const projects = new Set<string>();
+    for await (const blob of this.container().listBlobsFlat()) {
+      const projectId = projectIdFromRootBlob(blob.name);
+      if (projectId) {
+        projects.add(projectId);
+      }
     }
-    return projects.sort((a, b) => a.name.localeCompare(b.name));
+    return [...projects].sort((a, b) => a.localeCompare(b)).map((id) => ({ id, name: id }));
   }
 
   async createProject(projectId: string): Promise<ProjectSummary> {
     const id = assertNewProjectId(projectId);
-    const container = this.client.getContainerClient(id);
-    const response = await container.createIfNotExists();
-    if (!response.succeeded) {
-      throw new Error(`Project already exists: ${id}`);
-    }
+    const container = this.container();
+    await container.createIfNotExists();
+    const schemaBlob = container.getBlockBlobClient(projectBlobName(id, PROJECT_SCHEMA_FILE));
     const schema = JSON.stringify(NEW_PROJECT_SCHEMA, null, 2);
-    await container.getBlockBlobClient(PROJECT_SCHEMA_FILE).upload(schema, Buffer.byteLength(schema));
+    try {
+      await schemaBlob.upload(schema, Buffer.byteLength(schema), { conditions: { ifNoneMatch: '*' } });
+    } catch (error) {
+      if (isBlobConditionConflict(error)) {
+        throw new Error(`Project already exists: ${id}`);
+      }
+      throw error;
+    }
     const feedbackConfig = JSON.stringify(toPersistedFeedbackConfig(normalizeFeedbackConfig(NEW_PROJECT_SCHEMA, undefined)), null, 2);
-    await container.getBlockBlobClient(PROJECT_CONFIG_FILE).upload(feedbackConfig, Buffer.byteLength(feedbackConfig));
+    await container.getBlockBlobClient(projectBlobName(id, PROJECT_CONFIG_FILE)).upload(feedbackConfig, Buffer.byteLength(feedbackConfig));
     return { id, name: id };
   }
 
   async openProject(projectId: string): Promise<OpenProjectResult> {
     const id = assertProjectId(projectId);
-    const container = this.client.getContainerClient(id);
-    const schemaText = await this.readProjectSchemaBlob(container);
+    const container = this.container();
+    const schemaText = await this.readProjectSchemaBlob(container, id);
     const schema = JSON.parse(schemaText) as unknown;
-    const projectEnv = await this.readOptionalBlob(container, PROJECT_ENV_FILE);
-    const projectConfig = redactConfig(this.mergeAzureProjectConfig(projectEnv));
-    const feedbackConfig = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE));
+    const projectEnv = await this.readOptionalBlob(container, projectBlobName(id, PROJECT_ENV_FILE));
+    const projectConfig = redactConfig(this.mergeAzureProjectConfig(await this.getAppConfig(), projectEnv));
+    const feedbackConfig = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, projectBlobName(id, PROJECT_CONFIG_FILE)));
     const tagDefinitions = await this.getTagDefinitions(id);
     const records: RecordSummary[] = [];
-    for await (const blob of container.listBlobsFlat()) {
-      if (isRecordFile(blob.name)) {
-        const recordId = blob.name.slice(0, -'.json'.length);
+    for await (const blob of container.listBlobsFlat({ prefix: `${id}/` })) {
+      const relativeName = blob.name.slice(`${id}/`.length);
+      if (isRecordFile(relativeName)) {
+        const recordId = relativeName.slice(0, -'.json'.length);
         records.push({ id: recordId, displayName: recordId });
       }
     }
@@ -404,62 +444,73 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   async readRecordData(projectId: string, recordId: string): Promise<unknown> {
     const id = assertProjectId(projectId);
     const record = assertRecordId(recordId);
-    const container = this.client.getContainerClient(id);
-    return JSON.parse(await this.readBlob(container, `${record}.json`, `Record not found: ${record}`)) as unknown;
+    const container = this.container();
+    const response = await this.readBlobWithProperties(container, projectBlobName(id, `${record}.json`), `Record not found: ${record}`);
+    const data = JSON.parse(response.content) as unknown;
+    this.rememberRecordBaseline(id, record, data, response.etag);
+    return data;
   }
 
   async renderRecordData(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
     const id = assertProjectId(projectId);
     const record = assertRecordId(recordId);
-    const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readProjectSchemaBlob(container)) as unknown;
-    return buildRecordDetail(id, record, schema, data, normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE)));
+    const container = this.container();
+    const schema = JSON.parse(await this.readProjectSchemaBlob(container, id)) as unknown;
+    return buildRecordDetail(id, record, schema, data, normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, projectBlobName(id, PROJECT_CONFIG_FILE))));
   }
 
   async writeRecordData(projectId: string, recordId: string, data: unknown): Promise<RecordDetail> {
     const id = assertProjectId(projectId);
     const record = assertRecordId(recordId);
     const body = `${JSON.stringify(data, null, 2)}\n`;
-    await this.client
-      .getContainerClient(id)
-      .getBlockBlobClient(`${record}.json`)
-      .upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
+    const response = await this.container().getBlockBlobClient(projectBlobName(id, `${record}.json`)).upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
+    this.rememberRecordBaseline(id, record, data, response.etag);
     return this.renderRecordData(id, record, data);
   }
 
   async writeRecordDataIfUnchanged(projectId: string, recordId: string, data: unknown, expectedData: unknown): Promise<RecordDetail> {
     const id = assertProjectId(projectId);
     const record = assertRecordId(recordId);
-    const container = this.client.getContainerClient(id);
-    const blob = container.getBlockBlobClient(`${record}.json`);
+    const container = this.container();
+    const blob = container.getBlockBlobClient(projectBlobName(id, `${record}.json`));
     if (expectedData === undefined) {
       const body = `${JSON.stringify(data, null, 2)}\n`;
       try {
-        await blob.upload(body, Buffer.byteLength(body), {
+        const response = await blob.upload(body, Buffer.byteLength(body), {
           blobHTTPHeaders: { blobContentType: 'application/json' },
           conditions: { ifNoneMatch: '*' }
         });
+        this.rememberRecordBaseline(id, record, data, response.etag);
       } catch (error) {
-        if (typeof error === 'object' && error !== null && 'statusCode' in error && (error as { statusCode?: number }).statusCode === 412) {
+        if (isBlobConditionConflict(error)) {
           throw new Error(RECORD_DRAFT_CONFLICT_MESSAGE);
         }
         throw error;
       }
       return this.renderRecordData(id, record, data);
     }
-    const response = await blob.download();
-    const current = JSON.parse(await streamToString(response.readableStreamBody)) as unknown;
-    if (!jsonEqual(current, expectedData) || !response.etag) {
+    const baseline = this.recordBaselines.get(recordBaselineKey(id, record));
+    const conditionEtag = baseline && jsonEqual(baseline.data, expectedData) ? baseline.etag : undefined;
+    const current = conditionEtag ? undefined : await blob.download();
+    if (!conditionEtag) {
+      const currentData = JSON.parse(await streamToString(current?.readableStreamBody)) as unknown;
+      if (!jsonEqual(currentData, expectedData) || !current?.etag) {
+        throw new Error(RECORD_DRAFT_CONFLICT_MESSAGE);
+      }
+    }
+    const etag = conditionEtag ?? current?.etag;
+    if (!etag) {
       throw new Error(RECORD_DRAFT_CONFLICT_MESSAGE);
     }
     const body = `${JSON.stringify(data, null, 2)}\n`;
     try {
-      await blob.upload(body, Buffer.byteLength(body), {
+      const response = await blob.upload(body, Buffer.byteLength(body), {
         blobHTTPHeaders: { blobContentType: 'application/json' },
-        conditions: { ifMatch: response.etag }
+        conditions: { ifMatch: etag }
       });
+      this.rememberRecordBaseline(id, record, data, response.etag);
     } catch (error) {
-      if (typeof error === 'object' && error !== null && 'statusCode' in error && (error as { statusCode?: number }).statusCode === 412) {
+      if (isBlobConditionConflict(error)) {
         throw new Error(RECORD_DRAFT_CONFLICT_MESSAGE);
       }
       throw error;
@@ -469,58 +520,86 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
 
   async getFeedbackConfig(projectId: string): Promise<FeedbackConfig> {
     const id = assertProjectId(projectId);
-    const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readProjectSchemaBlob(container)) as unknown;
-    return normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE));
+    const container = this.container();
+    const schema = JSON.parse(await this.readProjectSchemaBlob(container, id)) as unknown;
+    return normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, projectBlobName(id, PROJECT_CONFIG_FILE)));
   }
 
   async saveFeedbackConfig(projectId: string, config: FeedbackConfig): Promise<FeedbackConfig> {
     const id = assertProjectId(projectId);
-    const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readProjectSchemaBlob(container)) as unknown;
+    const container = this.container();
+    const schema = JSON.parse(await this.readProjectSchemaBlob(container, id)) as unknown;
     const normalized = normalizeFeedbackConfig(schema, config);
     const body = `${JSON.stringify(toPersistedFeedbackConfig(normalized), null, 2)}\n`;
-    await container.getBlockBlobClient(PROJECT_CONFIG_FILE).upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
+    await container.getBlockBlobClient(projectBlobName(id, PROJECT_CONFIG_FILE)).upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
     return normalized;
   }
 
-  async saveProjectSchema(projectId: string, schema: unknown): Promise<ProjectSchemaSaveResult> {
+  async saveProjectSchema(projectId: string, schema: unknown, expectedSchema?: unknown): Promise<ProjectSchemaSaveResult> {
     const id = assertProjectId(projectId);
-    const container = this.client.getContainerClient(id);
-    const schemaBlob = container.getBlockBlobClient(PROJECT_SCHEMA_FILE);
+    const container = this.container();
+    const schemaBlob = container.getBlockBlobClient(projectBlobName(id, PROJECT_SCHEMA_FILE));
     const body = `${JSON.stringify(schema, null, 2)}\n`;
     let backupSchemaPath: string | undefined;
     if (await schemaBlob.exists()) {
-      const existing = await this.readProjectSchemaBlob(container);
-      backupSchemaPath = await this.nextSchemaBackupName(container);
-      await container.getBlockBlobClient(backupSchemaPath).upload(existing, Buffer.byteLength(existing), {
-        blobHTTPHeaders: { blobContentType: 'application/json' }
-      });
+      const baseline = expectedSchema === undefined ? undefined : this.schemaBaselines.get(id);
+      const existing =
+        baseline && jsonEqual(baseline.schema, expectedSchema)
+          ? { content: baseline.content, schema: baseline.schema, etag: baseline.etag }
+          : await this.readExistingSchemaForSave(schemaBlob, id, expectedSchema);
+      if (expectedSchema !== undefined && !jsonEqual(existing.schema, expectedSchema)) {
+        throw new Error('Project schema changed while saving. Refresh the project and try again.');
+      }
+      try {
+        const response = await schemaBlob.upload(body, Buffer.byteLength(body), {
+          blobHTTPHeaders: { blobContentType: 'application/json' },
+          conditions: { ifMatch: existing.etag }
+        });
+        this.rememberSchemaBaseline(id, body, schema, response.etag, { replace: true });
+        backupSchemaPath = await this.uploadSchemaBackup(container, id, existing.content);
+      } catch (error) {
+        if (isBlobConditionConflict(error)) {
+          throw new Error('Project schema changed while saving. Refresh the project and try again.');
+        }
+        throw error;
+      }
+    } else {
+      try {
+        const response = await schemaBlob.upload(body, Buffer.byteLength(body), {
+          blobHTTPHeaders: { blobContentType: 'application/json' },
+          conditions: { ifNoneMatch: '*' }
+        });
+        this.rememberSchemaBaseline(id, body, schema, response.etag, { replace: true });
+      } catch (error) {
+        if (isBlobConditionConflict(error)) {
+          throw new Error('Project schema changed while saving. Refresh the project and try again.');
+        }
+        throw error;
+      }
     }
-    await schemaBlob.upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
     return { projectId: id, schemaPath: PROJECT_SCHEMA_FILE, backupSchemaPath, schema };
   }
 
   async getProjectUser(projectId: string): Promise<ProjectUser> {
     const id = assertProjectId(projectId);
-    const projectEnv = await this.readOptionalBlob(this.client.getContainerClient(id), PROJECT_ENV_FILE);
-    return getProjectUser(this.mergeAzureProjectConfig(projectEnv));
+    const projectEnv = await this.readOptionalBlob(this.container(), projectBlobName(id, PROJECT_ENV_FILE));
+    return getProjectUser(this.mergeAzureProjectConfig(await this.getAppConfig(), projectEnv));
   }
 
   async submitFeedback(projectId: string, recordId: string, input: FeedbackSubmissionInput): Promise<FeedbackSubmissionResult> {
     const id = assertProjectId(projectId);
     const record = assertRecordId(recordId);
     const validInput = assertNonEmptyFeedbackSubmission(input);
-    const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readProjectSchemaBlob(container)) as unknown;
-    const config = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE));
+    const container = this.container();
+    const schema = JSON.parse(await this.readProjectSchemaBlob(container, id)) as unknown;
+    const config = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, projectBlobName(id, PROJECT_CONFIG_FILE)));
     assertSubmissionAllowed(config, validInput);
-    const user = getProjectUser(this.mergeAzureProjectConfig(await this.readOptionalBlob(container, PROJECT_ENV_FILE)));
+    const user = getProjectUser(this.mergeAzureProjectConfig(await this.getAppConfig(), await this.readOptionalBlob(container, projectBlobName(id, PROJECT_ENV_FILE))));
     if (!user.valid || !user.username) {
       throw new Error(user.validationMessage);
     }
-    const blob = container.getBlockBlobClient(`${record}.json`);
-    const data = JSON.parse(await this.readBlob(container, `${record}.json`, `Record not found: ${record}`)) as unknown;
+    const blob = container.getBlockBlobClient(projectBlobName(id, `${record}.json`));
+    const data = JSON.parse(await this.readBlob(container, projectBlobName(id, `${record}.json`), `Record not found: ${record}`)) as unknown;
     if (!isPlainRecord(data)) {
       throw new Error('Feedback can only be added to object records.');
     }
@@ -529,7 +608,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     await blob.upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
     return {
       username: user.username,
-      record: buildRecordDetail(id, record, schema, data, normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE)))
+      record: buildRecordDetail(id, record, schema, data, normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, projectBlobName(id, PROJECT_CONFIG_FILE))))
     };
   }
 
@@ -546,39 +625,54 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
 
   async getProjectPrompt(projectId: string): Promise<string | undefined> {
     const id = assertProjectId(projectId);
-    return this.readOptionalBlob(this.client.getContainerClient(id), PROJECT_PROMPT_FILE);
+    return this.readOptionalBlob(this.container(), projectBlobName(id, PROJECT_PROMPT_FILE));
   }
 
   async getProjectConfig(projectId: string): Promise<Record<string, string>> {
     const id = assertProjectId(projectId);
-    const projectEnv = await this.readOptionalBlob(this.client.getContainerClient(id), PROJECT_ENV_FILE);
-    return this.mergeAzureProjectConfig(projectEnv);
+    const projectEnv = await this.readOptionalBlob(this.container(), projectBlobName(id, PROJECT_ENV_FILE));
+    return this.mergeAzureProjectConfig(await this.getAppConfig(), projectEnv);
   }
 
   async getProjectMcpConfig(projectId: string): Promise<string | undefined> {
     const id = assertProjectId(projectId);
-    return this.readOptionalBlob(this.client.getContainerClient(id), PROJECT_MCP_FILE);
+    return this.readOptionalBlob(this.container(), projectBlobName(id, PROJECT_MCP_FILE));
   }
 
   async getTagDefinitions(projectId: string): Promise<import('../shared/types').TagDefinition[]> {
     const id = assertProjectId(projectId);
-    const projectDefinitions = await this.readOptionalJsonBlob(this.client.getContainerClient(id), PROJECT_TAGS_FILE);
-    const appDefinitions = await loadManualTagDefinitionsFromDirectories([path.dirname(this.config.appEnvPath)]);
+    const container = this.container();
+    const projectDefinitions = await this.readOptionalJsonBlob(container, projectBlobName(id, PROJECT_TAGS_FILE));
+    const appDefinitions = await this.readOptionalJsonBlob(container, PROJECT_TAGS_FILE);
     return loadManualTagDefinitionsFromValues([projectDefinitions, appDefinitions]);
   }
 
   async reconcileRecordTags(projectId: string, data: unknown): Promise<ReconcileTagsResult> {
     const id = assertProjectId(projectId);
-    const container = this.client.getContainerClient(id);
-    const schema = JSON.parse(await this.readProjectSchemaBlob(container)) as unknown;
-    const feedbackConfig = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, PROJECT_CONFIG_FILE));
+    const container = this.container();
+    const schema = JSON.parse(await this.readProjectSchemaBlob(container, id)) as unknown;
+    const feedbackConfig = normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, projectBlobName(id, PROJECT_CONFIG_FILE)));
     const tagDefinitions = await this.getTagDefinitions(id);
     const plugins = await discoverComputedTagPlugins([path.dirname(this.config.appEnvPath)]);
     return reconcileComputedTags(schema, feedbackConfig, data, tagDefinitions, plugins);
   }
 
-  private async readProjectSchemaBlob(container: ReturnType<BlobServiceClient['getContainerClient']>): Promise<string> {
-    return this.readBlob(container, PROJECT_SCHEMA_FILE, `Project is missing required ${PROJECT_SCHEMA_FILE}.`);
+  async getAppPrompt(): Promise<string | undefined> {
+    return this.readOptionalBlob(this.container(), PROJECT_PROMPT_FILE);
+  }
+
+  async getAppConfig(): Promise<Record<string, string>> {
+    return this.mergeAzureAppConfig(await this.readOptionalBlob(this.container(), PROJECT_ENV_FILE));
+  }
+
+  async getAppMcpConfig(): Promise<string | undefined> {
+    return this.readOptionalBlob(this.container(), PROJECT_MCP_FILE);
+  }
+
+  private async readProjectSchemaBlob(container: ReturnType<BlobServiceClient['getContainerClient']>, projectId: string): Promise<string> {
+    const response = await this.readBlobWithProperties(container, projectBlobName(projectId, PROJECT_SCHEMA_FILE), `Project is missing required ${PROJECT_SCHEMA_FILE}.`);
+    this.rememberSchemaBaseline(projectId, response.content, JSON.parse(response.content) as unknown, response.etag, { replace: false });
+    return response.content;
   }
 
   private async readBlob(container: ReturnType<BlobServiceClient['getContainerClient']>, name: string, missingMessage: string): Promise<string> {
@@ -588,6 +682,19 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     }
     const response = await blob.download();
     return streamToString(response.readableStreamBody);
+  }
+
+  private async readBlobWithProperties(
+    container: ReturnType<BlobServiceClient['getContainerClient']>,
+    name: string,
+    missingMessage: string
+  ): Promise<{ content: string; etag?: string }> {
+    const blob = container.getBlobClient(name);
+    if (!(await blob.exists())) {
+      throw new Error(missingMessage);
+    }
+    const response = await blob.download();
+    return { content: await streamToString(response.readableStreamBody), etag: response.etag };
   }
 
   private async readOptionalBlob(container: ReturnType<BlobServiceClient['getContainerClient']>, name: string): Promise<string | undefined> {
@@ -604,23 +711,90 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     return content ? (JSON.parse(content) as unknown) : undefined;
   }
 
-  private async nextSchemaBackupName(container: ReturnType<BlobServiceClient['getContainerClient']>): Promise<string> {
+  private async uploadSchemaBackup(container: ReturnType<BlobServiceClient['getContainerClient']>, projectId: string, content: string): Promise<string> {
     for (let index = 1; ; index += 1) {
       const name = `${CONFIG_DIRECTORY}/schema_${index}.json`;
-      if (!(await container.getBlobClient(name).exists())) {
+      try {
+        await container.getBlockBlobClient(projectBlobName(projectId, name)).upload(content, Buffer.byteLength(content), {
+          blobHTTPHeaders: { blobContentType: 'application/json' },
+          conditions: { ifNoneMatch: '*' }
+        });
         return name;
+      } catch (error) {
+        if (isBlobConditionConflict(error)) {
+          continue;
+        }
+        throw error;
       }
     }
   }
 
-  private mergeAzureProjectConfig(projectEnv: string | undefined): Record<string, string> {
-    return projectEnv
-      ? { ...this.config.values, ...readRuntimeEnvValues(this.config.appEnvPath), ...parseAzureProjectEnv(projectEnv) }
-      : { ...this.config.values, ...readRuntimeEnvValues(this.config.appEnvPath) };
+  private container(): ReturnType<BlobServiceClient['getContainerClient']> {
+    return this.client.getContainerClient(this.containerName);
+  }
+
+  private mergeAzureAppConfig(appEnv: string | undefined): Record<string, string> {
+    return appEnv ? { ...this.config.values, ...parseAzureConfigEnv(appEnv, 'app config/.env') } : { ...this.config.values };
+  }
+
+  private mergeAzureProjectConfig(appConfig: Record<string, string>, projectEnv: string | undefined): Record<string, string> {
+    return projectEnv ? { ...appConfig, ...parseAzureConfigEnv(projectEnv, 'project config/.env') } : { ...appConfig };
+  }
+
+  private async readExistingSchemaForSave(
+    schemaBlob: ReturnType<ReturnType<BlobServiceClient['getContainerClient']>['getBlockBlobClient']>,
+    projectId: string,
+    expectedSchema: unknown | undefined
+  ): Promise<{ content: string; schema: unknown; etag: string }> {
+    const response = await schemaBlob.download();
+    const content = await streamToString(response.readableStreamBody);
+    const schema = JSON.parse(content) as unknown;
+    if (expectedSchema !== undefined && !jsonEqual(schema, expectedSchema)) {
+      throw new Error('Project schema changed while saving. Refresh the project and try again.');
+    }
+    if (!response.etag) {
+      throw new Error('Project schema changed while saving. Refresh the project and try again.');
+    }
+    this.rememberSchemaBaseline(projectId, content, schema, response.etag, { replace: true });
+    return { content, schema, etag: response.etag };
+  }
+
+  private rememberRecordBaseline(projectId: string, recordId: string, data: unknown, etag: string | undefined): void {
+    const key = recordBaselineKey(projectId, recordId);
+    if (etag) {
+      this.recordBaselines.set(key, { data: cloneJson(data), etag });
+      return;
+    }
+    this.recordBaselines.delete(key);
+  }
+
+  private rememberSchemaBaseline(projectId: string, content: string, schema: unknown, etag: string | undefined, options: { replace: boolean }): void {
+    if (etag) {
+      const existing = this.schemaBaselines.get(projectId);
+      if (!options.replace && existing && jsonEqual(existing.schema, schema)) {
+        return;
+      }
+      this.schemaBaselines.set(projectId, { content, schema: cloneJson(schema), etag });
+      return;
+    }
+    this.schemaBaselines.delete(projectId);
   }
 }
 
 const isRecordFile = (name: string): boolean => name.endsWith('.json') && !path.basename(name).startsWith('_') && !name.includes('/');
+
+const projectBlobName = (projectId: string, name: string): string => `${projectId}/${name}`;
+
+const recordBaselineKey = (projectId: string, recordId: string): string => `${projectId}\u0000${recordId}`;
+
+const projectIdFromRootBlob = (name: string): string | undefined => {
+  const separatorIndex = name.indexOf('/');
+  if (separatorIndex <= 0) {
+    return undefined;
+  }
+  const projectId = name.slice(0, separatorIndex);
+  return projectId === CONFIG_DIRECTORY || projectId.startsWith('.') ? undefined : projectId;
+};
 
 const rejectSymlinkIfExists = async (filePath: string, label: string): Promise<void> => {
   try {
@@ -718,6 +892,14 @@ const nextSchemaBackupName = async (projectPath: string): Promise<string> => {
 
 const jsonEqual = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
 
+const isBlobConditionConflict = (error: unknown): boolean => {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const details = error as { statusCode?: number; code?: string };
+  return details.statusCode === 412 || details.code === 'BlobAlreadyExists' || details.code === 'ConditionNotMet';
+};
+
 const readRuntimeEnvValues = (envPath: string): Record<string, string> =>
   Object.fromEntries(Object.entries(readEnvFile(envPath)).filter(([key]) => !BACKEND_KEYS.has(key)));
 
@@ -743,8 +925,8 @@ const streamToString = async (stream: NodeJS.ReadableStream | undefined): Promis
   return Buffer.concat(chunks).toString('utf8');
 };
 
-const parseAzureProjectEnv = (content: string): Record<string, string> =>
-  Object.fromEntries(
+const parseAzureConfigEnv = (content: string, label: string): Record<string, string> => {
+  const values = Object.fromEntries(
     content
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -752,11 +934,30 @@ const parseAzureProjectEnv = (content: string): Record<string, string> =>
       .map((line) => {
         const index = line.indexOf('=');
         if (index <= 0) {
-          throw new Error(`Invalid project config/.env line: ${line}`);
+          throw new Error(`Invalid ${label} line: ${line}`);
         }
-        return [line.slice(0, index), line.slice(index + 1)];
+        const key = line.slice(0, index).trim();
+        if (!/^[A-Z0-9_]+$/.test(key)) {
+          throw new Error(`Invalid ${label} variable name: ${key}`);
+        }
+        return [key, stripQuotes(line.slice(index + 1).trim())];
       })
   );
+  const backendOverrides = Object.keys(values).filter((key) => BACKEND_KEYS.has(key));
+  if (backendOverrides.length > 0) {
+    throw new Error(`${label} cannot override backend selection keys: ${backendOverrides.join(', ')}`);
+  }
+  return values;
+};
+
+const stripQuotes = (value: string): string => {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  return value;
+};
+
+const cloneJson = <T>(value: T): T => (value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T));
 
 export const buildRecordDetail = (projectId: string, recordId: string, schema: unknown, data: unknown, displayConfig?: FeedbackConfig): RecordDetail => {
   const coreData = stripFeedbackProperties(data);

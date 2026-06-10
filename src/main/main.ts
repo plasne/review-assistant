@@ -34,7 +34,7 @@ import {
   assertThemeId,
   assertThemeState
 } from '../shared/validators';
-import { ConfigError, loadAppConfig } from './env';
+import { ConfigError, loadAppConfig, parseAgentSettings } from './env';
 import { createStorageAdapter, type StorageAdapter } from './storage';
 import { AgentRuntime, AgentRuntimeError } from './agent';
 import { createLocalToolRuntime } from './tools';
@@ -48,8 +48,6 @@ let storage: StorageAdapter | undefined;
 let bootstrapError: string | undefined;
 let backendKind: AppBootstrap['backendKind'];
 let appConfigValues: Record<string, string> = {};
-let appMcpConfigPath: string | undefined;
-let appPromptPath: string | undefined;
 let allowClose = false;
 let themeStore: ThemeStore | undefined;
 const agent = new AgentRuntime({ workerPath: path.join(__dirname, '../agent/agent-process.js') });
@@ -62,16 +60,17 @@ const TEXT_ATTACHMENT_FILTERS = [
   }
 ];
 
-const initializeBackend = (): void => {
+const initializeBackend = async (): Promise<void> => {
   try {
     const config = loadAppConfig();
     storage = createStorageAdapter(config);
     backendKind = config.backendKind;
-    appConfigValues = config.values;
-    agent.setAgentSettings(config.agentSettings ?? {});
-    appMcpConfigPath = path.join(path.dirname(config.appEnvPath), 'mcp.json');
-    appPromptPath = path.join(path.dirname(config.appEnvPath), 'prompt.md');
+    appConfigValues = storage ? await storage.getAppConfig() : config.values;
+    agent.setAgentSettings(parseAgentSettings(appConfigValues));
   } catch (error) {
+    storage = undefined;
+    backendKind = undefined;
+    appConfigValues = {};
     bootstrapError = error instanceof ConfigError || error instanceof Error ? error.message : String(error);
     logError('review-assistant.config-error', { message: bootstrapError });
   }
@@ -122,20 +121,6 @@ const requireThemeStore = (): ThemeStore => {
 };
 
 const drafts = new RecordDraftStore(requireStorage);
-
-const readOptionalTextFile = async (filePath: string | undefined): Promise<string | undefined> => {
-  if (!filePath) {
-    return undefined;
-  }
-  try {
-    return await fs.readFile(filePath, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return undefined;
-    }
-    throw error;
-  }
-};
 
 const readChatAttachment = async (filePath: string): Promise<ChatAttachmentContent> => {
   const stat = await fs.stat(filePath);
@@ -293,14 +278,15 @@ const registerIpc = (): void => {
       throw new Error('A project must be selected before sending selected record context.');
     }
     const activeStorage = validProjectId ? requireStorage() : storage;
-    const appPrompt = await readOptionalTextFile(appPromptPath);
+    const appConfig = activeStorage ? await activeStorage.getAppConfig() : appConfigValues;
+    const appPrompt = activeStorage ? await activeStorage.getAppPrompt() : undefined;
     const projectPrompt = activeStorage && validProjectId ? await activeStorage.getProjectPrompt(validProjectId) : undefined;
     const systemPrompt = [appPrompt, projectPrompt].filter((prompt): prompt is string => Boolean(prompt?.trim())).join('\n\n') || undefined;
     const projectConfig = activeStorage && validProjectId ? await activeStorage.getProjectConfig(validProjectId) : {};
-    const appMcpConfig = await readOptionalTextFile(appMcpConfigPath);
+    const appMcpConfig = activeStorage ? await activeStorage.getAppMcpConfig() : undefined;
     const projectMcpConfig = activeStorage && validProjectId ? await activeStorage.getProjectMcpConfig(validProjectId) : undefined;
-    const appMcpServers = parseExternalMcpServers(appMcpConfig, appConfigValues);
-    const projectMcpServers = parseExternalMcpServers(projectMcpConfig, { ...appConfigValues, ...projectConfig });
+    const appMcpServers = parseExternalMcpServers(appMcpConfig, appConfig);
+    const projectMcpServers = parseExternalMcpServers(projectMcpConfig, { ...appConfig, ...projectConfig });
     const mcpServers = mergeExternalMcpServers(appMcpServers, projectMcpServers);
     const toolStorage = validProjectId ? drafts.createStorageAdapter() : activeStorage;
     const tools = createLocalToolRuntime({
@@ -362,7 +348,7 @@ const registerIpc = (): void => {
 
 app.whenReady().then(async () => {
   themeStore = new ThemeStore({ userDataPath: app.getPath('userData') });
-  initializeBackend();
+  await initializeBackend();
   registerIpc();
   await createWindow();
 });

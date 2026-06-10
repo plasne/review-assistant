@@ -1,5 +1,8 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseAgentSettings, parseEnv, redactConfig, selectBackend } from '../../src/main/env';
+import { loadAppConfig, parseAgentSettings, parseEnv, redactConfig, selectBackend } from '../../src/main/env';
 
 describe('environment config', () => {
   it('parses env files without variable expansion', () => {
@@ -17,12 +20,62 @@ describe('environment config', () => {
     );
   });
 
+  it('resolves local app-level config under LOCAL_PATH', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-env-'));
+    try {
+      const localPath = path.join(tempRoot, 'data');
+      const bootstrapEnvPath = path.join(tempRoot, '.env');
+      const appEnvPath = path.join(localPath, 'config', '.env');
+      await fs.mkdir(path.dirname(appEnvPath), { recursive: true });
+      await fs.writeFile(bootstrapEnvPath, 'LOCAL_PATH=data\n');
+      await fs.writeFile(appEnvPath, 'USERNAME=app@example.com\n');
+
+      const config = loadAppConfig(bootstrapEnvPath);
+
+      expect(config).toMatchObject({
+        backendKind: 'local',
+        values: { LOCAL_PATH: localPath, USERNAME: 'app@example.com' },
+        appEnvPath: path.join(localPath, 'config', '.env')
+      });
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks backend overrides from local app-level config', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-env-'));
+    try {
+      const localPath = path.join(tempRoot, 'data');
+      const bootstrapEnvPath = path.join(tempRoot, '.env');
+      const appEnvPath = path.join(localPath, 'config', '.env');
+      await fs.mkdir(path.dirname(appEnvPath), { recursive: true });
+      await fs.writeFile(bootstrapEnvPath, 'LOCAL_PATH=data\n');
+      await fs.writeFile(appEnvPath, 'LOCAL_PATH=/tmp/other\n');
+
+      expect(() => loadAppConfig(bootstrapEnvPath)).toThrow('App config/.env cannot override backend selection keys: LOCAL_PATH');
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('redacts secret values in logs', () => {
     expect(redactConfig({ AZURE_STORAGE_ACCOUNT_CONNSTRING: 'secret', SOURCE_TOKEN: 'source-secret', LOCAL_PATH: '/tmp/projects' })).toEqual({
       AZURE_STORAGE_ACCOUNT_CONNSTRING: '****',
       SOURCE_TOKEN: '****',
       LOCAL_PATH: '/tmp/projects'
     });
+  });
+
+  it('requires an Azure storage container for blob-backed projects', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-env-'));
+    try {
+      const envPath = path.join(tempRoot, '.env');
+      await fs.writeFile(envPath, 'AZURE_STORAGE_ACCOUNT_NAME=account\n');
+
+      expect(() => loadAppConfig(envPath)).toThrow('AZURE_STORAGE_CONTAINER is required for Azure Blob storage.');
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('parses agent settings from app env values', () => {

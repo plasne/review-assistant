@@ -41,7 +41,7 @@ describe('inference ground truth loading', () => {
     await expect(loadGroundTruthCases(repoRoot)).resolves.toMatchObject({
       cases: [
         {
-          groupId: '00',
+          projectId: '00',
           caseId: 'b'
         }
       ],
@@ -132,7 +132,7 @@ describe('inference run artifacts', () => {
     expect(agent.contexts).toHaveLength(3);
     expect(agent.contexts[0]).toEqual(
       expect.objectContaining({
-        systemPrompt: expect.stringContaining('Use grouped inference settings.'),
+        systemPrompt: expect.stringContaining('Use project inference settings.'),
         tools: expect.arrayContaining([
           expect.objectContaining({ name: DETERMINISTIC_SEARCH_TOOL, source: 'plugin' }),
           expect.objectContaining({ name: 'readRecord', source: 'built-in' })
@@ -475,7 +475,7 @@ const createTempRepo = async (): Promise<string> => {
   await fs.mkdir(path.join(repoRoot, 'ground-truth', 'config'), { recursive: true });
   await fs.writeFile(path.join(repoRoot, 'ground-truth', 'config', 'search-plugin.mjs'), searchPluginSource);
   await fs.writeFile(path.join(repoRoot, 'ground-truth', '00', 'config', 'schema.json'), `${JSON.stringify(testSchema, null, 2)}\n`);
-  await fs.writeFile(path.join(repoRoot, 'ground-truth', '00', 'config', 'prompt.md'), 'Use grouped inference settings.\n');
+  await fs.writeFile(path.join(repoRoot, 'ground-truth', '00', 'config', 'prompt.md'), 'Use project inference settings.\n');
   return repoRoot;
 };
 
@@ -552,7 +552,7 @@ export default {
 };
 `;
 
-type GroundTruthCaseJson = Omit<GroundTruthCase, 'groupId' | 'groundTruth'>;
+type GroundTruthCaseJson = Omit<GroundTruthCase, 'projectId' | 'groundTruth'>;
 
 const createCase = (overrides: Partial<GroundTruthCaseJson> = {}): GroundTruthCaseJson => ({
   ref: 'ref-a',

@@ -6,7 +6,7 @@ import type { AppConfig, BackendKind } from '../shared/types';
 import { AgentSettingsError, parseAgentSettingsFromEnvValues } from '../shared/agent-settings';
 
 const SECRET_KEYS = new Set(['AZURE_STORAGE_ACCOUNT_CONNSTRING']);
-const BACKEND_KEYS = ['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'LOCAL_PATH'];
+const BACKEND_KEYS = ['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'AZURE_STORAGE_CONTAINER', 'LOCAL_PATH'];
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -65,18 +65,39 @@ export const selectBackend = (values: Record<string, string>): BackendKind => {
 };
 
 export const getAppEnvPath = (): string =>
-  path.resolve(process.cwd(), 'config', '.env');
+  path.resolve(process.env.REVIEW_ASSISTANT_APP_ENV ?? path.join(process.cwd(), '.env'));
 
 export const loadAppConfig = (envPath = getAppEnvPath()): AppConfig => {
-  const values = readEnvFile(envPath);
-  const backendKind = selectBackend(values);
+  const sourceEnvPath = path.resolve(envPath);
+  const bootstrapValues = readEnvFile(sourceEnvPath);
+  const backendKind = selectBackend(bootstrapValues);
+  if (backendKind !== 'local' && !bootstrapValues.AZURE_STORAGE_CONTAINER?.trim()) {
+    throw new ConfigError('AZURE_STORAGE_CONTAINER is required for Azure Blob storage.');
+  }
+  const localPath = bootstrapValues.LOCAL_PATH ? resolveEnvRelativePath(bootstrapValues.LOCAL_PATH, sourceEnvPath) : undefined;
+  const backendValues = backendKind === 'local' && localPath ? { ...bootstrapValues, LOCAL_PATH: localPath } : bootstrapValues;
+  const appEnvPath = backendKind === 'local' && localPath ? path.join(localPath, 'config', '.env') : sourceEnvPath;
+  const appValues = backendKind === 'local' && path.resolve(appEnvPath) !== sourceEnvPath ? readAppEnvFile(appEnvPath) : {};
+  const values = { ...backendValues, ...appValues };
   const agentSettings = parseAgentSettings(values);
   logInfo('review-assistant.config', {
-    source: envPath,
+    source: appEnvPath,
     backendKind,
     values: redactConfig(values)
   });
-  return { backendKind, values, appEnvPath: envPath, agentSettings };
+  return { backendKind, values, appEnvPath, agentSettings };
+};
+
+const resolveEnvRelativePath = (value: string, envPath: string): string =>
+  path.resolve(path.isAbsolute(value) ? value : path.join(path.dirname(envPath), value));
+
+const readAppEnvFile = (appEnvPath: string): Record<string, string> => {
+  const values = readEnvFile(appEnvPath);
+  const backendOverrides = BACKEND_KEYS.filter((key) => key in values);
+  if (backendOverrides.length > 0) {
+    throw new ConfigError(`App config/.env cannot override backend selection keys: ${backendOverrides.join(', ')}`);
+  }
+  return values;
 };
 
 export const parseAgentSettings = (values: Record<string, string | undefined>) => {
