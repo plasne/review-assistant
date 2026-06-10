@@ -11,6 +11,7 @@ type ToolExecutionContext = {
   storage?: StorageAdapter;
   selectedProjectId?: string;
   selectedRecordId?: string;
+  schemaBaselines?: Map<string, unknown>;
 };
 
 export type LocalToolDefinition = {
@@ -111,6 +112,9 @@ const readRecordTool: LocalToolDefinition = {
 
     try {
       const record = await context.storage.getRecord(context.selectedProjectId, context.selectedRecordId);
+      if (request.arguments.includeSchema === true) {
+        rememberSchemaBaseline(context, record.projectId, record.schema);
+      }
       return {
         requestId: request.requestId,
         ok: true,
@@ -209,6 +213,7 @@ const getRecordSchemaTool: LocalToolDefinition = {
 
     try {
       const record = await context.storage.getRecord(context.selectedProjectId, context.selectedRecordId);
+      rememberSchemaBaseline(context, record.projectId, record.schema);
       const path = typeof targetPath === 'string' ? assertSchemaPointer(targetPath) : '';
       const schema = path === '' ? record.schema : schemaAtPointer(record.schema, path);
       return {
@@ -260,9 +265,11 @@ const saveGeneratedSchemaTool: LocalToolDefinition = {
     if (!isPlainRecord(schema)) {
       return toolError(request.requestId, 'INVALID_TOOL_ARGUMENTS', 'schema must be a JSON Schema object.', false);
     }
+    const expectedSchema = context.schemaBaselines?.get(context.selectedProjectId);
 
     try {
-      const result = await context.storage.saveProjectSchema(context.selectedProjectId, schema);
+      const result = await context.storage.saveProjectSchema(context.selectedProjectId, schema, expectedSchema);
+      rememberSchemaBaseline(context, context.selectedProjectId, result.schema);
       return {
         requestId: request.requestId,
         ok: true,
@@ -792,6 +799,7 @@ const builtInTools = [
 ];
 
 export const createLocalToolRuntime = (context: ToolExecutionContext, plugins: LocalToolPlugin[] = []): LocalToolRuntime => {
+  const runtimeContext: ToolExecutionContext = { ...context, schemaBaselines: new Map(context.schemaBaselines) };
   const registeredTools = registerTools(plugins);
   const listTools = (): LocalToolMetadata[] =>
     registeredTools.map((tool) => ({
@@ -809,9 +817,13 @@ export const createLocalToolRuntime = (context: ToolExecutionContext, plugins: L
       if (!tool) {
         return toolError(request.requestId, 'TOOL_NOT_FOUND', `Tool not found: ${request.tool}`, false);
       }
-      return executeWithRecordJsonGuard(tool, request, context, listTools);
+      return executeWithRecordJsonGuard(tool, request, runtimeContext, listTools);
     }
   };
+};
+
+const rememberSchemaBaseline = (context: ToolExecutionContext, projectId: string, schema: unknown): void => {
+  context.schemaBaselines?.set(projectId, cloneJson(schema));
 };
 
 const executeWithRecordJsonGuard = async (

@@ -4,7 +4,10 @@ coverage/
 test-results/
 playwright-report/
 **/.env
-!test-fixtures/config/.env
 !ground-truth/config/.env
 data/
+_data/
+!test-fixtures/data/
+!test-fixtures/data/config/
+!test-fixtures/.env
 .copilot-tracking/

@@ -8,6 +8,7 @@ const fakeProviderEnv = {
 };
 const appRoot = path.resolve('.');
 const fixtureCwd = path.resolve('test-fixtures');
+const fixtureAppEnv = path.resolve('test-fixtures/.env');
 
 const writeEnvFile = (filePath: string, content: string): void => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -27,7 +28,8 @@ test('real Electron app opens a local project and reviews a record', async () =>
     cwd: fixtureCwd,
     env: {
       ...process.env,
-      ...fakeProviderEnv
+      ...fakeProviderEnv,
+      REVIEW_ASSISTANT_APP_ENV: fixtureAppEnv
     }
   });
   const page = await electronApp.firstWindow();
@@ -35,7 +37,6 @@ test('real Electron app opens a local project and reviews a record', async () =>
   await expect(page.getByText('Version')).toBeVisible();
   await page.getByLabel('Current project').selectOption('sample-project');
   await page.getByRole('button', { name: 'valid-record', exact: true }).click();
-  await expect(page.getByText('Record loaded.')).toBeVisible();
   await expect(page.getByText('How do I run the harness?')).toBeVisible();
   const arrayItemSummaryMetrics = await page.evaluate(() => {
     const summary = document.querySelector('.collapsible-node summary');
@@ -130,7 +131,8 @@ test('records list scroll area reaches the records column edge and keeps content
     cwd: tempRoot,
     env: {
       ...process.env,
-      ...fakeProviderEnv
+      ...fakeProviderEnv,
+      REVIEW_ASSISTANT_APP_ENV: appEnv
     }
   });
   const page = await electronApp.firstWindow();
@@ -181,7 +183,8 @@ test('workspace keeps filling the window after collapsible sections are toggled'
     cwd: tempRoot,
     env: {
       ...process.env,
-      ...fakeProviderEnv
+      ...fakeProviderEnv,
+      REVIEW_ASSISTANT_APP_ENV: appEnv
     }
   });
   const page = await electronApp.firstWindow();
@@ -249,6 +252,7 @@ test('real Electron app lets Copilot read the displayed record through the local
     env: {
       ...process.env,
       ...fakeProviderEnv,
+      REVIEW_ASSISTANT_APP_ENV: fixtureAppEnv,
       FAKE_COPILOT_REQUIRE_REVIEW_ASSISTANT_TOOLS: '1'
     }
   });
@@ -286,7 +290,8 @@ test('real Electron app configures feedback and shows subsequent users collapsed
       cwd: tempRoot,
       env: {
         ...process.env,
-        ...fakeProviderEnv
+        ...fakeProviderEnv,
+        REVIEW_ASSISTANT_APP_ENV: appEnv
       }
     });
 

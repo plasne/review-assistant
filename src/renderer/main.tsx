@@ -2213,9 +2213,7 @@ const RecordDetails = ({
             ))}
           </ul>
         </section>
-      ) : (
-        <p className="valid">Record loaded.</p>
-      )}
+      ) : null}
       {showTurnTabs ? (
         <div className="node-tabs" role="tablist" aria-label="Record detail tabs">
           <button

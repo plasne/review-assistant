@@ -22,7 +22,7 @@ export const INFERENCE_PROMPT_TIMEOUT_MS = 2 * 60 * 1000;
 export const DETERMINISTIC_SEARCH_TOOL = 'searchKnowledgeBase';
 
 export type GroundTruthCase = {
-  groupId: string;
+  projectId: string;
   ref: string;
   caseId: string;
   description: string;
@@ -189,18 +189,18 @@ export const loadGroundTruthCases = async (repoRoot: string): Promise<GroundTrut
   const loadErrors: GroundTruthLoadError[] = [];
 
   for (const project of projects) {
-    const groupId = project.id;
-    const groupRoot = path.join(root, groupId);
+    const projectId = project.id;
+    const projectRoot = path.join(root, projectId);
     let records: Array<{ id: string }>;
     let schema: unknown;
     try {
-      const openedProject = await storage.openProject(groupId);
+      const openedProject = await storage.openProject(projectId);
       records = openedProject.records;
       schema = openedProject.schema;
     } catch (error) {
       loadErrors.push({
-        fileName: `${groupId}/config`,
-        caseId: groupId,
+        fileName: `${projectId}/config`,
+        caseId: projectId,
         error: {
           code: 'GROUND_TRUTH_CONFIG_ERROR',
           message: error instanceof Error ? error.message : String(error)
@@ -210,16 +210,16 @@ export const loadGroundTruthCases = async (repoRoot: string): Promise<GroundTrut
     }
     for (const record of records) {
       const fileName = `${record.id}.json`;
-      const relativeName = `${groupId}/${fileName}`;
+      const relativeName = `${projectId}/${fileName}`;
       try {
-        const parsed = JSON.parse(await fs.readFile(path.join(groupRoot, fileName), 'utf8')) as Omit<
+        const parsed = JSON.parse(await fs.readFile(path.join(projectRoot, fileName), 'utf8')) as Omit<
           GroundTruthCase,
-          'groupId' | 'groundTruth'
+          'projectId' | 'groundTruth'
         >;
         cases.push({
           ...parsed,
           groundTruth: { ...cloneJson(parsed), schema: cloneJson(schema) },
-          groupId,
+          projectId,
           caseId: record.id
         });
       } catch (error) {
@@ -372,12 +372,12 @@ const runCase = async (
   });
 
   try {
-    const projectConfig = await staged.storage.getProjectConfig(groundTruthCase.groupId);
-    projectPrompt = await staged.storage.getProjectPrompt(groundTruthCase.groupId);
-    const projectMcpConfig = await staged.storage.getProjectMcpConfig(groundTruthCase.groupId);
+    const projectConfig = await staged.storage.getProjectConfig(groundTruthCase.projectId);
+    projectPrompt = await staged.storage.getProjectPrompt(groundTruthCase.projectId);
+    const projectMcpConfig = await staged.storage.getProjectMcpConfig(groundTruthCase.projectId);
     mcpServers = parseExternalMcpServers(projectMcpConfig, { ...(options.appConfigValues ?? {}), ...projectConfig });
     tools = createRecordingToolRuntime(
-      createLocalToolRuntime({ storage: staged.storage, selectedProjectId: groundTruthCase.groupId, selectedRecordId: groundTruthCase.caseId }, localToolPlugins),
+      createLocalToolRuntime({ storage: staged.storage, selectedProjectId: groundTruthCase.projectId, selectedRecordId: groundTruthCase.caseId }, localToolPlugins),
       recorder
     );
     for (const prompt of groundTruthCase.prompts) {
@@ -414,7 +414,7 @@ const runCase = async (
   }
 
   try {
-    output = await staged.storage.readRecordData(groundTruthCase.groupId, groundTruthCase.caseId);
+    output = await staged.storage.readRecordData(groundTruthCase.projectId, groundTruthCase.caseId);
   } catch (outputError) {
     output = {};
     if (!error) {
@@ -538,7 +538,7 @@ const runPrompt = async (
     agent
       .start(
         {
-          projectId: groundTruthCase.groupId,
+          projectId: groundTruthCase.projectId,
           recordId: groundTruthCase.caseId,
           message: prompt,
           history,
@@ -552,7 +552,7 @@ const runPrompt = async (
             {
               id: 'input-record',
               name: 'input.json',
-              path: `ground-truth/${groundTruthCase.groupId}/${groundTruthCase.caseId}.json`,
+              path: `ground-truth/${groundTruthCase.projectId}/${groundTruthCase.caseId}.json`,
               sizeBytes: Buffer.byteLength(JSON.stringify(groundTruthCase.input)),
               content: JSON.stringify(groundTruthCase.input, null, 2)
             }
@@ -666,8 +666,8 @@ const stageGroundTruthCase = async (
   groundTruthCase: GroundTruthCase
 ): Promise<{ storage: LocalStorageAdapter; cleanup: () => Promise<void> }> => {
   const stageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-inference-'));
-  const sourceProjectRoot = path.join(repoRoot, 'ground-truth', groundTruthCase.groupId);
-  const stagedProjectRoot = path.join(stageRoot, groundTruthCase.groupId);
+  const sourceProjectRoot = path.join(repoRoot, 'ground-truth', groundTruthCase.projectId);
+  const stagedProjectRoot = path.join(stageRoot, groundTruthCase.projectId);
   await fs.mkdir(stagedProjectRoot, { recursive: true });
   await copyDirectoryIfExists(path.join(repoRoot, 'ground-truth', 'config'), path.join(stageRoot, 'config'));
   await fs.cp(path.join(sourceProjectRoot, 'config'), path.join(stagedProjectRoot, 'config'), { recursive: true });
