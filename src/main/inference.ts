@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { BlobServiceClient } from '@azure/storage-blob';
 import { DefaultAzureCredential } from '@azure/identity';
+import { parseAgentSettingsFromEnvValues } from '../shared/agent-settings';
 import type {
   AppConfig,
   ChatMessage,
@@ -100,6 +101,7 @@ export type WrittenInferenceCaseDetails = {
   iteration: string;
   run_folder: string;
   case_id: string;
+  model?: string;
   started_at: string;
   finished_at: string;
   elapsed_ms: number;
@@ -114,6 +116,7 @@ export type InferenceCaseArtifact = {
   iteration: string;
   runFolder: string;
   caseId: string;
+  model?: string;
   startedAt: string;
   finishedAt: string;
   elapsedMs: number;
@@ -155,7 +158,8 @@ export type InferenceAgent = {
 export const createInferenceAgent = (appConfigValues: Record<string, string> | undefined): InferenceAgent =>
   new AgentRuntime({
     workerPath: path.join(__dirname, '../agent/agent-process.js'),
-    commandEnv: appConfigValues
+    commandEnv: appConfigValues,
+    agentSettings: parseAgentSettingsFromEnvValues(appConfigValues ?? {})
   });
 
 export type RunInferenceOptions = {
@@ -354,8 +358,10 @@ const runCase = async (
   let mcpServers: ExternalMcpServerConfig[] = [];
   let tools: LocalToolRuntime | undefined;
   const history: ChatMessage[] = [];
+  let model: string | undefined;
   let status: InferenceStatus = 'completed';
   let error: InferenceErrorPayload | undefined;
+  let output: unknown;
 
   logInfo('review-assistant.inference-case-started', {
     ref: groundTruthCase.ref,
@@ -385,12 +391,18 @@ const runCase = async (
         content: prompt
       });
       const response = await runPrompt(agent, tools, groundTruthCase, prompt, history, projectPrompt, mcpServers, promptTimeoutMs);
+      model = response.model ?? model;
       transcript.push({
         type: 'assistant-response',
         startedAt: response.startedAt,
         finishedAt: response.finishedAt,
         elapsedMs: response.elapsedMs,
         success: true,
+        metadata: {
+          assistantRequestElapsedMs: response.assistantRequestElapsedMs,
+          firstTokenLatencyMs: response.firstTokenLatencyMs,
+          streamElapsedMs: response.streamElapsedMs
+        },
         content: response.content
       });
       const now = new Date().toISOString();
@@ -398,30 +410,21 @@ const runCase = async (
       history.push({ id: randomUUID(), role: 'assistant', content: response.content || '[no streamed response]', createdAt: now });
     }
   } catch (caseError) {
-    const message = caseError instanceof Error ? caseError.message : String(caseError);
-    status = message.includes('timed out') || message.includes('canceled') ? 'timeout' : 'failed';
-    error = {
-      code: status === 'timeout' ? 'INFERENCE_TIMEOUT' : 'INFERENCE_CASE_FAILED',
-      message
-    };
-    const eventAt = new Date().toISOString();
-    transcript.push({
-      type: 'event',
-      startedAt: eventAt,
-      finishedAt: eventAt,
-      elapsedMs: 0,
-      success: false,
-      metadata: { event: 'error' },
-      error
-    });
-    logError('review-assistant.inference-case-failed', {
-      ref: groundTruthCase.ref,
-      iteration,
-      runFolder: options.runFolder,
-      caseId: groundTruthCase.caseId,
-      code: error.code,
-      elapsedMs: Date.now() - started
-    });
+    ({ status, error } = recordCaseError(caseError, transcript, 'INFERENCE_CASE_FAILED'));
+  }
+
+  try {
+    output = await staged.storage.readRecordData(groundTruthCase.groupId, groundTruthCase.caseId);
+  } catch (outputError) {
+    output = {};
+    if (!error) {
+      ({ status, error } = recordCaseError(outputError, transcript, 'INFERENCE_OUTPUT_READ_FAILED'));
+    } else {
+      appendErrorEvent(transcript, {
+        code: 'INFERENCE_OUTPUT_READ_FAILED',
+        message: outputError instanceof Error ? outputError.message : String(outputError)
+      });
+    }
   }
 
   const finished = Date.now();
@@ -431,15 +434,26 @@ const runCase = async (
     iteration,
     runFolder: options.runFolder,
     caseId: groundTruthCase.caseId,
+    model,
     startedAt,
     finishedAt: new Date(finished).toISOString(),
     elapsedMs: finished - started,
     ground_truth: cloneJson(groundTruthCase.groundTruth),
-    output: await staged.storage.readRecordData(groundTruthCase.groupId, groundTruthCase.caseId),
+    output,
     transcript: sortedTranscript,
     status,
     ...(error ? { error } : {})
   };
+  if (error) {
+    logError('review-assistant.inference-case-failed', {
+      ref: groundTruthCase.ref,
+      iteration,
+      runFolder: options.runFolder,
+      caseId: groundTruthCase.caseId,
+      code: error.code,
+      elapsedMs: artifact.elapsedMs
+    });
+  }
   logInfo('review-assistant.inference-case-completed', {
     ref: groundTruthCase.ref,
     iteration,
@@ -453,6 +467,34 @@ const runCase = async (
   return artifact;
 };
 
+const recordCaseError = (
+  caseError: unknown,
+  transcript: InferenceTranscriptEntry[],
+  defaultCode: 'INFERENCE_CASE_FAILED' | 'INFERENCE_OUTPUT_READ_FAILED'
+): { status: InferenceStatus; error: InferenceErrorPayload } => {
+  const message = caseError instanceof Error ? caseError.message : String(caseError);
+  const status: InferenceStatus = message.includes('timed out') || message.includes('canceled') ? 'timeout' : 'failed';
+  const error: InferenceErrorPayload = {
+    code: status === 'timeout' ? 'INFERENCE_TIMEOUT' : defaultCode,
+    message
+  };
+  appendErrorEvent(transcript, error);
+  return { status, error };
+};
+
+const appendErrorEvent = (transcript: InferenceTranscriptEntry[], error: InferenceErrorPayload): void => {
+  const eventAt = new Date().toISOString();
+  transcript.push({
+    type: 'event',
+    startedAt: eventAt,
+    finishedAt: eventAt,
+    elapsedMs: 0,
+    success: false,
+    metadata: { event: 'error' },
+    error
+  });
+};
+
 const runPrompt = async (
   agent: InferenceAgent,
   tools: LocalToolRuntime,
@@ -462,11 +504,31 @@ const runPrompt = async (
   systemPrompt: string | undefined,
   mcpServers: ReturnType<typeof parseExternalMcpServers>,
   timeoutMs: number
-): Promise<{ content: string; startedAt: string; finishedAt: string; elapsedMs: number }> => {
+): Promise<{
+  content: string;
+  model?: string;
+  startedAt: string;
+  finishedAt: string;
+  elapsedMs: number;
+  assistantRequestElapsedMs: number;
+  firstTokenLatencyMs: number;
+  streamElapsedMs: number;
+}> => {
   const chunks: string[] = [];
   let activeRequestId: string | undefined;
   let firstChunkAt: number | undefined;
-  return await new Promise<{ content: string; startedAt: string; finishedAt: string; elapsedMs: number }>((resolve, reject) => {
+  let model: string | undefined;
+  return await new Promise<{
+    content: string;
+    model?: string;
+    startedAt: string;
+    finishedAt: string;
+    elapsedMs: number;
+    assistantRequestElapsedMs: number;
+    firstTokenLatencyMs: number;
+    streamElapsedMs: number;
+  }>((resolve, reject) => {
+    const started = Date.now();
     const timer = setTimeout(() => {
       if (activeRequestId) {
         agent.cancel(activeRequestId);
@@ -506,12 +568,16 @@ const runPrompt = async (
           complete: () => {
             clearTimeout(timer);
             const finished = Date.now();
-            const started = firstChunkAt ?? finished;
+            const firstTokenAt = firstChunkAt ?? finished;
             resolve({
               content: chunks.join(''),
-              startedAt: new Date(started).toISOString(),
+              model,
+              startedAt: new Date(firstTokenAt).toISOString(),
               finishedAt: new Date(finished).toISOString(),
-              elapsedMs: finished - started
+              elapsedMs: finished - firstTokenAt,
+              assistantRequestElapsedMs: finished - started,
+              firstTokenLatencyMs: firstTokenAt - started,
+              streamElapsedMs: finished - firstTokenAt
             });
           },
           error: (streamError) => {
@@ -521,6 +587,15 @@ const runPrompt = async (
           canceled: () => {
             clearTimeout(timer);
             reject(new Error('Inference prompt was canceled.'));
+          },
+          log: (event) => {
+            if (event.event !== 'review-assistant.agent-provider-usage') {
+              return;
+            }
+            const usageModel = event.fields.model;
+            if (typeof usageModel === 'string' && usageModel.trim()) {
+              model = usageModel.trim();
+            }
           }
         },
         tools
@@ -645,6 +720,7 @@ const createFailedCaseArtifact = (
     iteration,
     runFolder: options.runFolder,
     caseId,
+    model: undefined,
     startedAt: now,
     finishedAt: now,
     elapsedMs: 0,
@@ -669,6 +745,7 @@ const toWrittenInferenceJson = (artifact: InferenceCaseArtifact): WrittenInferen
     iteration: artifact.iteration,
     run_folder: artifact.runFolder,
     case_id: artifact.caseId,
+    ...(artifact.model !== undefined ? { model: artifact.model } : {}),
     started_at: artifact.startedAt,
     finished_at: artifact.finishedAt,
     elapsed_ms: artifact.elapsedMs,

@@ -11,6 +11,7 @@ import re
 import ssl
 import sys
 import textwrap
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -45,6 +46,10 @@ JUDGE_LABEL_SCORES = {
     "contradicted": 0.0,
 }
 DEFAULT_JUDGE_TIMEOUT_SECONDS = 120
+EXPERIMENT_CATALOG_HTTP_TIMEOUT_SECONDS = 30
+EXPERIMENT_CATALOG_RETRY_ATTEMPTS = 3
+EXPERIMENT_CATALOG_RETRY_DELAY_SECONDS = 1
+EXPERIMENT_CATALOG_RETRYABLE_STATUS_CODES = {408, 429}
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,10 @@ def main() -> int:
     experiment_catalog_sets: dict[str, str] = {}
     evaluated = 0
     skipped_existing = 0
+    evaluation_failed = 0
+    failed_artifacts: list[dict[str, JsonValue]] = []
+    catalog_published = 0
+    catalog_skipped_not_evaluated = 0
 
     for blob in container.list_blobs(name_starts_with=prefix):
         blob_name = blob.name
@@ -127,26 +136,82 @@ def main() -> int:
             overwrite=True,
             content_settings=ContentSettings(content_type="application/json") if ContentSettings else None,
         )
-        if experiment_catalog is not None and result.get("status") == "evaluated":
-            run_folder = inference_run_folder(source)
-            if run_folder not in experiment_catalog_sets:
-                experiment_catalog_sets[run_folder] = next_experiment_catalog_set(experiment_catalog, run_folder)
-            publish_experiment_catalog_result(
-                experiment_catalog,
-                source,
-                result,
-                set_name=experiment_catalog_sets[run_folder],
-                inference_uri=source_blob.url,
-                evaluation_uri=eval_blob.url,
-            )
+        result_status = result.get("status")
+        if result_status != "evaluated":
+            evaluation_failed += 1
+            failure = evaluation_failure_summary(blob_name, result)
+            failed_artifacts.append(failure)
+            log_evaluation_failure(failure)
+        if experiment_catalog is not None:
+            if result_status == "evaluated":
+                run_folder = inference_run_folder(source)
+                if run_folder not in experiment_catalog_sets:
+                    experiment_catalog_sets[run_folder] = next_experiment_catalog_set(experiment_catalog, run_folder)
+                publish_experiment_catalog_result(
+                    experiment_catalog,
+                    source,
+                    result,
+                    set_name=experiment_catalog_sets[run_folder],
+                    inference_uri=source_blob.url,
+                    evaluation_uri=eval_blob.url,
+                )
+                catalog_published += 1
+            else:
+                catalog_skipped_not_evaluated += 1
         evaluated += 1
 
-    print(json.dumps({"evaluated": evaluated, "prefix": prefix, "skipped_existing": skipped_existing}, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "catalog_published": catalog_published,
+                "catalog_skipped_not_evaluated": catalog_skipped_not_evaluated,
+                "evaluated": evaluated,
+                "evaluation_failed": evaluation_failed,
+                "failed_artifacts": failed_artifacts,
+                "prefix": prefix,
+                "skipped_existing": skipped_existing,
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
 def log_evaluation_progress(message: str, blob_name: str) -> None:
     print(f"{message}: {blob_name}", file=sys.stderr, flush=True)
+
+
+def log_evaluation_failure(failure: dict[str, JsonValue]) -> None:
+    source_blob = failure["source_blob"]
+    reason = failure["reason"]
+    error_type = failure.get("error_type")
+    detail = f"{error_type}: {reason}" if error_type else str(reason)
+    print(f"Evaluation failed: {source_blob} - {detail}", file=sys.stderr, flush=True)
+
+
+def evaluation_failure_summary(source_blob: str, result: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    error = result.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        error_type = error.get("type")
+        return {
+            "source_blob": source_blob,
+            "status": result.get("status"),
+            "error_type": error_type if isinstance(error_type, str) and error_type else None,
+            "reason": message if isinstance(message, str) and message else "Evaluation failed without an error message.",
+        }
+
+    source_status = result.get("source_status")
+    if isinstance(source_status, str) and source_status:
+        reason = f"Source inference status was {source_status!r}."
+    else:
+        reason = "Evaluation did not produce status 'evaluated'."
+
+    return {
+        "source_blob": source_blob,
+        "status": result.get("status"),
+        "reason": reason,
+    }
 
 
 def create_blob_service_client() -> Any:
@@ -265,12 +330,14 @@ def evaluate_artifact(artifact: JsonValue, *, fact_judge: FactJudge, source_blob
         generation_scores = generation_metrics(expected_output, actual_output, paths.answer_path, fact_judge=fact_judge)
         inference_timing = inference_timing_metrics(inference)
         retrieval_metrics = retrieval_recall_metrics(expected_output, actual_output, paths)
+        judge = evaluation_judge_metadata(fact_judge)
 
         return {
             "source_blob": source_blob,
             "evaluated_at": evaluated_at,
             "status": "evaluated",
             "source_status": inference_status,
+            **({"judge": judge} if judge else {}),
             "paths": paths_to_dict(paths),
             "metrics": {
                 **retrieval_metrics,
@@ -485,10 +552,24 @@ def resolve_answer_texts(value: JsonValue, pointer: str) -> list[str]:
 
 
 def inference_timing_metrics(inference: dict[str, JsonValue]) -> dict[str, int]:
+    total_elapsed_ms = as_non_negative_int(inference.get("elapsed_ms"), "inference.elapsed_ms")
+    assistant_request_elapsed_ms = transcript_metadata_elapsed_ms(
+        inference,
+        "assistant-response",
+        "assistantRequestElapsedMs",
+    )
+    tool_elapsed_ms = transcript_elapsed_ms(inference, "tool-call")
     return {
-        "meta_total_elapsed_ms": as_non_negative_int(inference.get("elapsed_ms"), "inference.elapsed_ms"),
-        "meta_model_elapsed_ms": transcript_elapsed_ms(inference, "assistant-response"),
-        "meta_tool_elapsed_ms": transcript_elapsed_ms(inference, "tool-call"),
+        "meta_total_elapsed_ms": total_elapsed_ms,
+        "meta_assistant_request_elapsed_ms": assistant_request_elapsed_ms,
+        "meta_first_token_latency_ms": transcript_metadata_elapsed_ms(
+            inference,
+            "assistant-response",
+            "firstTokenLatencyMs",
+        ),
+        "meta_stream_elapsed_ms": transcript_metadata_elapsed_ms(inference, "assistant-response", "streamElapsedMs"),
+        "meta_tool_elapsed_ms": tool_elapsed_ms,
+        "meta_unattributed_elapsed_ms": max(total_elapsed_ms - assistant_request_elapsed_ms, 0),
     }
 
 
@@ -502,6 +583,26 @@ def transcript_elapsed_ms(inference: dict[str, JsonValue], entry_type: str) -> i
             raise ValueError(f"inference.transcript[{index}] must be an object.")
         if entry.get("type") == entry_type:
             total += as_non_negative_int(entry.get("elapsed_ms"), f"inference.transcript[{index}].elapsed_ms")
+    return total
+
+
+def transcript_metadata_elapsed_ms(inference: dict[str, JsonValue], entry_type: str, metadata_key: str) -> int:
+    transcript = inference.get("transcript", [])
+    if not isinstance(transcript, list):
+        raise ValueError("inference.transcript must be a list.")
+    total = 0
+    for index, entry in enumerate(transcript):
+        if not isinstance(entry, dict):
+            raise ValueError(f"inference.transcript[{index}] must be an object.")
+        if entry.get("type") != entry_type:
+            continue
+        metadata = entry.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError(f"inference.transcript[{index}].metadata must be an object.")
+        total += as_non_negative_int(
+            metadata.get(metadata_key),
+            f"inference.transcript[{index}].metadata.{metadata_key}",
+        )
     return total
 
 
@@ -623,6 +724,8 @@ class CopilotSdkFactJudge:
     def __init__(self, *, repo_root: Path | None = None, timeout_seconds: int | None = None):
         self.repo_root = repo_root or Path.cwd()
         self.timeout_seconds = timeout_seconds or int(os.environ.get("EVALUATION_JUDGE_TIMEOUT_SECONDS", str(DEFAULT_JUDGE_TIMEOUT_SECONDS)))
+        self.model = require_env("AGENT_MODEL")
+        self.used_models: set[str] = set()
 
     def __call__(self, expected_answer: str, actual_answer: str) -> dict[str, JsonValue]:
         return asyncio.run(self.evaluate(expected_answer, actual_answer))
@@ -651,6 +754,9 @@ class CopilotSdkFactJudge:
                     chunks.append(data.content or "")
             elif isinstance(data, SessionIdleData):
                 done.set()
+            model = getattr(data, "model", None)
+            if isinstance(model, str) and model.strip():
+                self.used_models.add(model.strip())
 
         client_options = {
             "working_directory": str(self.repo_root),
@@ -675,10 +781,8 @@ class CopilotSdkFactJudge:
             "mcp_oauth_token_storage": "in-memory",
             "on_event": on_event,
         }
-        model = optional_env("AGENT_MODEL")
         reasoning_effort = optional_env("REASONING_EFFORT")
-        if model is not None:
-            session_options["model"] = model
+        session_options["model"] = self.model
         if reasoning_effort is not None:
             session_options["reasoning_effort"] = reasoning_effort
 
@@ -700,6 +804,25 @@ class CopilotSdkFactJudge:
 
 def create_fact_judge_from_env() -> CopilotSdkFactJudge:
     return CopilotSdkFactJudge()
+
+
+def evaluation_judge_metadata(fact_judge: FactJudge) -> dict[str, JsonValue]:
+    configured_model = getattr(fact_judge, "model", None)
+    if not isinstance(configured_model, str) or not configured_model.strip():
+        return {}
+    model = configured_model.strip()
+    raw_models = getattr(fact_judge, "used_models", None)
+    if raw_models is None:
+        return {"model": model}
+    if not isinstance(raw_models, (set, list, tuple)):
+        return {"model": model}
+    models = sorted({model.strip() for model in raw_models if isinstance(model, str) and model.strip()})
+    unexpected_models = [observed_model for observed_model in models if observed_model != model]
+    if unexpected_models:
+        raise RuntimeError(
+            f"Evaluation judge used unexpected model(s): {', '.join(unexpected_models)}. Expected AGENT_MODEL={model}."
+        )
+    return {"model": model}
 
 
 def parse_judge_response_content(content: str) -> dict[str, JsonValue]:
@@ -1049,30 +1172,68 @@ def require_string_field(value: dict[str, JsonValue], key: str) -> str:
 def post_json(url: str, payload: dict[str, JsonValue]) -> None:
     body = json.dumps(payload, sort_keys=True).encode("utf-8")
     request = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=30, context=https_context()) as response:
-            status = response.getcode()
-            if status < 200 or status >= 300:
-                raise RuntimeError(f"Experiment Catalog metrics push failed with HTTP {status}: {response.read().decode('utf-8', errors='replace')}")
-    except urllib.error.HTTPError as error:
-        raise RuntimeError(f"Experiment Catalog metrics push failed with HTTP {error.code}: {error.read().decode('utf-8', errors='replace')}") from error
-    except urllib.error.URLError as error:
-        raise RuntimeError(f"Experiment Catalog metrics push failed: {error.reason}") from error
+    request_experiment_catalog(request, failure_message="Experiment Catalog metrics push failed")
+
+
+def request_experiment_catalog(request: urllib.request.Request, *, failure_message: str) -> bytes:
+    for attempt in range(1, EXPERIMENT_CATALOG_RETRY_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=EXPERIMENT_CATALOG_HTTP_TIMEOUT_SECONDS,
+                context=https_context(),
+            ) as response:
+                status = response.getcode()
+                body = response.read()
+                if status < 200 or status >= 300:
+                    if should_retry_experiment_catalog_status(status, attempt):
+                        sleep_before_experiment_catalog_retry(attempt)
+                        continue
+                    raise RuntimeError(f"{failure_message} with HTTP {status}: {decode_response_body(body)}")
+                return body
+        except urllib.error.HTTPError as error:
+            if should_retry_experiment_catalog_status(error.code, attempt):
+                sleep_before_experiment_catalog_retry(attempt)
+                continue
+            raise RuntimeError(f"{failure_message} with HTTP {error.code}: {decode_response_body(error.read())}") from error
+        except urllib.error.URLError as error:
+            if should_retry_experiment_catalog_attempt(attempt):
+                sleep_before_experiment_catalog_retry(attempt)
+                continue
+            raise RuntimeError(f"{failure_message}: {error.reason}") from error
+        except TimeoutError as error:
+            if should_retry_experiment_catalog_attempt(attempt):
+                sleep_before_experiment_catalog_retry(attempt)
+                continue
+            raise RuntimeError(f"{failure_message}: {error}") from error
+    raise RuntimeError(f"{failure_message}: retry attempts exhausted.")
+
+
+def should_retry_experiment_catalog_status(status: int, attempt: int) -> bool:
+    return should_retry_experiment_catalog_attempt(attempt) and (
+        status in EXPERIMENT_CATALOG_RETRYABLE_STATUS_CODES or status >= 500
+    )
+
+
+def should_retry_experiment_catalog_attempt(attempt: int) -> bool:
+    return attempt < EXPERIMENT_CATALOG_RETRY_ATTEMPTS
+
+
+def sleep_before_experiment_catalog_retry(attempt: int) -> None:
+    time.sleep(EXPERIMENT_CATALOG_RETRY_DELAY_SECONDS * attempt)
+
+
+def decode_response_body(body: bytes) -> str:
+    return body.decode("utf-8", errors="replace")
 
 
 def get_json(url: str) -> JsonValue:
     request = urllib.request.Request(url, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=30, context=https_context()) as response:
-            status = response.getcode()
-            body = response.read().decode("utf-8")
-            if status < 200 or status >= 300:
-                raise RuntimeError(f"Experiment Catalog request failed with HTTP {status}: {body}")
-            return json.loads(body)
-    except urllib.error.HTTPError as error:
-        raise RuntimeError(f"Experiment Catalog request failed with HTTP {error.code}: {error.read().decode('utf-8', errors='replace')}") from error
-    except urllib.error.URLError as error:
-        raise RuntimeError(f"Experiment Catalog request failed: {error.reason}") from error
+        body = request_experiment_catalog(request, failure_message="Experiment Catalog request failed")
+        return json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Experiment Catalog response was not valid JSON: {error}") from error
 
 
 def https_context() -> ssl.SSLContext:

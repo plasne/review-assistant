@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { constants as fsConstants, lstatSync } from 'node:fs';
 import path from 'node:path';
@@ -684,7 +685,14 @@ const readOptionalJsonFile = async (filePath: string): Promise<unknown> => {
 };
 
 const writeJsonFile = async (filePath: string, value: unknown): Promise<void> => {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+  try {
+    await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true });
+    throw error;
+  }
 };
 
 const fileExists = async (filePath: string): Promise<boolean> => {

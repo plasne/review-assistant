@@ -1,7 +1,10 @@
 import io
+import json
 import os
 import unittest
+import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from eval.evaluate import (
@@ -11,6 +14,7 @@ from eval.evaluate import (
     build_judge_request,
     create_fact_judge_from_env,
     evaluate_artifact,
+    evaluation_failure_summary,
     evaluation_blob_name,
     experiment_catalog_api_base_url,
     experiment_catalog_metrics,
@@ -22,6 +26,7 @@ from eval.evaluate import (
     is_inference_artifact_blob,
     latest_inference_prefix,
     log_evaluation_progress,
+    main,
     normalize_prefix,
     parse_args,
     parse_judge_response_content,
@@ -46,6 +51,51 @@ class FakeContainer:
     def list_blobs(self, name_starts_with=None):
         prefix = name_starts_with or ""
         return [FakeBlob(name) for name in self.blob_names if name.startswith(prefix)]
+
+
+class FakeStorageService:
+    def __init__(self, container):
+        self.container = container
+
+    def get_container_client(self, _container_name):
+        return self.container
+
+
+class FakeStorageContainer:
+    def __init__(self, sources):
+        self.sources = sources
+        self.uploads = {}
+
+    def list_blobs(self, name_starts_with=None):
+        prefix = name_starts_with or ""
+        return [FakeBlob(name) for name in self.sources if name.startswith(prefix)]
+
+    def get_blob_client(self, blob_name):
+        return FakeBlobClient(self, blob_name)
+
+
+class FakeBlobClient:
+    def __init__(self, container, blob_name):
+        self.container = container
+        self.blob_name = blob_name
+        self.url = f"https://storage.example/{blob_name}"
+
+    def exists(self):
+        return self.blob_name in self.container.uploads
+
+    def download_blob(self):
+        return FakeBlobDownload(json.dumps(self.container.sources[self.blob_name]).encode("utf-8"))
+
+    def upload_blob(self, body, **_kwargs):
+        self.container.uploads[self.blob_name] = body
+
+
+class FakeBlobDownload:
+    def __init__(self, body):
+        self.body = body
+
+    def readall(self):
+        return self.body
 
 
 class EvaluateMetricsTests(unittest.TestCase):
@@ -90,6 +140,78 @@ class EvaluateMetricsTests(unittest.TestCase):
             log_evaluation_progress("Evaluating inference artifact", "run/a00-0.json")
 
         self.assertEqual(stderr.getvalue(), "Evaluating inference artifact: run/a00-0.json\n")
+
+    def test_evaluation_failure_summary_reports_source_and_error(self):
+        self.assertEqual(
+            evaluation_failure_summary(
+                "run/a01-0.json",
+                {"status": "failed", "error": {"type": "ValueError", "message": "missing output"}},
+            ),
+            {
+                "source_blob": "run/a01-0.json",
+                "status": "failed",
+                "error_type": "ValueError",
+                "reason": "missing output",
+            },
+        )
+
+    def test_main_summary_reports_catalog_publish_counts(self):
+        container = FakeStorageContainer(
+            {
+                "run/a00-0.json": {"inference": {"ref": "ref-a", "run_folder": "run"}},
+                "run/a00-1.json": {"inference": {"ref": "ref-b", "run_folder": "run"}},
+            }
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            patch("eval.evaluate.parse_args", return_value=SimpleNamespace(latest=False, prefix="run", skip_existing=False)),
+            patch("eval.evaluate.load_default_env"),
+            patch.dict(os.environ, {"INFERENCE_CONTAINER": "inference"}, clear=True),
+            patch("eval.evaluate.create_blob_service_client", return_value=FakeStorageService(container)),
+            patch("eval.evaluate.create_fact_judge_from_env", return_value=equivalent_fact_judge),
+            patch(
+                "eval.evaluate.create_experiment_catalog_from_env",
+                return_value=ExperimentCatalogConfig(
+                    base_url="https://example.com/",
+                    project="review-assistant",
+                    experiment="baseline",
+                ),
+            ),
+            patch("eval.evaluate.next_experiment_catalog_set", return_value="run-A"),
+            patch("eval.evaluate.publish_experiment_catalog_result") as publish,
+            patch(
+                "eval.evaluate.evaluate_artifact",
+                side_effect=[
+                    {"status": "evaluated", "metrics": {}},
+                    {"status": "failed", "error": {"type": "ValueError", "message": "missing output"}},
+                ],
+            ),
+            patch("sys.stdout", stdout),
+            patch("sys.stderr", stderr),
+        ):
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(publish.call_count, 1)
+        self.assertEqual(json.loads(stdout.getvalue()), {
+            "catalog_published": 1,
+            "catalog_skipped_not_evaluated": 1,
+            "evaluated": 2,
+            "evaluation_failed": 1,
+            "failed_artifacts": [
+                {
+                    "source_blob": "run/a00-1.json",
+                    "status": "failed",
+                    "error_type": "ValueError",
+                    "reason": "missing output",
+                }
+            ],
+            "prefix": "run/",
+            "skipped_existing": 0,
+        })
+        self.assertIn("Evaluation failed: run/a00-1.json - ValueError: missing output\n", stderr.getvalue())
 
     def test_json_pointer_resolves_objects_and_arrays(self):
         value = {"turns": [{"answer": "done"}]}
@@ -186,6 +308,83 @@ class EvaluateMetricsTests(unittest.TestCase):
         self.assertNotIn("generation_correctness", metrics)
         self.assertNotIn("overlap", metrics["generation_accuracy"])
         self.assertNotIn("extra_inference_facts", metrics["generation_accuracy"])
+
+    def test_evaluate_artifact_writes_judge_model_metadata(self):
+        class RecordingFactJudge:
+            def __init__(self):
+                self.model = "gpt-5.4-mini"
+                self.used_models = set()
+
+            def __call__(self, _expected_answer, _actual_answer):
+                self.used_models.add("gpt-5.4-mini")
+                return {
+                    "schema_version": "review-assistant.fact-judge.v1",
+                    "ground_truth_facts": [{"id": "gt-1", "fact": "Dracula advances influence."}],
+                    "inference_facts": [{"id": "inf-1", "fact": "Dracula advances influence."}],
+                    "comparisons": [
+                        {
+                            "ground_truth_fact_id": "gt-1",
+                            "inference_fact_ids": ["inf-1"],
+                            "label": "equivalent",
+                            "rationale": "Same fact.",
+                        }
+                    ],
+                }
+
+        result = evaluate_artifact(
+            {
+                "ground_truth": {"output": {"answer": "Dracula advances influence."}},
+                "inference": {
+                    "status": "completed",
+                    "elapsed_ms": 123,
+                    "transcript": [],
+                    "output": {"answer": "Dracula advances influence."},
+                },
+            },
+            fact_judge=RecordingFactJudge(),
+            source_blob="run/ref-a-0.json",
+        )
+
+        self.assertEqual(result["status"], "evaluated")
+        self.assertEqual(result["judge"], {"model": "gpt-5.4-mini"})
+
+    def test_evaluate_artifact_fails_when_judge_reports_unexpected_model(self):
+        class MismatchedFactJudge:
+            def __init__(self):
+                self.model = "gpt-5.4-mini"
+                self.used_models = {"claude-sonnet-4.6"}
+
+            def __call__(self, _expected_answer, _actual_answer):
+                return {
+                    "schema_version": "review-assistant.fact-judge.v1",
+                    "ground_truth_facts": [{"id": "gt-1", "fact": "Dracula advances influence."}],
+                    "inference_facts": [{"id": "inf-1", "fact": "Dracula advances influence."}],
+                    "comparisons": [
+                        {
+                            "ground_truth_fact_id": "gt-1",
+                            "inference_fact_ids": ["inf-1"],
+                            "label": "equivalent",
+                            "rationale": "Same fact.",
+                        }
+                    ],
+                }
+
+        result = evaluate_artifact(
+            {
+                "ground_truth": {"output": {"answer": "Dracula advances influence."}},
+                "inference": {
+                    "status": "completed",
+                    "elapsed_ms": 123,
+                    "transcript": [],
+                    "output": {"answer": "Dracula advances influence."},
+                },
+            },
+            fact_judge=MismatchedFactJudge(),
+            source_blob="run/ref-a-0.json",
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("unexpected model", result["error"]["message"])
 
     def test_generation_metrics_report_simple_support_flags_and_component_scores(self):
         def fact_judge(_expected_answer, _actual_answer):
@@ -306,13 +505,19 @@ class EvaluateMetricsTests(unittest.TestCase):
             request["instructions"],
         )
 
-    def test_create_fact_judge_from_env_uses_copilot_sdk_defaults(self):
-        with patch.dict(os.environ, {}, clear=True):
+    def test_create_fact_judge_from_env_requires_model_and_uses_copilot_sdk_defaults(self):
+        with patch.dict(os.environ, {"AGENT_MODEL": "gpt-5.4-mini"}, clear=True):
             judge = create_fact_judge_from_env()
 
         self.assertIsInstance(judge, CopilotSdkFactJudge)
         self.assertEqual(judge.repo_root, Path.cwd())
         self.assertEqual(judge.timeout_seconds, DEFAULT_JUDGE_TIMEOUT_SECONDS)
+        self.assertEqual(judge.model, "gpt-5.4-mini")
+
+    def test_create_fact_judge_from_env_rejects_missing_model(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "AGENT_MODEL is required"):
+                create_fact_judge_from_env()
 
     def test_output_structure_validates_against_schema_without_comparing_values_or_array_lengths(self):
         metric = output_structure(
@@ -429,13 +634,27 @@ class EvaluateMetricsTests(unittest.TestCase):
                 "transcript": [
                     {"type": "user-prompt", "elapsed_ms": 0},
                     {"type": "tool-call", "elapsed_ms": 250},
-                    {"type": "assistant-response", "elapsed_ms": 900},
+                    {
+                        "type": "assistant-response",
+                        "elapsed_ms": 800,
+                        "metadata": {"assistantRequestElapsedMs": 900, "firstTokenLatencyMs": 100, "streamElapsedMs": 800},
+                    },
                     {"type": "tool-call", "elapsed_ms": 50},
                 ],
             }
         )
 
-        self.assertEqual(metrics, {"meta_total_elapsed_ms": 1234, "meta_model_elapsed_ms": 900, "meta_tool_elapsed_ms": 300})
+        self.assertEqual(
+            metrics,
+            {
+                "meta_total_elapsed_ms": 1234,
+                "meta_assistant_request_elapsed_ms": 900,
+                "meta_first_token_latency_ms": 100,
+                "meta_stream_elapsed_ms": 800,
+                "meta_tool_elapsed_ms": 300,
+                "meta_unattributed_elapsed_ms": 334,
+            },
+        )
 
     def test_experiment_catalog_metrics_flatten_scores_and_timing_values(self):
         metrics = experiment_catalog_metrics(
@@ -445,8 +664,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                     "generation_accuracy": {"score": 0.75, "ground_truth_facts": []},
                     "output_structure": {"score": 1.0},
                     "meta_total_elapsed_ms": 1234,
-                    "meta_model_elapsed_ms": 900,
+                    "meta_assistant_request_elapsed_ms": 900,
+                    "meta_first_token_latency_ms": 100,
+                    "meta_stream_elapsed_ms": 800,
                     "meta_tool_elapsed_ms": 250,
+                    "meta_unattributed_elapsed_ms": 334,
                 }
             }
         )
@@ -458,8 +680,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                 "generation_accuracy": 0.75,
                 "output_structure": 1.0,
                 "meta_total_elapsed_ms": 1234,
-                "meta_model_elapsed_ms": 900,
+                "meta_assistant_request_elapsed_ms": 900,
+                "meta_first_token_latency_ms": 100,
+                "meta_stream_elapsed_ms": 800,
                 "meta_tool_elapsed_ms": 250,
+                "meta_unattributed_elapsed_ms": 334,
             },
         )
 
@@ -512,8 +737,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                     "metrics": {
                         "generation_accuracy": {"score": 1.0},
                         "meta_total_elapsed_ms": 1234,
-                        "meta_model_elapsed_ms": 900,
+                        "meta_assistant_request_elapsed_ms": 900,
+                        "meta_first_token_latency_ms": 100,
+                        "meta_stream_elapsed_ms": 800,
                         "meta_tool_elapsed_ms": 250,
+                        "meta_unattributed_elapsed_ms": 334,
                     }
                 },
                 set_name="1700000000000-B",
@@ -539,11 +767,65 @@ class EvaluateMetricsTests(unittest.TestCase):
                 "metrics": {
                     "generation_accuracy": 1.0,
                     "meta_total_elapsed_ms": 1234,
-                    "meta_model_elapsed_ms": 900,
+                    "meta_assistant_request_elapsed_ms": 900,
+                    "meta_first_token_latency_ms": 100,
+                    "meta_stream_elapsed_ms": 800,
                     "meta_tool_elapsed_ms": 250,
+                    "meta_unattributed_elapsed_ms": 334,
                 },
             },
         )
+
+    def test_publish_experiment_catalog_result_retries_transient_http_errors(self):
+        responses = [
+            urllib.error.HTTPError(
+                "https://example.com/api/projects/review-assistant/experiments/baseline/results",
+                503,
+                "Service Unavailable",
+                {},
+                io.BytesIO(b"busy"),
+            ),
+            FakeHttpResponse(status=200),
+        ]
+
+        with (
+            patch("urllib.request.urlopen", side_effect=responses) as urlopen,
+            patch("time.sleep") as sleep,
+        ):
+            publish_experiment_catalog_result(
+                ExperimentCatalogConfig(
+                    base_url="https://example.com/",
+                    project="review-assistant",
+                    experiment="baseline",
+                ),
+                {"inference": {"ref": "ref-a", "run_folder": "1700000000000"}},
+                {"metrics": {"generation_accuracy": {"score": 1.0}}},
+                set_name="1700000000000-B",
+                inference_uri="https://storage.example/inference/1700000000000/ref-a-0.json",
+                evaluation_uri="https://storage.example/inference/1700000000000/ref-a-0.eval.json",
+            )
+
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once_with(1)
+
+    def test_list_experiment_catalog_sets_retries_url_errors(self):
+        config = ExperimentCatalogConfig(base_url="https://example.com/", project="review-assistant", experiment="baseline")
+
+        with (
+            patch(
+                "urllib.request.urlopen",
+                side_effect=[
+                    urllib.error.URLError("connection reset"),
+                    FakeHttpResponse(status=200, body='["1700000000000-A"]'),
+                ],
+            ) as urlopen,
+            patch("time.sleep") as sleep,
+        ):
+            sets = list_experiment_catalog_sets(config)
+
+        self.assertEqual(sets, ["1700000000000-A"])
+        self.assertEqual(urlopen.call_count, 2)
+        sleep.assert_called_once_with(1)
 
     def test_evaluate_artifact_uses_explicit_ground_truth_paths(self):
         artifact = {
@@ -604,7 +886,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                 },
                 "transcript": [
                     {"type": "tool-call", "elapsed_ms": 250},
-                    {"type": "assistant-response", "elapsed_ms": 900},
+                    {
+                        "type": "assistant-response",
+                        "elapsed_ms": 800,
+                        "metadata": {"assistantRequestElapsedMs": 900, "firstTokenLatencyMs": 100, "streamElapsedMs": 800},
+                    },
                 ],
             },
         }
@@ -620,8 +906,11 @@ class EvaluateMetricsTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["output_structure"]["score"], 1.0)
         self.assertEqual(result["paths"]["has_output_schema"], True)
         self.assertEqual(result["metrics"]["meta_total_elapsed_ms"], 1234)
-        self.assertEqual(result["metrics"]["meta_model_elapsed_ms"], 900)
+        self.assertEqual(result["metrics"]["meta_assistant_request_elapsed_ms"], 900)
+        self.assertEqual(result["metrics"]["meta_first_token_latency_ms"], 100)
+        self.assertEqual(result["metrics"]["meta_stream_elapsed_ms"], 800)
         self.assertEqual(result["metrics"]["meta_tool_elapsed_ms"], 250)
+        self.assertEqual(result["metrics"]["meta_unattributed_elapsed_ms"], 334)
 
     def test_evaluate_artifact_computes_per_turn_retrieval_recall_macro_average(self):
         artifact = {
@@ -663,7 +952,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                 },
                 "transcript": [
                     {"type": "tool-call", "elapsed_ms": 250},
-                    {"type": "assistant-response", "elapsed_ms": 900},
+                    {
+                        "type": "assistant-response",
+                        "elapsed_ms": 800,
+                        "metadata": {"assistantRequestElapsedMs": 900, "firstTokenLatencyMs": 100, "streamElapsedMs": 800},
+                    },
                 ],
             },
         }
@@ -740,7 +1033,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                 },
                 "transcript": [
                     {"type": "tool-call", "elapsed_ms": 250},
-                    {"type": "assistant-response", "elapsed_ms": 900},
+                    {
+                        "type": "assistant-response",
+                        "elapsed_ms": 800,
+                        "metadata": {"assistantRequestElapsedMs": 900, "firstTokenLatencyMs": 100, "streamElapsedMs": 800},
+                    },
                 ],
             },
         }
@@ -800,7 +1097,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                 },
                 "transcript": [
                     {"type": "tool-call", "elapsed_ms": 250},
-                    {"type": "assistant-response", "elapsed_ms": 900},
+                    {
+                        "type": "assistant-response",
+                        "elapsed_ms": 800,
+                        "metadata": {"assistantRequestElapsedMs": 900, "firstTokenLatencyMs": 100, "streamElapsedMs": 800},
+                    },
                 ],
             },
         }
@@ -884,7 +1185,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                 },
                 "transcript": [
                     {"type": "tool-call", "elapsed_ms": 250},
-                    {"type": "assistant-response", "elapsed_ms": 900},
+                    {
+                        "type": "assistant-response",
+                        "elapsed_ms": 800,
+                        "metadata": {"assistantRequestElapsedMs": 900, "firstTokenLatencyMs": 100, "streamElapsedMs": 800},
+                    },
                 ],
             },
         }
@@ -929,7 +1234,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                 },
                 "transcript": [
                     {"type": "tool-call", "elapsed_ms": 250},
-                    {"type": "assistant-response", "elapsed_ms": 900},
+                    {
+                        "type": "assistant-response",
+                        "elapsed_ms": 800,
+                        "metadata": {"assistantRequestElapsedMs": 900, "firstTokenLatencyMs": 100, "streamElapsedMs": 800},
+                    },
                 ],
             },
         }
@@ -993,8 +1302,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                 "generation_precision": 0.0,
                 "output_structure": 0.0,
                 "meta_total_elapsed_ms": 4079,
-                "meta_model_elapsed_ms": 0,
+                "meta_assistant_request_elapsed_ms": 0,
+                "meta_first_token_latency_ms": 0,
+                "meta_stream_elapsed_ms": 0,
                 "meta_tool_elapsed_ms": 0,
+                "meta_unattributed_elapsed_ms": 4079,
             },
         )
 

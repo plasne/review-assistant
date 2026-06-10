@@ -135,15 +135,20 @@ Ground truth records can declare evaluation settings under `evaluation`. `answer
 
 ## Evaluation catalog metrics
 
-`npm run evaluation` derives three inference timing metrics from each inference artifact and includes them in the evaluation output:
+`npm run evaluation` derives inference timing metrics from each inference artifact and includes them in the evaluation output:
 
 ```json
 {
   "meta_total_elapsed_ms": 12450,
-  "meta_model_elapsed_ms": 9800,
-  "meta_tool_elapsed_ms": 2100
+  "meta_assistant_request_elapsed_ms": 9800,
+  "meta_first_token_latency_ms": 1700,
+  "meta_stream_elapsed_ms": 8100,
+  "meta_tool_elapsed_ms": 2100,
+  "meta_unattributed_elapsed_ms": 2650
 }
 ```
+
+`meta_assistant_request_elapsed_ms` measures the full agent request, `meta_first_token_latency_ms` measures request start to first streamed response chunk, `meta_stream_elapsed_ms` measures first chunk to completion, and `meta_unattributed_elapsed_ms` measures case time outside assistant requests. Tool time is reported separately and can overlap the assistant request window.
 
 The evaluator reads catalog settings from `ground-truth/config/.env` or the shell. Set all three to enable unauthenticated metric publishing:
 

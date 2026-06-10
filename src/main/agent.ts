@@ -64,11 +64,18 @@ type ProviderWorkerEvent =
   | { type: 'log'; level: 'info' | 'error'; event: string; fields: Record<string, unknown> }
   | ({ type: 'toolRequest'; requestId: string; toolRequest: ToolInvocationRequest });
 
+export type ChatLogEvent = {
+  level: 'info' | 'error';
+  event: string;
+  fields: Record<string, unknown>;
+};
+
 export type ChatStreamHandlers = {
   chunk: (chunk: ChatStreamChunk) => void;
   complete: (complete: ChatStreamComplete) => void;
   error: (error: ChatStreamError) => void;
   canceled: (canceled: ChatCanceled) => void;
+  log?: (event: ChatLogEvent) => void;
 };
 
 type PendingChat = {
@@ -214,6 +221,7 @@ export class AgentRuntime {
     if (event.type === 'log') {
       const logger = event.level === 'error' ? logError : logInfo;
       logger(event.event, event.fields);
+      this.pending.get(requestId)?.handlers.log?.({ level: event.level, event: event.event, fields: event.fields });
       return;
     }
     const pending = this.pending.get(requestId);

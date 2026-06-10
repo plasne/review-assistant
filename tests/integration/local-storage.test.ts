@@ -56,6 +56,25 @@ describe('local storage adapter', () => {
     expect(detail.renderTree.kind).toBe('object');
   });
 
+  it('keeps local record files parseable after concurrent writes', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    await fs.mkdir(path.join(tempRoot, 'write-project', 'config'), { recursive: true });
+    await fs.writeFile(path.join(tempRoot, 'write-project', 'config', 'schema.json'), JSON.stringify({ type: 'object', properties: { value: { type: 'string' } } }));
+    await fs.writeFile(path.join(tempRoot, 'write-project', 'record-1.json'), JSON.stringify({ value: 'initial' }));
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: 'config/.env',
+      values: { LOCAL_PATH: tempRoot }
+    });
+
+    await Promise.all(Array.from({ length: 20 }, (_value, index) => tempAdapter.writeRecordData('write-project', 'record-1', { value: `write-${index}` })));
+
+    await expect(readJson(path.join(tempRoot, 'write-project', 'record-1.json'))).resolves.toEqual(
+      expect.objectContaining({ value: expect.stringMatching(/^write-\d+$/) })
+    );
+    await expect(fs.readdir(path.join(tempRoot, 'write-project'))).resolves.not.toEqual(expect.arrayContaining([expect.stringMatching(/\\.tmp$/)]));
+  });
+
   it('loads project-level markdown prompts', async () => {
     await expect(adapter.getProjectPrompt('sample-project')).resolves.toBe('You are a concise review assistant.\n');
   });
