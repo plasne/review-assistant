@@ -72,6 +72,13 @@ const respond = async ({ requestId, prompt, callbacks, requestTool }) => {
       callbacks.chunk('Streamed ');
       callbacks.chunk('Copilot response');
     }
+    callbacks.log('info', 'review-assistant.agent-provider-usage', {
+      requestId,
+      model: contextModel(prompt),
+      reasoningEffort: 'medium',
+      inputTokens: 100,
+      outputTokens: 20
+    });
     callbacks.complete();
   } catch (error) {
     callbacks.error({
@@ -81,6 +88,8 @@ const respond = async ({ requestId, prompt, callbacks, requestTool }) => {
     });
   }
 };
+
+const contextModel = (prompt) => prompt.includes('configured settings') ? 'gpt-5.5' : 'gpt-5.4-mini';
 
 const callTool = async (requestId, requestTool, tool, args) => {
   const response = await requestTool(requestId, {

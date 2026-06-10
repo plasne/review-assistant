@@ -62,11 +62,22 @@ describe('inference CLI config', () => {
     expect(getInferenceAppEnvPath(repoRoot)).toBe(path.join(repoRoot, 'ground-truth', 'config', '.env'));
   });
 
-  it('passes inference config values into the default agent environment for headless Copilot auth', () => {
-    const agent = createInferenceAgent({ COPILOT_GITHUB_TOKEN: 'token', AZURE_STORAGE_ACCOUNT_NAME: 'account' });
-    const options = Reflect.get(agent, 'options') as { commandEnv?: Record<string, string> };
+  it('passes inference config values into the default agent environment and agent settings', () => {
+    const agent = createInferenceAgent({
+      AGENT_MODEL: 'gpt-5.4-mini',
+      COPILOT_GITHUB_TOKEN: 'token',
+      AZURE_STORAGE_ACCOUNT_NAME: 'account',
+      REASONING_EFFORT: 'high'
+    });
+    const options = Reflect.get(agent, 'options') as { agentSettings?: unknown; commandEnv?: Record<string, string> };
 
-    expect(options.commandEnv).toEqual({ COPILOT_GITHUB_TOKEN: 'token', AZURE_STORAGE_ACCOUNT_NAME: 'account' });
+    expect(options.commandEnv).toEqual({
+      AGENT_MODEL: 'gpt-5.4-mini',
+      COPILOT_GITHUB_TOKEN: 'token',
+      AZURE_STORAGE_ACCOUNT_NAME: 'account',
+      REASONING_EFFORT: 'high'
+    });
+    expect(options.agentSettings).toEqual({ model: 'gpt-5.4-mini', reasoningEffort: 'high' });
   });
 
   it('reads iterations from inference config values when no shell override is set', () => {
@@ -169,6 +180,7 @@ describe('inference run artifacts', () => {
         iteration: '0',
         run_folder: '1700000000000',
         case_id: 'case-a',
+        model: 'gpt-5.4-mini',
         status: 'completed',
         output: {
           question: 'What is supported?',
@@ -197,9 +209,20 @@ describe('inference run artifacts', () => {
     expect(writtenInference).not.toHaveProperty('caseId');
     expect(writtenInference).not.toHaveProperty('startedAt');
     expect(writtenInference).not.toHaveProperty('elapsedMs');
-    const writtenTranscript = writtenInference.transcript as Array<{ started_at: string }>;
+    const writtenTranscript = writtenInference.transcript as Array<{ type: string; started_at: string }>;
     expect(writtenTranscript.map((entry) => entry.started_at)).toEqual(
       [...writtenTranscript].map((entry) => entry.started_at).sort((left, right) => left.localeCompare(right))
+    );
+    const writtenAssistantResponse = writtenTranscript.find((entry) => entry.type === 'assistant-response');
+    expect(writtenAssistantResponse).toEqual(
+      expect.objectContaining({
+        elapsed_ms: expect.any(Number),
+        metadata: {
+          assistantRequestElapsedMs: expect.any(Number),
+          firstTokenLatencyMs: expect.any(Number),
+          streamElapsedMs: expect.any(Number)
+        }
+      })
     );
     expect(writtenTranscript[0]).not.toHaveProperty('startedAt');
     expect(writtenTranscript[0]).not.toHaveProperty('elapsedMs');
@@ -361,6 +384,65 @@ describe('inference run artifacts', () => {
     });
   });
 
+  it('returns a tool error and restores the staged output record when a tool writes malformed JSON', async () => {
+    const repoRoot = await createTempRepo();
+    await fs.writeFile(path.join(repoRoot, 'ground-truth', 'config', 'corrupt-plugin.mjs'), corruptPluginSource);
+    await fs.writeFile(
+      path.join(repoRoot, 'ground-truth', '00', 'case-a.json'),
+      `${JSON.stringify(
+        createCase({
+          caseId: 'case-a',
+          input: { question: 'What is supported?', evidence: [] },
+          output: { question: 'What is supported?', evidence: [{ title: 'Doc', url: 'https://example.com' }] }
+        }),
+        null,
+        2
+      )}\n`
+    );
+    const writer = new MemoryArtifactWriter();
+
+    const result = await runInference({
+      repoRoot,
+      runFolder: '1700000000000',
+      iterations: 1,
+      artifactWriter: writer,
+      agent: new CorruptingAgent()
+    });
+
+    expect(result.cases[0]).toEqual(
+      expect.objectContaining({
+        status: 'failed',
+        error: expect.objectContaining({
+          code: 'INFERENCE_CASE_FAILED',
+          message: expect.stringContaining('left selected record JSON invalid; reverted record to pre-tool state')
+        }),
+        output: { question: 'What is supported?', evidence: [] },
+        transcript: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'tool-call',
+            success: false,
+            tool: 'corruptRecord',
+            error: expect.objectContaining({
+              code: 'PROVIDER_ERROR',
+              message: expect.stringContaining('left selected record JSON invalid; reverted record to pre-tool state')
+            })
+          }),
+          expect.objectContaining({
+            type: 'event',
+            success: false,
+            error: expect.objectContaining({ code: 'INFERENCE_CASE_FAILED' })
+          })
+        ])
+      })
+    );
+    expect(result.manifest.counts).toEqual({ completed: 0, failed: 1, timeout: 0 });
+    expect((writer.uploads[0].value as { inference: { model?: string; status: string; output: unknown; error?: unknown } }).inference).toMatchObject({
+      status: 'failed',
+      output: { question: 'What is supported?', evidence: [] },
+      error: expect.objectContaining({ code: 'INFERENCE_CASE_FAILED' })
+    });
+  });
+
   it('keeps path organization stable and rejects unsafe blob path segments', () => {
     expect(caseArtifactPath('1700000000000', 'ref-1', '2')).toBe('1700000000000/ref-1-2.json');
     expect(manifestBlobPath('1700000000000')).toBe('1700000000000/manifest.json');
@@ -445,6 +527,31 @@ export default {
 };
 `;
 
+const corruptPluginSource = `
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+export default {
+  id: 'corrupt-record',
+  tools: [
+    {
+      name: 'corruptRecord',
+      description: 'Test-only tool that corrupts the selected record JSON file.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false
+      },
+      execute: async (request, context) => {
+        const root = context.storage.config.values.LOCAL_PATH;
+        await fs.appendFile(path.join(root, context.selectedProjectId, \`\${context.selectedRecordId}.json\`), '\\n  "dangling": true\\n}');
+        return { requestId: request.requestId, ok: true, result: { corrupted: true } };
+      }
+    }
+  ]
+};
+`;
+
 type GroundTruthCaseJson = Omit<GroundTruthCase, 'groupId' | 'groundTruth'>;
 
 const createCase = (overrides: Partial<GroundTruthCaseJson> = {}): GroundTruthCaseJson => ({
@@ -510,6 +617,11 @@ class FixtureSavingAgent implements InferenceAgent {
           throw new Error(save.error.message);
         }
         handlers.chunk({ requestId: 'request-1', messageId: 'message-1', content: 'Saved evidence.' });
+        handlers.log?.({
+          level: 'info',
+          event: 'review-assistant.agent-provider-usage',
+          fields: { requestId: 'request-1', model: 'gpt-5.4-mini', reasoningEffort: 'medium' }
+        });
         handlers.complete({ requestId: 'request-1', messageId: 'message-1' });
       } catch (error) {
         handlers.error({
@@ -637,6 +749,45 @@ class NeverCompletingAgent implements InferenceAgent {
 
   cancel(requestId: string): boolean {
     this.canceledRequestIds.push(requestId);
+    return true;
+  }
+}
+
+class CorruptingAgent implements InferenceAgent {
+  async start(_context: ChatContext, handlers: ChatStreamHandlers, tools: LocalToolRuntime): Promise<ChatStreamStartResult> {
+    queueMicrotask(async () => {
+      try {
+        const corrupt = await tools.execute({
+          tool: 'corruptRecord',
+          requestId: 'corrupt-1',
+          arguments: {}
+        });
+        if (!corrupt.ok) {
+          throw new Error(corrupt.error.message);
+        }
+        handlers.log?.({
+          level: 'info',
+          event: 'review-assistant.agent-provider-usage',
+          fields: { requestId: 'request-1', model: 'gpt-5.4-mini', reasoningEffort: 'medium' }
+        });
+        handlers.chunk({ requestId: 'request-1', messageId: 'message-1', content: 'Corrupted record.' });
+        handlers.complete({ requestId: 'request-1', messageId: 'message-1' });
+      } catch (error) {
+        handlers.error({
+          requestId: 'request-1',
+          messageId: 'message-1',
+          error: {
+            code: 'PROVIDER_ERROR',
+            message: error instanceof Error ? error.message : String(error),
+            retryable: false
+          }
+        });
+      }
+    });
+    return { requestId: 'request-1', messageId: 'message-1' };
+  }
+
+  cancel(): boolean {
     return true;
   }
 }

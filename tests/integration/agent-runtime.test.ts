@@ -34,6 +34,7 @@ afterAll(async () => {
 describe('agent runtime streaming pipeline', () => {
   it('streams chunks from the isolated worker after reading record details through a local tool', async () => {
     const chunks: ChatStreamChunk[] = [];
+    const logs: Array<{ event: string; fields: Record<string, unknown> }> = [];
     const toolRequests: string[] = [];
     const tools = createFakeToolRuntime(toolRequests);
     const runtime = new AgentRuntime({
@@ -57,7 +58,8 @@ describe('agent runtime streaming pipeline', () => {
             chunk: (chunk) => chunks.push(chunk),
             complete: () => resolve(chunks.map((chunk) => chunk.content).join('')),
             error: (event) => reject(new Error(event.error.message)),
-            canceled: () => reject(new Error('unexpected cancel'))
+            canceled: () => reject(new Error('unexpected cancel')),
+            log: (event) => logs.push(event)
           },
           tools
         )
@@ -66,6 +68,12 @@ describe('agent runtime streaming pipeline', () => {
 
     await expect(complete).resolves.toBe('Record question: How do I run the harness?');
     expect(toolRequests).toEqual(['readRecord']);
+    expect(logs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event: 'review-assistant.agent-provider-usage',
+        fields: expect.objectContaining({ model: 'gpt-5.4-mini' })
+      })
+    ]));
   });
 
   it('propagates cancellation and releases the pending request', async () => {

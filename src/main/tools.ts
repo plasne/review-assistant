@@ -809,8 +809,50 @@ export const createLocalToolRuntime = (context: ToolExecutionContext, plugins: L
       if (!tool) {
         return toolError(request.requestId, 'TOOL_NOT_FOUND', `Tool not found: ${request.tool}`, false);
       }
-      return tool.execute(request, context, listTools);
+      return executeWithRecordJsonGuard(tool, request, context, listTools);
     }
+  };
+};
+
+const executeWithRecordJsonGuard = async (
+  tool: RegisteredTool,
+  request: ToolInvocationRequest,
+  context: ToolExecutionContext,
+  listTools: () => LocalToolMetadata[]
+): Promise<ToolInvocationResponse> => {
+  const snapshot = await readSelectedRecordSnapshot(context);
+  const response = await tool.execute(request, context, listTools);
+  if (!snapshot) {
+    return response;
+  }
+  try {
+    await context.storage?.readRecordData?.(snapshot.projectId, snapshot.recordId);
+    return response;
+  } catch (error) {
+    try {
+      await context.storage?.writeRecordData?.(snapshot.projectId, snapshot.recordId, snapshot.data);
+    } catch (restoreError) {
+      return toolError(
+        request.requestId,
+        'PROVIDER_ERROR',
+        `Tool ${tool.name} left selected record JSON invalid and rollback failed: ${errorMessage(error)}; rollback error: ${errorMessage(restoreError)}`,
+        false
+      );
+    }
+    return toolError(request.requestId, 'PROVIDER_ERROR', `Tool ${tool.name} left selected record JSON invalid; reverted record to pre-tool state: ${errorMessage(error)}`, false);
+  }
+};
+
+const readSelectedRecordSnapshot = async (
+  context: ToolExecutionContext
+): Promise<{ projectId: string; recordId: string; data: unknown } | undefined> => {
+  if (!context.storage?.readRecordData || !context.storage.writeRecordData || !context.selectedProjectId || !context.selectedRecordId) {
+    return undefined;
+  }
+  return {
+    projectId: context.selectedProjectId,
+    recordId: context.selectedRecordId,
+    data: cloneJson(await context.storage.readRecordData(context.selectedProjectId, context.selectedRecordId))
   };
 };
 
