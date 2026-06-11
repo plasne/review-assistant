@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { constants as fsConstants, lstatSync } from 'node:fs';
 import path from 'node:path';
-import { BlobServiceClient } from '@azure/storage-blob';
+import { BlobServiceClient, type BlobLeaseClient } from '@azure/storage-blob';
 import { DefaultAzureCredential } from '@azure/identity';
 import type {
   AppConfig,
@@ -29,6 +29,7 @@ import {
 import { assertNewProjectId, assertProjectId, assertRecordId } from '../shared/validators';
 import { buildRenderTree, validateRecord } from './schema';
 import { loadProjectEnv, readEnvFile, redactConfig } from './env';
+import { logError } from '../shared/logging';
 import {
   discoverComputedTagPlugins,
   loadManualTagDefinitionsFromDirectories,
@@ -60,7 +61,15 @@ export interface StorageAdapter {
   getProjectMcpConfig(projectId: string): Promise<string | undefined>;
   getTagDefinitions(projectId: string): Promise<import('../shared/types').TagDefinition[]>;
   reconcileRecordTags(projectId: string, data: unknown): Promise<ReconcileTagsResult>;
+  obtainExclusiveLease(projectId: string, recordId: string): Promise<ExclusiveLeaseResult>;
+  releaseExclusiveLease(projectId: string, recordId: string): Promise<void>;
 }
+
+export type ExclusiveLeaseStatus = 'SUCCESS' | 'FAILURE' | 'NOT_SUPPORTED';
+
+export type ExclusiveLeaseResult = {
+  status: ExclusiveLeaseStatus;
+};
 
 export type ProjectSchemaSaveResult = {
   projectId: string;
@@ -151,6 +160,14 @@ export class LocalStorageAdapter implements StorageAdapter {
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
     return this.renderRecordData(projectId, recordId, await this.readRecordData(projectId, recordId));
+  }
+
+  async obtainExclusiveLease(_projectId: string, _recordId: string): Promise<ExclusiveLeaseResult> {
+    return { status: 'NOT_SUPPORTED' };
+  }
+
+  async releaseExclusiveLease(_projectId: string, _recordId: string): Promise<void> {
+    return undefined;
   }
 
   async readRecordData(projectId: string, recordId: string): Promise<unknown> {
@@ -273,7 +290,7 @@ export class LocalStorageAdapter implements StorageAdapter {
     const id = assertRecordId(recordId);
     const existing = await this.readRecordData(projectId, id);
     const feedback = isPlainRecord(existing)
-      ? Object.fromEntries(Object.entries(existing).filter(([key]) => key.endsWith('_feedback') || key.endsWith('_edits') || key.endsWith('_comments')))
+      ? Object.fromEntries(Object.entries(existing).filter(([key]) => key.startsWith('_feedback')))
       : {};
     const next = isPlainRecord(data) ? { ...data, ...feedback } : data;
     return this.writeRecordData(projectId, id, next);
@@ -365,6 +382,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   private readonly containerName: string;
   private readonly recordBaselines = new Map<string, { data: unknown; etag: string }>();
   private readonly schemaBaselines = new Map<string, { content: string; schema: unknown; etag: string }>();
+  private readonly recordLeases = new Map<string, AzureRecordLease>();
 
   constructor(private readonly config: AppConfig, client?: BlobServiceClient) {
     const containerName = config.values.AZURE_STORAGE_CONTAINER;
@@ -388,14 +406,16 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   }
 
   async listProjects(): Promise<ProjectSummary[]> {
-    const projects = new Set<string>();
-    for await (const blob of this.container().listBlobsFlat()) {
-      const projectId = projectIdFromRootBlob(blob.name);
-      if (projectId) {
-        projects.add(projectId);
+    return this.withAzureErrorContext('list projects', async () => {
+      const projects = new Set<string>();
+      for await (const blob of this.container().listBlobsFlat()) {
+        const projectId = projectIdFromRootBlob(blob.name);
+        if (projectId) {
+          projects.add(projectId);
+        }
       }
-    }
-    return [...projects].sort((a, b) => a.localeCompare(b)).map((id) => ({ id, name: id }));
+      return [...projects].sort((a, b) => a.localeCompare(b)).map((id) => ({ id, name: id }));
+    });
   }
 
   async createProject(projectId: string): Promise<ProjectSummary> {
@@ -441,6 +461,58 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     return this.renderRecordData(projectId, recordId, await this.readRecordData(projectId, recordId));
   }
 
+  async obtainExclusiveLease(projectId: string, recordId: string): Promise<ExclusiveLeaseResult> {
+    const id = assertProjectId(projectId);
+    const record = assertRecordId(recordId);
+    const key = recordBaselineKey(id, record);
+    if (this.recordLeases.has(key)) {
+      return { status: 'SUCCESS' };
+    }
+    const blob = this.container().getBlobClient(projectBlobName(id, `${record}.json`));
+    if (!(await blob.exists())) {
+      throw new Error(`Record not found: ${record}`);
+    }
+    const proposedLeaseId = randomUUID();
+    const leaseClient = blob.getBlobLeaseClient(proposedLeaseId);
+    try {
+      await leaseClient.acquireLease(AZURE_BLOB_LEASE_SECONDS);
+    } catch (error) {
+      if (isBlobLeaseConflict(error)) {
+        return { status: 'FAILURE' };
+      }
+      throw error;
+    }
+    const entry: AzureRecordLease = {
+      leaseClient,
+      leaseId: proposedLeaseId,
+      renewTimer: setInterval(() => {
+        void this.renewRecordLease(key, id, record);
+      }, AZURE_BLOB_LEASE_RENEW_MS)
+    };
+    entry.renewTimer.unref?.();
+    this.recordLeases.set(key, entry);
+    return { status: 'SUCCESS' };
+  }
+
+  async releaseExclusiveLease(projectId: string, recordId: string): Promise<void> {
+    const id = assertProjectId(projectId);
+    const record = assertRecordId(recordId);
+    const key = recordBaselineKey(id, record);
+    const entry = this.recordLeases.get(key);
+    if (!entry) {
+      return;
+    }
+    clearInterval(entry.renewTimer);
+    this.recordLeases.delete(key);
+    try {
+      await entry.leaseClient.releaseLease();
+    } catch (error) {
+      if (!isBlobLeaseAlreadyReleased(error)) {
+        throw error;
+      }
+    }
+  }
+
   async readRecordData(projectId: string, recordId: string): Promise<unknown> {
     const id = assertProjectId(projectId);
     const record = assertRecordId(recordId);
@@ -463,7 +535,10 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const id = assertProjectId(projectId);
     const record = assertRecordId(recordId);
     const body = `${JSON.stringify(data, null, 2)}\n`;
-    const response = await this.container().getBlockBlobClient(projectBlobName(id, `${record}.json`)).upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
+    const response = await this.container().getBlockBlobClient(projectBlobName(id, `${record}.json`)).upload(body, Buffer.byteLength(body), {
+      blobHTTPHeaders: { blobContentType: 'application/json' },
+      conditions: this.recordLeaseCondition(id, record)
+    });
     this.rememberRecordBaseline(id, record, data, response.etag);
     return this.renderRecordData(id, record, data);
   }
@@ -478,7 +553,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
       try {
         const response = await blob.upload(body, Buffer.byteLength(body), {
           blobHTTPHeaders: { blobContentType: 'application/json' },
-          conditions: { ifNoneMatch: '*' }
+          conditions: { ifNoneMatch: '*', ...this.recordLeaseCondition(id, record) }
         });
         this.rememberRecordBaseline(id, record, data, response.etag);
       } catch (error) {
@@ -506,7 +581,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     try {
       const response = await blob.upload(body, Buffer.byteLength(body), {
         blobHTTPHeaders: { blobContentType: 'application/json' },
-        conditions: { ifMatch: etag }
+        conditions: { ifMatch: etag, ...this.recordLeaseCondition(id, record) }
       });
       this.rememberRecordBaseline(id, record, data, response.etag);
     } catch (error) {
@@ -605,7 +680,10 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     }
     mergeFeedbackEntries(data, validInput, user.username);
     const body = `${JSON.stringify(data, null, 2)}\n`;
-    await blob.upload(body, Buffer.byteLength(body), { blobHTTPHeaders: { blobContentType: 'application/json' } });
+    await blob.upload(body, Buffer.byteLength(body), {
+      blobHTTPHeaders: { blobContentType: 'application/json' },
+      conditions: this.recordLeaseCondition(id, record)
+    });
     return {
       username: user.username,
       record: buildRecordDetail(id, record, schema, data, normalizeFeedbackConfig(schema, await this.readOptionalJsonBlob(container, projectBlobName(id, PROJECT_CONFIG_FILE))))
@@ -617,7 +695,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     const record = assertRecordId(recordId);
     const existing = await this.readRecordData(id, record);
     const feedback = isPlainRecord(existing)
-      ? Object.fromEntries(Object.entries(existing).filter(([key]) => key.endsWith('_feedback') || key.endsWith('_edits') || key.endsWith('_comments')))
+      ? Object.fromEntries(Object.entries(existing).filter(([key]) => key.startsWith('_feedback')))
       : {};
     const next = isPlainRecord(data) ? { ...data, ...feedback } : data;
     return this.writeRecordData(id, record, next);
@@ -662,7 +740,7 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   }
 
   async getAppConfig(): Promise<Record<string, string>> {
-    return this.mergeAzureAppConfig(await this.readOptionalBlob(this.container(), PROJECT_ENV_FILE));
+    return this.withAzureErrorContext('load app config', async () => this.mergeAzureAppConfig(await this.readOptionalBlob(this.container(), PROJECT_ENV_FILE)));
   }
 
   async getAppMcpConfig(): Promise<string | undefined> {
@@ -733,6 +811,18 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     return this.client.getContainerClient(this.containerName);
   }
 
+  private async withAzureErrorContext<T>(operation: string, action: () => Promise<T>): Promise<T> {
+    try {
+      return await action();
+    } catch (error) {
+      throw describeAzureStorageError(error, {
+        operation,
+        containerName: this.containerName,
+        accountName: this.config.values.AZURE_STORAGE_ACCOUNT_NAME
+      });
+    }
+  }
+
   private mergeAzureAppConfig(appEnv: string | undefined): Record<string, string> {
     return appEnv ? { ...this.config.values, ...parseAzureConfigEnv(appEnv, 'app config/.env') } : { ...this.config.values };
   }
@@ -779,7 +869,40 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
     }
     this.schemaBaselines.delete(projectId);
   }
+
+  private recordLeaseCondition(projectId: string, recordId: string): { leaseId?: string } {
+    return { leaseId: this.recordLeases.get(recordBaselineKey(projectId, recordId))?.leaseId };
+  }
+
+  private async renewRecordLease(key: string, projectId: string, recordId: string): Promise<void> {
+    const entry = this.recordLeases.get(key);
+    if (!entry) {
+      return;
+    }
+    try {
+      await entry.leaseClient.renewLease();
+    } catch (error) {
+      if (this.recordLeases.get(key) === entry) {
+        clearInterval(entry.renewTimer);
+        this.recordLeases.delete(key);
+      }
+      logError('review-assistant.storage-lease-renewal-failed', {
+        projectId,
+        recordId,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
 }
+
+type AzureRecordLease = {
+  leaseClient: BlobLeaseClient;
+  leaseId: string;
+  renewTimer: NodeJS.Timeout;
+};
+
+const AZURE_BLOB_LEASE_SECONDS = 60;
+const AZURE_BLOB_LEASE_RENEW_MS = 45_000;
 
 const isRecordFile = (name: string): boolean => name.endsWith('.json') && !path.basename(name).startsWith('_') && !name.includes('/');
 
@@ -898,6 +1021,52 @@ const isBlobConditionConflict = (error: unknown): boolean => {
   }
   const details = error as { statusCode?: number; code?: string };
   return details.statusCode === 412 || details.code === 'BlobAlreadyExists' || details.code === 'ConditionNotMet';
+};
+
+const isBlobLeaseConflict = (error: unknown): boolean => {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const details = error as { statusCode?: number; code?: string };
+  return details.statusCode === 409 || details.code === 'LeaseAlreadyPresent';
+};
+
+const isBlobLeaseAlreadyReleased = (error: unknown): boolean => {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const details = error as { statusCode?: number; code?: string };
+  return details.statusCode === 409 || details.code === 'LeaseNotPresentWithLeaseOperation';
+};
+
+const describeAzureStorageError = (
+  error: unknown,
+  context: {
+    operation: string;
+    containerName: string;
+    accountName?: string;
+  }
+): Error => {
+  if (!isAzureStorageServiceError(error)) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+  const statusText = error.statusCode ? `HTTP ${error.statusCode}` : 'Azure Storage request';
+  const codeText = error.code ? ` (${error.code})` : '';
+  const messageText = error.message.trim() ? ` ${error.message.trim()}` : '';
+  const targetText = context.accountName ? ` account "${context.accountName}", container "${context.containerName}"` : ` container "${context.containerName}"`;
+  const remediation =
+    error.statusCode === 403 || error.code === 'AuthorizationFailure' || error.code === 'AuthenticationFailed' || error.code === 'AuthorizationPermissionMismatch'
+      ? ' The storage account may be blocking this machine with firewall or virtual network rules, or the signed-in identity may be missing Blob Data permissions.'
+      : '';
+  return new Error(`Azure Blob Storage failed to ${context.operation} for${targetText}: ${statusText}${codeText}.${messageText}${remediation}`);
+};
+
+const isAzureStorageServiceError = (error: unknown): error is { statusCode?: number; code?: string; message: string } => {
+  if (typeof error !== 'object' || error === null || !('message' in error)) {
+    return false;
+  }
+  const details = error as { statusCode?: unknown; code?: unknown; message?: unknown };
+  return typeof details.message === 'string' && (typeof details.statusCode === 'number' || typeof details.code === 'string');
 };
 
 const readRuntimeEnvValues = (envPath: string): Record<string, string> =>

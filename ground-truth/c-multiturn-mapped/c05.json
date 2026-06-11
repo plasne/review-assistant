@@ -22,28 +22,28 @@
             "title": "Influence track and Dracula scoring",
             "url": "fury-of-dracula-4e://rules/influence",
             "excerpt": "Influence measures Dracula progress toward victory. The influence marker advances when rules, events, encounters, matured vampires, hunter defeat, bite effects, or Dracula powers instruct it to advance. The most important planned source of influence is allowing vampire encounters to mature before hunters find and defeat them. Dracula can also gain influence through combat outcomes and card effects. Hunters slow the influence plan by searching the trail, clearing encounters, forcing Dracula to flee by sea, damaging him, and interrupting vampire maturation. If the influence marker reaches the victory space, Dracula wins immediately unless the triggering effect says to finish another step first. Because influence pressure is public, hunters can judge when to take risks against Dracula versus when to clear encounters.",
-            "score": 0.0
+            "score": 0
           },
           {
             "id": "fury-of-dracula-4e-trail-hideouts",
             "title": "Dracula trail, hideouts, lairs, and revealing locations",
             "url": "fury-of-dracula-4e://rules/trail",
             "excerpt": "The trail records Dracula recent movement using location cards and power cards. The newest position is added to the front of the trail and older cards slide toward the end. Cards on the trail are hidden until revealed by hunter movement, search, card effects, or Dracula being found. Each city location on the trail may hold an encounter card, creating a hideout. When a trail card advances far enough or is moved by an effect, it can become a lair or leave the trail depending on the edition procedure and card text. When an encounter matures, Dracula resolves the mature effect printed on that encounter, which is one of his main ways to gain influence. If a hunter enters a city on the trail, Dracula must reveal whether the location matches the hunter position when the rules call for it. If Dracula current location is revealed, keep it public until he legally moves or an effect hides him again.",
-            "score": 0.0
+            "score": 0
           },
           {
             "id": "fury-of-dracula-4e-status-effects",
             "title": "Bites, despair, and status effects",
             "url": "fury-of-dracula-4e://rules/status-effects",
             "excerpt": "Status effects mark long-term consequences on hunters. A bitten hunter has been wounded by Dracula or a vampire and carries a bite token or similar marker. Bites can restrict cards, worsen future outcomes, and bring the hunter closer to defeat or Dracula influence gains depending on character and effect text. Mina has special bite-related rules and must be handled according to her character instructions. Despair represents mental or supernatural pressure and can restrict trading, healing, combat, or event use as defined by the status rules. Other conditions and tokens can come from encounters, events, combat, and character abilities. Remove statuses only when a rule, location, card, or effect explicitly permits it. When a status changes what a hunter may do, check the status before choosing actions, combat cards, trades, or healing.",
-            "score": 0.0
+            "score": 0
           },
           {
             "id": "fury-of-dracula-4e-damage-health-defeat",
             "title": "Damage, health, hunter defeat, and Dracula defeat",
             "url": "fury-of-dracula-4e://rules/damage-health-defeat",
             "excerpt": "Damage tracks how close a character is to defeat. Hunters suffer damage from combat, sea travel, events, encounters, and Dracula effects. Hunters recover damage through rest, hospitals, items, events, character abilities, and other healing effects. When a hunter is defeated, resolve the defeat procedure: Dracula gains the appropriate benefit, the hunter is removed or delayed as instructed, then returns under the game rules rather than being permanently eliminated in ordinary play. Dracula suffers damage from hunter attacks, sea travel, some powers, events, and special effects. Dracula recovers through Castle Dracula, Feed, cards, and other listed effects. If Dracula reaches his defeat threshold, the hunter side wins. Always apply prevention, resistance, timing, and card text before checking final defeat results.",
-            "score": 0.0
+            "score": 0
           }
         ],
         "answer": "Dracula gains influence through two distinct engines: trail-based pressure and hunter attrition. Trail-based pressure comes from hideouts on his trail that can mature into lair-stage effects, especially mature encounters like vampires that advance influence. Hunter attrition comes from bites, status pressure, and defeat outcomes that can generate Dracula benefits and push the game state toward additional influence gains."
@@ -62,5 +62,9 @@
       }
     ]
   },
-  "tags": ["turns:multi", "mapped:true", "state:search-augmentation"]
+  "tags": [
+    "turns:multi",
+    "mapped:true",
+    "state:search-augmentation"
+  ]
 }

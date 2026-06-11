@@ -46,7 +46,7 @@ describe('record draft store', () => {
 
     expect(stored).toMatchObject({
       answer: 'Updated',
-      answer_feedback: expect.arrayContaining([expect.objectContaining({ feedback: 'good', edit: 'Updated', username: 'sme@example.com' })])
+      _feedback_answer: expect.arrayContaining([expect.objectContaining({ feedback: 'good', edit: 'Updated', username: 'sme@example.com' })])
     });
   });
 
@@ -121,14 +121,14 @@ describe('record draft store', () => {
     });
     stored = {
       answer: 'Original',
-      answer_feedback: [{ feedback: 'fair', username: 'other@example.com', timestamp: '2026-06-02T20:00:00.000Z' }]
+      _feedback_answer: [{ feedback: 'fair', username: 'other@example.com', timestamp: '2026-06-02T20:00:00.000Z' }]
     };
 
     await expect(drafts.saveDraft('sample-project', 'record-1')).rejects.toThrow('Record changed after this draft was staged');
 
     expect(stored).toEqual({
       answer: 'Original',
-      answer_feedback: [{ feedback: 'fair', username: 'other@example.com', timestamp: '2026-06-02T20:00:00.000Z' }]
+      _feedback_answer: [{ feedback: 'fair', username: 'other@example.com', timestamp: '2026-06-02T20:00:00.000Z' }]
     });
     expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: true });
   });
@@ -174,6 +174,39 @@ describe('record draft store', () => {
     });
     expect(savedSchema).toEqual(schema);
     expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: false });
+  });
+
+  it('releases the active exclusive lease before opening a different record', async () => {
+    const leaseEvents: string[] = [];
+    const storage = createStorage(
+      () => ({ answer: 'Original' }),
+      () => undefined
+    );
+    storage.obtainExclusiveLease = async (_projectId, recordId) => {
+      leaseEvents.push(`obtain:${recordId}`);
+      return { status: 'SUCCESS' };
+    };
+    storage.releaseExclusiveLease = async (_projectId, recordId) => {
+      leaseEvents.push(`release:${recordId}`);
+    };
+    const drafts = new RecordDraftStore(() => storage);
+
+    await drafts.getRecord('sample-project', 'record-1');
+    await drafts.getRecord('sample-project', 'record-2');
+    await drafts.releaseAll();
+
+    expect(leaseEvents).toEqual(['obtain:record-1', 'release:record-1', 'obtain:record-2', 'release:record-2']);
+  });
+
+  it('rejects opening a record when the backend reports an exclusive lease failure', async () => {
+    const storage = createStorage(
+      () => ({ answer: 'Original' }),
+      () => undefined
+    );
+    storage.obtainExclusiveLease = async () => ({ status: 'FAILURE' });
+    const drafts = new RecordDraftStore(() => storage);
+
+    await expect(drafts.getRecord('sample-project', 'record-1')).rejects.toThrow('Record is already open in another session: record-1');
   });
 });
 
@@ -235,7 +268,9 @@ const createStorage = (read: () => unknown, write: (value: unknown) => void): St
   getProjectConfig: async () => ({}),
   getProjectMcpConfig: async () => undefined,
   getTagDefinitions: async () => [],
-  reconcileRecordTags: async (_projectId, data) => ({ data, pluginErrors: [] })
+  reconcileRecordTags: async (_projectId, data) => ({ data, pluginErrors: [] }),
+  obtainExclusiveLease: async () => ({ status: 'NOT_SUPPORTED' }),
+  releaseExclusiveLease: async () => undefined
 });
 
 const createRecordDetail = (projectId: string, recordId: string, data: unknown) => ({

@@ -39,6 +39,7 @@ JsonValue = Any
 FactJudge = Callable[[str, str], dict[str, JsonValue]]
 
 JUDGE_SCHEMA_VERSION = "review-assistant.fact-judge.v1"
+JUDGE_RETRY_ATTEMPTS = 3
 JUDGE_LABEL_SCORES = {
     "equivalent": 1.0,
     "partial": 0.5,
@@ -59,6 +60,10 @@ class EvaluationPaths:
     evidence_key: str | None
     output_schema: dict[str, JsonValue] | None
     ignored_output_structure_issues: tuple[dict[str, str], ...]
+
+
+class RepairableJudgeOutputError(ValueError):
+    """Judge output can be retried and, if needed, normalized deterministically."""
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,7 @@ def main() -> int:
     if args.latest and args.prefix:
         raise RuntimeError("--latest cannot be combined with --prefix.")
     load_default_env()
+    force_ground_truth_local_path()
     container_name = require_env("INFERENCE_CONTAINER")
     container = create_blob_service_client().get_container_client(container_name)
     prefix = latest_inference_prefix(container) if args.latest else normalize_prefix(args.prefix)
@@ -243,6 +249,10 @@ def load_default_env() -> None:
         if not key or key in os.environ:
             continue
         os.environ[key] = unquote_env_value(value.strip())
+
+
+def force_ground_truth_local_path() -> None:
+    os.environ["LOCAL_PATH"] = str(Path("ground-truth").resolve())
 
 
 def unquote_env_value(value: str) -> str:
@@ -730,18 +740,36 @@ class CopilotSdkFactJudge:
     def __call__(self, expected_answer: str, actual_answer: str) -> dict[str, JsonValue]:
         return asyncio.run(self.evaluate(expected_answer, actual_answer))
 
-    async def evaluate(self, expected_answer: str, actual_answer: str) -> dict[str, JsonValue]:
+    def judge_with_feedback(self, expected_answer: str, actual_answer: str, retry_feedback: str) -> dict[str, JsonValue]:
+        return asyncio.run(self.evaluate(expected_answer, actual_answer, retry_feedback=retry_feedback))
+
+    async def evaluate(
+        self,
+        expected_answer: str,
+        actual_answer: str,
+        *,
+        retry_feedback: str | None = None,
+    ) -> dict[str, JsonValue]:
         try:
-            return await asyncio.wait_for(self.evaluate_with_copilot(expected_answer, actual_answer), timeout=self.timeout_seconds)
+            return await asyncio.wait_for(
+                self.evaluate_with_copilot(expected_answer, actual_answer, retry_feedback=retry_feedback),
+                timeout=self.timeout_seconds,
+            )
         except TimeoutError as error:
             raise RuntimeError(f"Copilot SDK fact judge timed out after {self.timeout_seconds} seconds.") from error
 
-    async def evaluate_with_copilot(self, expected_answer: str, actual_answer: str) -> dict[str, JsonValue]:
+    async def evaluate_with_copilot(
+        self,
+        expected_answer: str,
+        actual_answer: str,
+        *,
+        retry_feedback: str | None = None,
+    ) -> dict[str, JsonValue]:
         from copilot import CopilotClient
         from copilot.session import PermissionHandler
         from copilot.session_events import AssistantMessageData, AssistantMessageDeltaData, SessionIdleData
 
-        judge_request = build_judge_request(expected_answer, actual_answer)
+        judge_request = build_judge_request(expected_answer, actual_answer, retry_feedback=retry_feedback)
         done = asyncio.Event()
         chunks: list[str] = []
 
@@ -843,8 +871,13 @@ def strip_json_code_fence(content: str) -> str:
     return match.group(1).strip() if match else stripped
 
 
-def build_judge_request(expected_answer: str, actual_answer: str) -> dict[str, JsonValue]:
-    return {
+def build_judge_request(
+    expected_answer: str,
+    actual_answer: str,
+    *,
+    retry_feedback: str | None = None,
+) -> dict[str, JsonValue]:
+    request = {
         "schema_version": JUDGE_SCHEMA_VERSION,
         "task": "Extract comparable facts from both answers, then judge material equivalence of each ground-truth fact.",
         "instructions": textwrap.dedent(
@@ -854,7 +887,7 @@ def build_judge_request(expected_answer: str, actual_answer: str) -> dict[str, J
             predicate, object, and important qualifiers. Do not split a single answer point into tiny phrase fragments.
             Compare meaning, not exact wording. Mark a ground-truth fact equivalent when the inference materially asserts the
             same claim, partial when it covers only part of the claim or omits an important qualifier, contradicted when it
-            conflicts, and missing when no inference fact supports it.
+            conflicts, and missing when no inference fact supports it. Use an empty inference_fact_ids array for missing facts.
             For no-results search answers, treat "no official/source rule exists or was found" as materially supporting
             "no supporting evidence was found or recorded" when the answer's evidence is sourced from those rules.
             Return only JSON matching the requested schema. Do not include Markdown.
@@ -891,10 +924,64 @@ def build_judge_request(expected_answer: str, actual_answer: str) -> dict[str, J
             },
         },
     }
+    if retry_feedback is not None:
+        request["retry_feedback"] = retry_feedback
+    return request
 
 
 def generation_metrics_for_answers(expected_answer: str, actual_answer: str, *, fact_judge: FactJudge) -> dict[str, JsonValue]:
-    return judge_generation_metrics(fact_judge(expected_answer, actual_answer))
+    retry_feedback = None
+    last_judge_output = None
+    for attempt in range(1, JUDGE_RETRY_ATTEMPTS + 1):
+        try:
+            judge_output = call_fact_judge(
+                fact_judge,
+                expected_answer,
+                actual_answer,
+                retry_feedback=retry_feedback,
+            )
+            last_judge_output = judge_output
+            return judge_generation_metrics(judge_output)
+        except RepairableJudgeOutputError as error:
+            if attempt >= JUDGE_RETRY_ATTEMPTS:
+                if last_judge_output is None:
+                    raise
+                return judge_generation_metrics(last_judge_output, normalize_repairable=True)
+            retry_feedback = judge_retry_feedback(error)
+        except ValueError as error:
+            if attempt >= JUDGE_RETRY_ATTEMPTS or not is_retryable_judge_error(error):
+                raise
+            retry_feedback = judge_retry_feedback(error)
+    raise RuntimeError("Fact judge retry loop exited unexpectedly.")
+
+
+def call_fact_judge(
+    fact_judge: FactJudge,
+    expected_answer: str,
+    actual_answer: str,
+    *,
+    retry_feedback: str | None,
+) -> dict[str, JsonValue]:
+    if retry_feedback is not None:
+        retry_method = getattr(fact_judge, "judge_with_feedback", None)
+        if callable(retry_method):
+            return retry_method(expected_answer, actual_answer, retry_feedback)
+    return fact_judge(expected_answer, actual_answer)
+
+
+def is_retryable_judge_error(error: ValueError) -> bool:
+    return str(error).startswith("Fact judge ")
+
+
+def judge_retry_feedback(error: ValueError) -> str:
+    return textwrap.dedent(
+        f"""
+        Your previous response could not be used: {error}
+        Return only a corrected JSON object matching the schema. Do not include Markdown or prose.
+        Every ground_truth_fact must have exactly one comparison. For a comparison labeled missing, use an empty inference_fact_ids array.
+        For equivalent, partial, or contradicted comparisons, include the relevant inference_fact_ids.
+        """
+    ).strip()
 
 
 def generation_metrics(
@@ -988,10 +1075,19 @@ def aggregate_generation_metric(metric_name: str, per_turn_generation_metrics: l
     return aggregated
 
 
-def judge_generation_metrics(judge_output: dict[str, JsonValue]) -> dict[str, JsonValue]:
+def judge_generation_metrics(
+    judge_output: dict[str, JsonValue],
+    *,
+    normalize_repairable: bool = False,
+) -> dict[str, JsonValue]:
     ground_truth_facts = parse_judge_facts(judge_output, "ground_truth_facts")
     inference_facts = parse_judge_facts(judge_output, "inference_facts")
-    comparisons = parse_judge_comparisons(judge_output, ground_truth_facts, inference_facts)
+    comparisons = parse_judge_comparisons(
+        judge_output,
+        ground_truth_facts,
+        inference_facts,
+        normalize_repairable=normalize_repairable,
+    )
     used_inference_fact_ids = {
         inference_fact_id
         for comparison in comparisons
@@ -1263,7 +1359,11 @@ def parse_judge_facts(judge_output: dict[str, JsonValue], key: str) -> dict[str,
 
 
 def parse_judge_comparisons(
-    judge_output: dict[str, JsonValue], ground_truth_facts: dict[str, dict[str, str]], inference_facts: dict[str, dict[str, str]]
+    judge_output: dict[str, JsonValue],
+    ground_truth_facts: dict[str, dict[str, str]],
+    inference_facts: dict[str, dict[str, str]],
+    *,
+    normalize_repairable: bool = False,
 ) -> list[dict[str, JsonValue]]:
     if judge_output.get("schema_version") != JUDGE_SCHEMA_VERSION:
         raise ValueError(f"Fact judge output schema_version must be {JUDGE_SCHEMA_VERSION}.")
@@ -1286,15 +1386,19 @@ def parse_judge_comparisons(
             raise ValueError(f"Fact judge comparisons has multiple entries for ground truth fact: {ground_truth_fact_id}")
         if not isinstance(inference_fact_ids, list) or not all(isinstance(value, str) for value in inference_fact_ids):
             raise ValueError(f"Fact judge comparisons[{index}].inference_fact_ids must be a string list.")
+        if label not in JUDGE_LABEL_SCORES:
+            raise ValueError(f"Fact judge comparisons[{index}].label is invalid: {label}")
+        if label == "missing" and inference_fact_ids:
+            if not normalize_repairable:
+                raise RepairableJudgeOutputError(
+                    f"Fact judge comparisons[{index}] must not include inference_fact_ids for missing facts."
+                )
+            inference_fact_ids = []
         unknown_inference_ids = [value for value in inference_fact_ids if value not in inference_facts]
         if unknown_inference_ids:
             raise ValueError(f"Fact judge comparisons[{index}] references unknown inference fact ids: {unknown_inference_ids}")
-        if label not in JUDGE_LABEL_SCORES:
-            raise ValueError(f"Fact judge comparisons[{index}].label is invalid: {label}")
         if label in {"equivalent", "partial", "contradicted"} and not inference_fact_ids:
             raise ValueError(f"Fact judge comparisons[{index}] requires inference_fact_ids for label {label}.")
-        if label == "missing" and inference_fact_ids:
-            raise ValueError(f"Fact judge comparisons[{index}] must not include inference_fact_ids for missing facts.")
         if not isinstance(rationale, str) or not rationale.strip():
             raise ValueError(f"Fact judge comparisons[{index}].rationale must be a non-empty string.")
         seen_ground_truth_ids.add(ground_truth_fact_id)

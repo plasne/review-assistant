@@ -141,11 +141,59 @@ describe('azure blob storage adapter with Azurite', () => {
     await expect(drafts.getRecord('etag-project', 'record-1')).resolves.toMatchObject({
       data: { answer: 'Loaded' }
     });
+    await adapter.releaseExclusiveLease('etag-project', 'record-1');
     await uploadText('etag-project/record-1.json', '{"answer":"Blob edit"}\n');
     await drafts.updateRecord('etag-project', 'record-1', { answer: 'Local edit' });
 
     await expect(drafts.saveDraft('etag-project', 'record-1')).rejects.toThrow(RECORD_DRAFT_CONFLICT_MESSAGE);
     await expect(downloadJson('etag-project/record-1.json')).resolves.toEqual({ answer: 'Blob edit' });
+  });
+
+  it('obtains an Azure blob lease, blocks competing leases, and releases it', async () => {
+    await adapter.createProject('lease-project');
+    await uploadText('lease-project/record-1.json', '{"answer":"Unlocked"}\n');
+    const competingAdapter = new AzureBlobStorageAdapter({
+      backendKind: 'azure-connection-string',
+      appEnvPath: '/unused/config/.env',
+      values: {
+        AZURE_STORAGE_ACCOUNT_CONNSTRING: connectionString,
+        AZURE_STORAGE_CONTAINER: containerName
+      }
+    });
+
+    await expect(adapter.obtainExclusiveLease('lease-project', 'record-1')).resolves.toEqual({ status: 'SUCCESS' });
+    await expect(competingAdapter.obtainExclusiveLease('lease-project', 'record-1')).resolves.toEqual({ status: 'FAILURE' });
+    await expect(adapter.writeRecordData('lease-project', 'record-1', { answer: 'Holder update' })).resolves.toMatchObject({
+      data: { answer: 'Holder update' }
+    });
+
+    await adapter.releaseExclusiveLease('lease-project', 'record-1');
+
+    await expect(competingAdapter.obtainExclusiveLease('lease-project', 'record-1')).resolves.toEqual({ status: 'SUCCESS' });
+    await competingAdapter.releaseExclusiveLease('lease-project', 'record-1');
+  });
+
+  it('releases the current Azure blob lease when the draft store opens another record', async () => {
+    await adapter.createProject('lease-switch-project');
+    await uploadText('lease-switch-project/record-1.json', '{"answer":"One"}\n');
+    await uploadText('lease-switch-project/record-2.json', '{"answer":"Two"}\n');
+    const drafts = new RecordDraftStore(() => adapter);
+    const competingAdapter = new AzureBlobStorageAdapter({
+      backendKind: 'azure-connection-string',
+      appEnvPath: '/unused/config/.env',
+      values: {
+        AZURE_STORAGE_ACCOUNT_CONNSTRING: connectionString,
+        AZURE_STORAGE_CONTAINER: containerName
+      }
+    });
+
+    await drafts.getRecord('lease-switch-project', 'record-1');
+    await expect(competingAdapter.obtainExclusiveLease('lease-switch-project', 'record-1')).resolves.toEqual({ status: 'FAILURE' });
+    await drafts.getRecord('lease-switch-project', 'record-2');
+
+    await expect(competingAdapter.obtainExclusiveLease('lease-switch-project', 'record-1')).resolves.toEqual({ status: 'SUCCESS' });
+    await competingAdapter.releaseExclusiveLease('lease-switch-project', 'record-1');
+    await drafts.releaseAll();
   });
 
   it('rejects a stale draft when a blob changes and later returns to the loaded content', async () => {
@@ -156,6 +204,7 @@ describe('azure blob storage adapter with Azurite', () => {
     await expect(drafts.getRecord('etag-roundtrip-project', 'record-1')).resolves.toMatchObject({
       data: { answer: 'Loaded' }
     });
+    await adapter.releaseExclusiveLease('etag-roundtrip-project', 'record-1');
     await uploadText('etag-roundtrip-project/record-1.json', '{"answer":"Blob edit"}\n');
     await uploadText('etag-roundtrip-project/record-1.json', '{"answer":"Loaded"}\n');
     await drafts.updateRecord('etag-roundtrip-project', 'record-1', { answer: 'Local edit' });

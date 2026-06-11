@@ -56,6 +56,11 @@ describe('local storage adapter', () => {
     expect(detail.renderTree.kind).toBe('object');
   });
 
+  it('reports exclusive record leases as unsupported', async () => {
+    await expect(adapter.obtainExclusiveLease('sample-project', 'valid-record')).resolves.toEqual({ status: 'NOT_SUPPORTED' });
+    await expect(adapter.releaseExclusiveLease('sample-project', 'valid-record')).resolves.toBeUndefined();
+  });
+
   it('keeps local record files parseable after concurrent writes', async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
     await fs.mkdir(path.join(tempRoot, 'write-project', 'config'), { recursive: true });
@@ -548,7 +553,7 @@ describe('local project creation', () => {
     expect(submitted.record.feedbackHistory?.['/answer'].feedback[0]).toMatchObject({ value: 'good', username: 'updated@example.com' });
     const stored = JSON.parse(await fs.readFile(path.join(tempRoot, 'feedback-project', 'record-1.json'), 'utf8')) as Record<string, unknown>;
     expect(stored.answer).toBe('Updated answer');
-    expect(stored.answer_feedback).toMatchObject([{ original: 'Original' }, { edit: 'Updated answer', username: 'updated@example.com' }]);
+    expect(stored._feedback_answer).toMatchObject([{ original: 'Original' }, { edit: 'Updated answer', username: 'updated@example.com' }]);
 
     const updated = await tempAdapter.updateRecord('feedback-project', 'record-1', { answer: 'Core update' });
     expect(updated.data).toEqual({ answer: 'Core update' });

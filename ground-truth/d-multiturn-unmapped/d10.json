@@ -52,5 +52,9 @@
     "answer_path": "/turns/*/answer",
     "evidence_key": "url"
   },
-  "tags": ["turns:multi", "mapped:false", "state:new-turn"]
+  "tags": [
+    "turns:multi",
+    "mapped:false",
+    "state:new-turn"
+  ]
 }

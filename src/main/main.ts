@@ -173,9 +173,11 @@ const registerIpc = (): void => {
   ipcMain.handle('projects:create', async (_event, projectId: unknown) =>
     assertProjectSummary(await requireStorage().createProject(assertNewProjectId(projectId)))
   );
-  ipcMain.handle('projects:open', async (_event, projectId: unknown) =>
-    assertOpenProjectResult(await requireStorage().openProject(assertProjectId(projectId)))
-  );
+  ipcMain.handle('projects:open', async (_event, projectId: unknown) => {
+    const validProjectId = assertProjectId(projectId);
+    await drafts.releaseForProjectChange(validProjectId);
+    return assertOpenProjectResult(await requireStorage().openProject(validProjectId));
+  });
   ipcMain.handle('records:createDraft', async (_event, projectId: unknown, recordId: unknown) =>
     assertRecordDetail(await drafts.createRecord(assertProjectId(projectId), assertRecordId(recordId)))
   );
@@ -215,7 +217,8 @@ const registerIpc = (): void => {
       await drafts.submitFeedback(assertProjectId(projectId), assertRecordId(recordId), assertFeedbackSubmissionInput(input))
     )
   );
-  ipcMain.handle('app:closeWindow', () => {
+  ipcMain.handle('app:closeWindow', async () => {
+    await drafts.releaseAll();
     allowClose = true;
     mainWindow?.close();
   });
@@ -354,6 +357,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  void drafts.releaseAll();
   agent.cancelAll();
   app.quit();
 });

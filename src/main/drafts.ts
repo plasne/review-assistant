@@ -20,6 +20,7 @@ export type RecordDraftStatus = {
 export class RecordDraftStore {
   private readonly drafts = new Map<DraftKey, RecordDraft>();
   private readonly loadedRecords = new Map<DraftKey, unknown>();
+  private activeLeaseKey: DraftKey | undefined;
 
   constructor(private readonly getStorage: () => StorageAdapter) {}
 
@@ -47,7 +48,9 @@ export class RecordDraftStore {
       getProjectConfig: (projectId) => storage.getProjectConfig(projectId),
       getProjectMcpConfig: (projectId) => storage.getProjectMcpConfig(projectId),
       getTagDefinitions: (projectId) => storage.getTagDefinitions(projectId),
-      reconcileRecordTags: (projectId, data) => storage.reconcileRecordTags(projectId, data)
+      reconcileRecordTags: (projectId, data) => storage.reconcileRecordTags(projectId, data),
+      obtainExclusiveLease: (projectId, recordId) => storage.obtainExclusiveLease(projectId, recordId),
+      releaseExclusiveLease: (projectId, recordId) => storage.releaseExclusiveLease(projectId, recordId)
     };
   }
 
@@ -57,13 +60,19 @@ export class RecordDraftStore {
 
   async getRecord(projectId: string, recordId: string): Promise<RecordDetail> {
     const key = this.key(projectId, recordId);
+    await this.activateLease(projectId, recordId);
     const draft = this.drafts.get(key);
     if (draft) {
       return this.renderRecordData(projectId, recordId, cloneJson(draft.data));
     }
-    const data = cloneJson(await this.requireDraftCapableStorage().readRecordData(projectId, recordId));
-    this.loadedRecords.set(key, cloneJson(data));
-    return this.renderRecordData(projectId, recordId, data);
+    try {
+      const data = cloneJson(await this.requireDraftCapableStorage().readRecordData(projectId, recordId));
+      this.loadedRecords.set(key, cloneJson(data));
+      return this.renderRecordData(projectId, recordId, data);
+    } catch (error) {
+      await this.releaseLease(projectId, recordId);
+      throw error;
+    }
   }
 
   async createRecord(projectId: string, recordId: string): Promise<RecordDetail> {
@@ -159,6 +168,26 @@ export class RecordDraftStore {
     return this.getStatus(projectId, recordId);
   }
 
+  async releaseForProjectChange(projectId: string): Promise<void> {
+    const active = this.activeLeaseKey;
+    if (!active) {
+      return;
+    }
+    const [activeProjectId, activeRecordId] = this.parseKey(active);
+    if (activeProjectId !== assertProjectId(projectId)) {
+      await this.releaseLease(activeProjectId, activeRecordId);
+    }
+  }
+
+  async releaseAll(): Promise<void> {
+    const active = this.activeLeaseKey;
+    if (!active) {
+      return;
+    }
+    const [projectId, recordId] = this.parseKey(active);
+    await this.releaseLease(projectId, recordId);
+  }
+
   private key(projectId: string, recordId: string): DraftKey {
     return `${assertProjectId(projectId)}\u0000${assertRecordId(recordId)}`;
   }
@@ -180,10 +209,47 @@ export class RecordDraftStore {
       data: cloneJson(data)
     });
   }
+
+  private async activateLease(projectId: string, recordId: string): Promise<void> {
+    const key = this.key(projectId, recordId);
+    if (this.activeLeaseKey === key) {
+      return;
+    }
+    const previous = this.activeLeaseKey;
+    if (previous) {
+      const [previousProjectId, previousRecordId] = this.parseKey(previous);
+      await this.releaseLease(previousProjectId, previousRecordId);
+    }
+    const lease = await this.getStorage().obtainExclusiveLease(projectId, recordId);
+    if (lease.status === 'FAILURE') {
+      throw new Error(`Record is already open in another session: ${recordId}`);
+    }
+    if (lease.status === 'SUCCESS') {
+      this.activeLeaseKey = key;
+    }
+  }
+
+  private async releaseLease(projectId: string, recordId: string): Promise<void> {
+    const key = this.key(projectId, recordId);
+    this.loadedRecords.delete(key);
+    if (this.activeLeaseKey !== key) {
+      return;
+    }
+    this.activeLeaseKey = undefined;
+    await this.getStorage().releaseExclusiveLease(projectId, recordId);
+  }
+
+  private parseKey(key: DraftKey): [string, string] {
+    const [projectId, recordId] = key.split('\u0000');
+    if (!projectId || !recordId) {
+      throw new Error('Invalid record draft key.');
+    }
+    return [projectId, recordId];
+  }
 }
 
 const feedbackProperties = (record: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(record).filter(([key]) => key.endsWith('_feedback') || key.endsWith('_edits') || key.endsWith('_comments')));
+  Object.fromEntries(Object.entries(record).filter(([key]) => key.startsWith('_feedback')));
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 

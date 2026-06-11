@@ -42,6 +42,42 @@ describe('azure blob storage adapter', () => {
     expect(blobs.has('new-project/config/schema.json')).toBe(true);
     expect(blobs.has('new-project/config/config.json')).toBe(true);
   });
+
+  it('explains Azure authorization failures when listing projects is blocked', async () => {
+    const adapter = new AzureBlobStorageAdapter(
+      {
+        backendKind: 'azure-default-credential',
+        appEnvPath: '/unused/.env',
+        values: {
+          AZURE_STORAGE_ACCOUNT_NAME: 'reviewacct',
+          AZURE_STORAGE_CONTAINER: 'projects'
+        }
+      },
+      createBlockedBlobServiceClient()
+    );
+
+    await expect(adapter.listProjects()).rejects.toThrow(
+      'Azure Blob Storage failed to list projects for account "reviewacct", container "projects": HTTP 403 (AuthorizationFailure). The storage account may be blocking this machine with firewall or virtual network rules, or the signed-in identity may be missing Blob Data permissions.'
+    );
+  });
+
+  it('explains Azure authorization failures when bootstrap app config is blocked', async () => {
+    const adapter = new AzureBlobStorageAdapter(
+      {
+        backendKind: 'azure-default-credential',
+        appEnvPath: '/unused/.env',
+        values: {
+          AZURE_STORAGE_ACCOUNT_NAME: 'reviewacct',
+          AZURE_STORAGE_CONTAINER: 'projects'
+        }
+      },
+      createBlockedBlobServiceClient()
+    );
+
+    await expect(adapter.getAppConfig()).rejects.toThrow(
+      'Azure Blob Storage failed to load app config for account "reviewacct", container "projects": HTTP 403 (AuthorizationFailure). The storage account may be blocking this machine with firewall or virtual network rules, or the signed-in identity may be missing Blob Data permissions.'
+    );
+  });
 });
 
 const createFakeBlobServiceClient = (blobs: Map<string, string>): BlobServiceClient =>
@@ -69,3 +105,25 @@ const createFakeBlobClient = (blobs: Map<string, string>, name: string) => ({
     readableStreamBody: Readable.from([blobs.get(name) ?? ''])
   })
 });
+
+const createBlockedBlobServiceClient = (): BlobServiceClient =>
+  ({
+    getContainerClient: () => ({
+      getBlobClient: () => createBlockedBlobClient(),
+      listBlobsFlat: async function* () {
+        throw createAuthorizationFailure();
+      }
+    })
+  }) as unknown as BlobServiceClient;
+
+const createBlockedBlobClient = () => ({
+  exists: async () => {
+    throw createAuthorizationFailure();
+  }
+});
+
+const createAuthorizationFailure = (): Error & { statusCode: number; code: string } =>
+  Object.assign(new Error(''), {
+    statusCode: 403,
+    code: 'AuthorizationFailure'
+  });

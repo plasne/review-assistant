@@ -37,7 +37,12 @@
                   "type": "number"
                 }
               },
-              "required": ["id", "title", "url", "excerpt"],
+              "required": [
+                "id",
+                "title",
+                "url",
+                "excerpt"
+              ],
               "additionalProperties": false
             }
           },
@@ -46,11 +51,17 @@
             "description": "The answer for this turn."
           }
         },
-        "required": ["question", "evidence", "answer"],
+        "required": [
+          "question",
+          "evidence",
+          "answer"
+        ],
         "additionalProperties": false
       }
     }
   },
-  "required": ["turns"],
+  "required": [
+    "turns"
+  ],
   "additionalProperties": false
 }

@@ -23,5 +23,9 @@
     "answer_path": "/answer",
     "evidence_key": "url"
   },
-  "tags": ["turns:single", "mapped:true", "state:no-results"]
+  "tags": [
+    "turns:single",
+    "mapped:true",
+    "state:no-results"
+  ]
 }
