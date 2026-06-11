@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 
 const repoRoot = path.resolve(import.meta.dirname, '..');
-const azuriteBin = path.join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'azurite-blob.cmd' : 'azurite-blob');
+const azuriteBin = path.join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'azurite.cmd' : 'azurite');
 const workspace = await mkdtemp(path.join(os.tmpdir(), 'review-assistant-azurite-'));
 
 const azurite = spawn(azuriteBin, ['--silent', '--skipApiVersionCheck', '--location', workspace], {
@@ -23,6 +23,7 @@ azurite.stderr.on('data', (chunk) => {
 
 try {
   await waitForPort(10000, '127.0.0.1', 15_000);
+  await waitForPort(10001, '127.0.0.1', 15_000);
   const result = await runCommand('npx', ['vitest', 'run', '--config', 'vitest.config.ts', 'tests/integration'], repoRoot);
   process.exitCode = result;
 } catch (error) {

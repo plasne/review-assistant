@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Api, Theme, ThemeState } from '../../src/shared/types';
+import type { Api, QueueInfo, RecordSummary, Theme, ThemeState } from '../../src/shared/types';
 
 const electronMock = vi.hoisted(() => ({
   exposeInMainWorld: vi.fn(),
@@ -98,7 +98,7 @@ const loadPreloadApi = async (): Promise<Api> => {
   return electronMock.exposeInMainWorld.mock.calls.at(-1)?.[1] as Api;
 };
 
-describe('preload theme IPC bridge', () => {
+describe('preload IPC bridge', () => {
   beforeEach(() => {
     electronMock.exposeInMainWorld.mockClear();
     electronMock.invoke.mockReset();
@@ -142,5 +142,65 @@ describe('preload theme IPC bridge', () => {
     const api = await loadPreloadApi();
 
     await expect(api.getThemeState()).rejects.toThrow('Active theme identifier must reference an available theme.');
+  });
+
+  it('routes queue API methods and project tags through validated invoke channels', async () => {
+    const queues: QueueInfo[] = [{ name: 'review-work', messageCount: 2 }];
+    const searchResults: RecordSummary[] = [{ id: 'record-1', displayName: 'record-1' }];
+    electronMock.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'projects:listTags') {
+        return ['needs-review', 'priority'];
+      }
+      if (channel === 'queue:listQueues') {
+        return queues;
+      }
+      if (channel === 'queue:createQueue') {
+        return { name: 'new-work', messageCount: 0 };
+      }
+      if (channel === 'queue:searchRecords') {
+        return searchResults;
+      }
+      if (channel === 'queue:dequeueMessage') {
+        return { message: { project: 'sample-project', filename: 'record-1', instructions: 'Check evidence.' }, popReceipt: 'opaque-receipt' };
+      }
+      return undefined;
+    });
+    const api = await loadPreloadApi();
+
+    await expect(api.listProjectTags('sample-project')).resolves.toEqual(['needs-review', 'priority']);
+    await expect(api.queue.listQueues()).resolves.toEqual(queues);
+    await expect(api.queue.createQueue('new-work')).resolves.toEqual({ name: 'new-work', messageCount: 0 });
+    await expect(api.queue.searchRecords('sample-project', { included: ['needs-review'], excluded: ['approved'] })).resolves.toEqual(searchResults);
+    await expect(api.queue.enqueueMessage('review-work', { project: 'sample-project', filename: 'record-1', instructions: 'Check evidence.' })).resolves.toBeUndefined();
+    await expect(api.queue.dequeueMessage('review-work')).resolves.toEqual({
+      message: { project: 'sample-project', filename: 'record-1', instructions: 'Check evidence.' },
+      popReceipt: 'opaque-receipt'
+    });
+    await expect(api.queue.clearQueue('review-work')).resolves.toBeUndefined();
+    await expect(api.queue.deleteQueue('review-work')).resolves.toBeUndefined();
+
+    expect(electronMock.invoke).toHaveBeenNthCalledWith(1, 'projects:listTags', 'sample-project');
+    expect(electronMock.invoke).toHaveBeenNthCalledWith(2, 'queue:listQueues');
+    expect(electronMock.invoke).toHaveBeenNthCalledWith(3, 'queue:createQueue', 'new-work');
+    expect(electronMock.invoke).toHaveBeenNthCalledWith(4, 'queue:searchRecords', 'sample-project', { included: ['needs-review'], excluded: ['approved'] });
+    expect(electronMock.invoke).toHaveBeenNthCalledWith(5, 'queue:enqueueMessage', 'review-work', {
+      project: 'sample-project',
+      filename: 'record-1',
+      instructions: 'Check evidence.'
+    });
+    expect(electronMock.invoke).toHaveBeenNthCalledWith(6, 'queue:dequeueMessage', 'review-work');
+    expect(electronMock.invoke).toHaveBeenNthCalledWith(7, 'queue:clearQueue', 'review-work');
+    expect(electronMock.invoke).toHaveBeenNthCalledWith(8, 'queue:deleteQueue', 'review-work');
+  });
+
+  it('rejects malformed queue payloads before invoking main-owned queue operations', async () => {
+    electronMock.invoke.mockResolvedValue(undefined);
+    const api = await loadPreloadApi();
+
+    expect(() => api.queue.createQueue('Bad Queue')).toThrow('Queue name must contain only lowercase letters');
+    await expect(api.queue.enqueueMessage('review-work', { project: 'sample-project', filename: '../record' })).rejects.toThrow('Invalid record identifier');
+    await expect(api.queue.clearQueue('Bad Queue')).rejects.toThrow('Queue name must contain only lowercase letters');
+
+    expect(electronMock.invoke).not.toHaveBeenCalled();
   });
 });

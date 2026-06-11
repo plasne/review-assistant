@@ -21,7 +21,11 @@ describe('record draft store', () => {
 
     await drafts.saveDraft('sample-project', 'record-1');
 
-    expect(stored).toEqual({ answer: 'Draft', evidence: [{ id: 'doc-1' }, { id: 'doc-2' }] });
+    expect(stored).toMatchObject({
+      answer: 'Draft',
+      evidence: [{ id: 'doc-1' }, { id: 'doc-2' }],
+      _history: [expect.objectContaining({ username: 'sme@example.com', action: 'saved' })]
+    });
     expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: false });
   });
 
@@ -65,7 +69,7 @@ describe('record draft store', () => {
 
     await drafts.saveDraft('sample-project', 'new-record');
 
-    expect(stored).toEqual({});
+    expect(stored).toMatchObject({ _history: [expect.objectContaining({ username: 'sme@example.com', action: 'saved' })] });
     expect(drafts.getStatus('sample-project', 'new-record')).toEqual({ hasUnsavedChanges: false });
   });
 
@@ -83,7 +87,10 @@ describe('record draft store', () => {
     await drafts.updateRecord('sample-project', 'record-1', { tags: ['manual'] });
     const result = await drafts.saveDraft('sample-project', 'record-1');
 
-    expect(stored).toEqual({ tags: ['manual', 'computed'] });
+    expect(stored).toMatchObject({
+      tags: ['manual', 'computed'],
+      _history: [expect.objectContaining({ username: 'sme@example.com', action: 'saved' })]
+    });
     expect(result.record.data).toEqual({ tags: ['manual', 'computed'] });
     expect(result.tagPluginWarning).toContain('Save succeeded, but 1 tag plugin failed.');
   });
@@ -93,6 +100,7 @@ describe('record draft store', () => {
     const storage = createStorage(() => stored, (next) => {
       stored = next;
     });
+
     storage.reconcileRecordTags = async (_projectId, data) => {
       (data as { tags: string[] }).tags.push('computed');
       return { data, pluginErrors: ['broken: boom'] };
@@ -105,6 +113,26 @@ describe('record draft store', () => {
     expect(result.record.data).toEqual({ tags: ['manual', 'computed'] });
     expect(result.tagPluginWarning).toContain('Tags computed, but 1 tag plugin failed.');
     expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: true });
+  });
+
+  it('appends reviewed history for queue-sourced saves without rendering history as record data', async () => {
+    let stored: unknown = { answer: 'Original', _history: [{ username: 'first@example.com', timestamp: '2026-06-01T00:00:00.000Z', action: 'saved' }] };
+    const storage = createStorage(() => stored, (next) => {
+      stored = next;
+    });
+    const drafts = new RecordDraftStore(() => storage);
+
+    await drafts.updateRecord('sample-project', 'record-1', { answer: 'Reviewed' });
+    const result = await drafts.saveDraft('sample-project', 'record-1', 'reviewed');
+
+    expect(stored).toMatchObject({
+      answer: 'Reviewed',
+      _history: [
+        { username: 'first@example.com', timestamp: '2026-06-01T00:00:00.000Z', action: 'saved' },
+        expect.objectContaining({ username: 'sme@example.com', action: 'reviewed' })
+      ]
+    });
+    expect(result.record.data).toEqual({ answer: 'Reviewed' });
   });
 
   it('rejects saving a draft when the persisted record changed after staging', async () => {
@@ -270,17 +298,31 @@ const createStorage = (read: () => unknown, write: (value: unknown) => void): St
   getTagDefinitions: async () => [],
   reconcileRecordTags: async (_projectId, data) => ({ data, pluginErrors: [] }),
   obtainExclusiveLease: async () => ({ status: 'NOT_SUPPORTED' }),
-  releaseExclusiveLease: async () => undefined
+  releaseExclusiveLease: async () => undefined,
+  listQueues: async () => [],
+  createQueue: async (queueName) => ({ name: queueName, messageCount: 0 }),
+  deleteQueue: async () => undefined,
+  clearQueue: async () => undefined,
+  enqueueMessage: async () => undefined,
+  dequeueMessage: async () => null,
+  completeMessage: async () => undefined,
+  searchRecords: async () => []
 });
 
-const createRecordDetail = (projectId: string, recordId: string, data: unknown) => ({
-  projectId,
-  recordId,
-  displayName: recordId,
-  data: stripFeedbackProperties(clone(data)),
-  schema: {},
-  validationIssues: [],
-  renderTree: { kind: 'object' as const, label: 'record', children: [], validationIssues: [] }
-});
+const createRecordDetail = (projectId: string, recordId: string, data: unknown) => {
+  const stripped = stripFeedbackProperties(clone(data));
+  if (stripped && typeof stripped === 'object' && !Array.isArray(stripped)) {
+    delete (stripped as Record<string, unknown>)._history;
+  }
+  return {
+    projectId,
+    recordId,
+    displayName: recordId,
+    data: stripped,
+    schema: {},
+    validationIssues: [],
+    renderTree: { kind: 'object' as const, label: 'record', children: [], validationIssues: [] }
+  };
+};
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;

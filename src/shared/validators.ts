@@ -14,17 +14,22 @@ import type {
   ChatStreamComplete,
   ChatStreamError,
   ChatStreamStartResult,
+  DequeueResult,
   FeedbackConfig,
   FeedbackSubmissionInput,
   FeedbackSubmissionResult,
   GitHubLoginCompletion,
   OpenProjectResult,
   ProjectUser,
+  QueueInfo,
+  QueueMessage,
   ProjectSummary,
   RecordDraftStatus,
   RecordDetail,
+  RecordSaveOptions,
   RecordSaveResult,
   RecordSummary,
+  TagFilter,
   TagDefinition,
   Theme,
   ThemeState,
@@ -91,6 +96,13 @@ export const assertThemeId = (value: unknown): string => {
 export const assertRecordId = (value: unknown): string => {
   if (!isString(value) || value.trim() === '' || value.includes('/') || value.includes('\\') || value.includes('..')) {
     throw new ValidationError('Invalid record identifier.');
+  }
+  return value;
+};
+
+export const assertQueueName = (value: unknown): string => {
+  if (!isString(value) || !/^[a-z0-9-]{1,63}$/.test(value)) {
+    throw new ValidationError('Queue name must contain only lowercase letters, numbers, and hyphens (1-63 chars).');
   }
   return value;
 };
@@ -215,6 +227,91 @@ const assertRecordSummary = (value: unknown): RecordSummary => {
     throw new ValidationError('Invalid record response.');
   }
   return { id: value.id, displayName: value.displayName };
+};
+
+export const assertRecordSummaries = (value: unknown): RecordSummary[] => {
+  if (!Array.isArray(value)) {
+    throw new ValidationError('Invalid records response.');
+  }
+  return value.map(assertRecordSummary);
+};
+
+const assertQueueInfo = (value: unknown): QueueInfo => {
+  if (!isRecord(value) || !isString(value.name) || typeof value.messageCount !== 'number' || !Number.isFinite(value.messageCount) || value.messageCount < 0) {
+    throw new ValidationError('Invalid queue response.');
+  }
+  return { name: value.name, messageCount: value.messageCount };
+};
+
+export const assertQueueInfos = (value: unknown): QueueInfo[] => {
+  if (!Array.isArray(value)) {
+    throw new ValidationError('Invalid queues response.');
+  }
+  return value.map(assertQueueInfo);
+};
+
+export const assertQueueMessage = (value: unknown): QueueMessage => {
+  if (!isRecord(value)) {
+    throw new ValidationError('Invalid queue message.');
+  }
+  const project = assertProjectId(value.project);
+  const filename = assertRecordId(value.filename);
+  if (value.instructions !== undefined && !isString(value.instructions)) {
+    throw new ValidationError('Queue instructions must be text.');
+  }
+  return {
+    project,
+    filename,
+    ...(value.instructions === undefined ? {} : { instructions: value.instructions })
+  };
+};
+
+export const assertDequeueResult = (value: unknown): DequeueResult | null => {
+  if (value === null) {
+    return null;
+  }
+  if (!isRecord(value) || !isString(value.popReceipt)) {
+    throw new ValidationError('Invalid dequeue response.');
+  }
+  return { message: assertQueueMessage(value.message), popReceipt: value.popReceipt };
+};
+
+export const assertTagNameArray = (value: unknown, message = 'Invalid tag names response.'): string[] => {
+  if (!Array.isArray(value) || !value.every(isString)) {
+    throw new ValidationError(message);
+  }
+  return [...new Set(value.map((item) => item.trim()).filter(Boolean))];
+};
+
+export const assertTagFilter = (value: unknown): TagFilter => {
+  if (!isRecord(value)) {
+    throw new ValidationError('Invalid tag filter.');
+  }
+  return {
+    included: assertTagNameArray(value.included, 'Included tags must be strings.'),
+    excluded: assertTagNameArray(value.excluded, 'Excluded tags must be strings.')
+  };
+};
+
+export const assertRecordSaveOptions = (value: unknown): RecordSaveOptions | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new ValidationError('Invalid record save options.');
+  }
+  if (value.queue === undefined) {
+    return {};
+  }
+  if (!isRecord(value.queue) || !isString(value.queue.popReceipt)) {
+    throw new ValidationError('Invalid queue completion options.');
+  }
+  return {
+    queue: {
+      queueName: assertQueueName(value.queue.queueName),
+      popReceipt: value.queue.popReceipt
+    }
+  };
 };
 
 const assertTagDefinition = (value: unknown): TagDefinition => {

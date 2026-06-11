@@ -11,12 +11,19 @@ import {
   assertContinueWithGitHubResult,
   assertGitHubLoginCompletion,
   assertChatMessage,
+  assertDequeueResult,
   assertNewProjectId,
   assertFeedbackConfig,
   assertOpenProjectResult,
   assertProjectId,
+  assertQueueInfos,
+  assertQueueMessage,
+  assertQueueName,
   assertRecordDetail,
   assertRecordId,
+  assertRecordSaveOptions,
+  assertTagFilter,
+  assertTagNameArray,
   assertTheme,
   assertThemeId,
   assertThemeState,
@@ -39,6 +46,38 @@ describe('IPC boundary validators', () => {
     expect(assertChatMessage('review this')).toBe('review this');
     expect(() => assertChatMessage('')).toThrow('Chat message must be non-empty');
     expect(() => assertChatMessage('x'.repeat(20001))).toThrow('Chat message must be non-empty');
+  });
+
+  it('validates queue contracts at shared process boundaries', () => {
+    expect(assertQueueName('review-work-2026')).toBe('review-work-2026');
+    expect(assertQueueInfos([{ name: 'review-work', messageCount: 3 }])).toEqual([{ name: 'review-work', messageCount: 3 }]);
+    expect(assertQueueMessage({ project: 'sample-project', filename: 'record-1', instructions: 'Check evidence.' })).toEqual({
+      project: 'sample-project',
+      filename: 'record-1',
+      instructions: 'Check evidence.'
+    });
+    expect(assertDequeueResult({ message: { project: 'sample-project', filename: 'record-1' }, popReceipt: 'opaque-receipt' })).toEqual({
+      message: { project: 'sample-project', filename: 'record-1' },
+      popReceipt: 'opaque-receipt'
+    });
+    expect(assertDequeueResult(null)).toBeNull();
+    expect(assertTagNameArray(['needs-review', 'needs-review', '  ', 'approved'])).toEqual(['needs-review', 'approved']);
+    expect(assertTagFilter({ included: ['needs-review'], excluded: ['approved'] })).toEqual({
+      included: ['needs-review'],
+      excluded: ['approved']
+    });
+    expect(assertRecordSaveOptions({ queue: { queueName: 'review-work', popReceipt: 'opaque-receipt' } })).toEqual({
+      queue: { queueName: 'review-work', popReceipt: 'opaque-receipt' }
+    });
+    expect(assertRecordSaveOptions(undefined)).toBeUndefined();
+
+    expect(() => assertQueueName('Bad Queue')).toThrow('Queue name must contain only lowercase letters');
+    expect(() => assertQueueInfos([{ name: 'review-work', messageCount: -1 }])).toThrow(ValidationError);
+    expect(() => assertQueueMessage({ project: 'sample-project', filename: '../record' })).toThrow(ValidationError);
+    expect(() => assertQueueMessage({ project: 'sample-project', filename: 'record-1', instructions: 42 })).toThrow('Queue instructions must be text');
+    expect(() => assertDequeueResult({ message: { project: 'sample-project', filename: 'record-1' } })).toThrow('Invalid dequeue response');
+    expect(() => assertTagFilter({ included: ['needs-review'], excluded: [123] })).toThrow('Excluded tags must be strings');
+    expect(() => assertRecordSaveOptions({ queue: { queueName: 'review-work' } })).toThrow('Invalid queue completion options');
   });
 
   it('validates bounded user and assistant chat history for provider context', () => {

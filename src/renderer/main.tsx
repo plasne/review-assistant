@@ -16,8 +16,11 @@ import type {
   FeedbackSubmissionInput,
   OpenProjectResult,
   ProjectUser,
+  QueueInfo,
   RecordDetail,
+  RecordSummary,
   RenderNode,
+  TagFilter,
   TagDefinition,
   Theme,
   ThemeTokens,
@@ -50,12 +53,25 @@ type PendingNavigation =
   | { kind: 'refreshRecords' }
   | { kind: 'close' };
 
+type QueueTagState = 'include' | 'exclude' | 'ignore';
+type ActiveQueueWork = {
+  queueName: string;
+  popReceipt: string;
+  projectId: string;
+  recordId: string;
+  instructions?: string;
+  bannerVisible: boolean;
+};
+
 const MIN_COLUMN_PERCENT = 16;
 const NEW_RECORD_ID_BASE = 'new-record';
 const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_TAGS_PER_RECORD = 100;
 const MAX_TAG_LENGTH = 100;
 const NOT_SET_LABEL = '(not set)';
+
+const noVisibleQueueMessagesMessage = (queueName: string): string =>
+  `No visible messages are available in '${queueName}'. The queue may be empty or its messages may still be invisible.`;
 
 type ThemeDraft = {
   id: string;
@@ -138,6 +154,15 @@ const nextNewRecordId = (existingIds: string[]): string => {
   }
 };
 
+const shuffleRecords = (records: RecordSummary[]): RecordSummary[] => {
+  const shuffled = [...records];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+};
+
 const normalizeRecordFilename = (value: string): { ok: true; recordId: string } | { ok: false; message: string } => {
   const trimmed = value.trim();
   const withoutExtension = trimmed.toLowerCase().endsWith('.json') ? trimmed.slice(0, -'.json'.length) : trimmed;
@@ -205,6 +230,21 @@ const App = () => {
   const [isCreateRecordDialogOpen, setCreateRecordDialogOpen] = useState(false);
   const [isFeedbackConfigOpen, setFeedbackConfigOpen] = useState(false);
   const [isThemeManagerOpen, setThemeManagerOpen] = useState(false);
+  const [isQueueManagerOpen, setQueueManagerOpen] = useState(false);
+  const [queues, setQueues] = useState<QueueInfo[]>([]);
+  const [selectedQueueName, setSelectedQueueName] = useState('');
+  const [queueError, setQueueError] = useState<string | undefined>();
+  const [queueSuccess, setQueueSuccess] = useState<string | undefined>();
+  const [newQueueName, setNewQueueName] = useState('');
+  const [queueProjectId, setQueueProjectId] = useState('');
+  const [queueTagNames, setQueueTagNames] = useState<string[]>([]);
+  const [isQueueProjectLoading, setQueueProjectLoading] = useState(false);
+  const [queueTagStates, setQueueTagStates] = useState<Record<string, QueueTagState>>({});
+  const [queueSearchResults, setQueueSearchResults] = useState<RecordSummary[]>([]);
+  const [sampleSize, setSampleSize] = useState(10);
+  const [queueInstructions, setQueueInstructions] = useState('');
+  const [isQueueLoading, setQueueLoading] = useState(false);
+  const [activeQueueWork, setActiveQueueWork] = useState<ActiveQueueWork | undefined>();
   const [themeDraft, setThemeDraft] = useState<ThemeDraft | undefined>();
   const [themeError, setThemeError] = useState<string | undefined>();
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -223,6 +263,7 @@ const App = () => {
   const inlineEditVersionRef = useRef(0);
   const inlineEditQueueRef = useRef<Promise<void>>(Promise.resolve());
   const inlineDraftDataRef = useRef<unknown>(undefined);
+  const recordButtonRefs = useRef(new Map<string, HTMLButtonElement>());
   const selectedProjectIdRef = useRef('');
   const selectedRecordIdRef = useRef<string | undefined>(undefined);
   const hasUnsavedChangesRef = useRef(false);
@@ -231,11 +272,21 @@ const App = () => {
   const draftRecordIdsRef = useRef<Set<string>>(new Set());
   const chatStateRef = useRef<ChatState>('ready');
   const activeLoginIdRef = useRef<string | undefined>(undefined);
+  const activeQueueWorkRef = useRef<ActiveQueueWork | undefined>(undefined);
+  const queueProjectRequestRef = useRef(0);
   const loginDialogTitleId = useId();
 
   const applyThemeStateUpdate = (nextThemeState: ThemeState): void => {
     applyThemeState(nextThemeState);
     setThemeState(nextThemeState);
+  };
+
+  const openProjectConfiguration = () => {
+    if (!selectedProjectId || !project) {
+      return;
+    }
+    setDraftFeedbackConfig(feedbackConfig ?? { properties: {} });
+    setFeedbackConfigOpen(true);
   };
 
   useEffect(() => {
@@ -263,11 +314,22 @@ const App = () => {
     recordRef.current = record;
   }, [record]);
 
+  useEffect(() => {
+    activeQueueWorkRef.current = activeQueueWork;
+  }, [activeQueueWork]);
+
   const selectRecordDetail = (nextRecord: RecordDetail | undefined) => {
     inlineEditVersionRef.current += 1;
     inlineDraftDataRef.current = nextRecord?.data;
     setRecord(nextRecord);
   };
+
+  useEffect(() => {
+    if (!record?.recordId) {
+      return;
+    }
+    recordButtonRefs.current.get(record.recordId)?.scrollIntoView({ block: 'nearest' });
+  }, [record?.recordId]);
 
   useEffect(() => {
     const messagesElement = messagesRef.current;
@@ -284,6 +346,9 @@ const App = () => {
           applyThemeStateUpdate(result.themeState);
         }
         setBootstrap(result);
+        if (result.backendKind && result.backendKind !== 'local') {
+          void refreshQueues();
+        }
         setStatus(result.configError ? 'error' : 'idle');
         setError(result.configError);
       })
@@ -427,6 +492,7 @@ const App = () => {
     setSelectedProjectId(projectId);
     setProject(undefined);
     selectRecordDetail(undefined);
+    setActiveQueueWork(undefined);
     updateUnsavedChanges(false);
     updateFeedbackDrafts({});
     draftRecordIdsRef.current = new Set();
@@ -458,6 +524,7 @@ const App = () => {
     setStatus('loading');
     setError(undefined);
     setSaveWarning(undefined);
+    setActiveQueueWork(undefined);
     try {
       selectRecordDetail(await window.reviewAssistant.getRecord(selectedProjectId, recordId));
       updateFeedbackDrafts({});
@@ -702,10 +769,20 @@ const App = () => {
     setError(undefined);
     try {
       await submitPendingFeedbackDrafts();
-      const result = await window.reviewAssistant.saveRecordChanges(selectedProjectId, record.recordId);
+      const queueWork = activeQueueWorkRef.current;
+      const result =
+        queueWork && queueWork.projectId === selectedProjectId && queueWork.recordId === record.recordId
+          ? await window.reviewAssistant.saveRecordChanges(selectedProjectId, record.recordId, {
+              queue: { queueName: queueWork.queueName, popReceipt: queueWork.popReceipt }
+            })
+          : await window.reviewAssistant.saveRecordChanges(selectedProjectId, record.recordId);
       selectRecordDetail(result.record);
       setSaveWarning(result.tagPluginWarning);
       draftRecordIdsRef.current.delete(record.recordId);
+      if (queueWork?.projectId === selectedProjectId && queueWork.recordId === record.recordId) {
+        setActiveQueueWork(undefined);
+        void refreshQueues();
+      }
       updateFeedbackDrafts({});
       updateUnsavedChanges(false);
       await refreshProjectUser(selectedProjectId);
@@ -716,6 +793,231 @@ const App = () => {
       setError(caught instanceof Error ? caught.message : String(caught));
       setSaveWarning(undefined);
       return false;
+    }
+  };
+
+  const isAzureBackend = bootstrap?.backendKind === 'azure-connection-string' || bootstrap?.backendKind === 'azure-default-credential';
+
+  const refreshQueues = async () => {
+    setQueueError(undefined);
+    try {
+      const result = await window.reviewAssistant.queue.listQueues();
+      setQueues(result);
+      setSelectedQueueName((current) => (current && result.some((queue) => queue.name === current) ? current : (result[0]?.name ?? '')));
+    } catch (caught) {
+      setQueueError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const createQueue = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setQueueError(undefined);
+    setQueueSuccess(undefined);
+    const queueName = newQueueName.trim();
+    if (!/^[a-z0-9-]{1,63}$/.test(queueName)) {
+      setQueueError('Queue name must contain only lowercase letters, numbers, and hyphens (1-63 chars)');
+      return;
+    }
+    setQueueLoading(true);
+    try {
+      const created = await window.reviewAssistant.queue.createQueue(queueName);
+      setQueues((current) => [...current.filter((queue) => queue.name !== created.name), created].sort((left, right) => left.name.localeCompare(right.name)));
+      setSelectedQueueName(created.name);
+      setNewQueueName('');
+      setQueueSuccess(`Created queue '${created.name}'.`);
+    } catch (caught) {
+      setQueueError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const clearQueue = async () => {
+    if (!selectedQueueName || !window.confirm(`Clear all messages from '${selectedQueueName}'?`)) {
+      return;
+    }
+    setQueueLoading(true);
+    setQueueError(undefined);
+    try {
+      await window.reviewAssistant.queue.clearQueue(selectedQueueName);
+      await refreshQueues();
+      setQueueSuccess(`Cleared queue '${selectedQueueName}'.`);
+    } catch (caught) {
+      setQueueError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const deleteQueue = async () => {
+    if (!selectedQueueName || !window.confirm(`Delete queue '${selectedQueueName}'?`)) {
+      return;
+    }
+    setQueueLoading(true);
+    setQueueError(undefined);
+    try {
+      await window.reviewAssistant.queue.deleteQueue(selectedQueueName);
+      await refreshQueues();
+      setQueueSuccess(`Deleted queue '${selectedQueueName}'.`);
+    } catch (caught) {
+      setQueueError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const queueTagFilter = (): TagFilter => ({
+    included: Object.entries(queueTagStates)
+      .filter(([, state]) => state === 'include')
+      .map(([tag]) => tag),
+    excluded: Object.entries(queueTagStates)
+      .filter(([, state]) => state === 'exclude')
+      .map(([tag]) => tag)
+  });
+
+  const cycleQueueTagState = (tagName: string) => {
+    setQueueTagStates((current) => {
+      const currentState = current[tagName] ?? 'ignore';
+      const nextState: QueueTagState = currentState === 'ignore' ? 'include' : currentState === 'include' ? 'exclude' : 'ignore';
+      return { ...current, [tagName]: nextState };
+    });
+  };
+
+  const selectQueueProject = async (projectId: string) => {
+    const requestId = ++queueProjectRequestRef.current;
+    setQueueProjectId(projectId);
+    setQueueTagNames([]);
+    setQueueProjectLoading(false);
+    setQueueTagStates({});
+    setQueueSearchResults([]);
+    setQueueError(undefined);
+    setQueueSuccess(undefined);
+    if (!projectId) {
+      return;
+    }
+    setQueueProjectLoading(true);
+    try {
+      const tags = await window.reviewAssistant.listProjectTags(projectId);
+      if (queueProjectRequestRef.current === requestId) {
+        setQueueTagNames(tags);
+      }
+    } catch (caught) {
+      if (queueProjectRequestRef.current === requestId) {
+        setQueueError(caught instanceof Error ? caught.message : String(caught));
+      }
+    } finally {
+      if (queueProjectRequestRef.current === requestId) {
+        setQueueProjectLoading(false);
+      }
+    }
+  };
+
+  const searchQueueRecords = async () => {
+    if (!queueProjectId) {
+      setQueueError('Select a project before searching.');
+      return;
+    }
+    setQueueLoading(true);
+    setQueueError(undefined);
+    setQueueSuccess(undefined);
+    setQueueSearchResults([]);
+    try {
+      setQueueSearchResults(await window.reviewAssistant.queue.searchRecords(queueProjectId, queueTagFilter()));
+    } catch (caught) {
+      setQueueError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const enqueueRecords = async (mode: 'all' | 'sample') => {
+    if (!selectedQueueName || !queueProjectId) {
+      setQueueError('Select a queue and project before adding work.');
+      return;
+    }
+    const selected = mode === 'sample' ? shuffleRecords(queueSearchResults).slice(0, Math.max(0, sampleSize)) : queueSearchResults;
+    setQueueLoading(true);
+    setQueueError(undefined);
+    setQueueSuccess(undefined);
+    try {
+      for (const item of selected) {
+        await window.reviewAssistant.queue.enqueueMessage(selectedQueueName, {
+          project: queueProjectId,
+          filename: item.id,
+          ...(queueInstructions ? { instructions: queueInstructions } : {})
+        });
+      }
+      await refreshQueues();
+      setQueueSuccess(`Added ${selected.length} record${selected.length === 1 ? '' : 's'} to '${selectedQueueName}'.`);
+    } catch (caught) {
+      setQueueError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const openQueueManager = () => {
+    setQueueError(undefined);
+    setQueueSuccess(undefined);
+    setQueueProjectId('');
+    setQueueTagNames([]);
+    setQueueProjectLoading(false);
+    setQueueTagStates({});
+    setQueueSearchResults([]);
+    setQueueManagerOpen(true);
+    void refreshQueues();
+  };
+
+  const getRecordFromQueue = async () => {
+    if (!selectedQueueName) {
+      setQueueError('No queues available. Create a queue to get started.');
+      return;
+    }
+    if (chatState === 'streaming' || (await refreshUnsavedStatus())) {
+      setStatus('error');
+      setError('Save or discard current changes before getting a record from a queue.');
+      return;
+    }
+    setStatus('loading');
+    setError(undefined);
+    setQueueError(undefined);
+    try {
+      const dequeued = await window.reviewAssistant.queue.dequeueMessage(selectedQueueName);
+      if (!dequeued) {
+        const message = noVisibleQueueMessagesMessage(selectedQueueName);
+        setStatus('error');
+        setError(message);
+        setQueueError(message);
+        return;
+      }
+      setSelectedProjectId(dequeued.message.project);
+      setProject(undefined);
+      selectRecordDetail(undefined);
+      updateUnsavedChanges(false);
+      updateFeedbackDrafts({});
+      draftRecordIdsRef.current = new Set();
+      const opened = await window.reviewAssistant.openProject(dequeued.message.project);
+      setProject(opened);
+      setFeedbackConfig(opened.feedbackConfig);
+      setDraftFeedbackConfig(opened.feedbackConfig);
+      await refreshProjectUser(dequeued.message.project);
+      const loadedRecord = await window.reviewAssistant.getRecord(dequeued.message.project, dequeued.message.filename);
+      selectRecordDetail(loadedRecord);
+      const queueInstructions = dequeued.message.instructions?.trim();
+      setActiveQueueWork({
+        queueName: selectedQueueName,
+        popReceipt: dequeued.popReceipt,
+        projectId: dequeued.message.project,
+        recordId: dequeued.message.filename,
+        instructions: queueInstructions,
+        bannerVisible: Boolean(queueInstructions)
+      });
+      await refreshUnsavedStatus(dequeued.message.project, dequeued.message.filename);
+      await refreshQueues();
+      setStatus('idle');
+    } catch (caught) {
+      setStatus('error');
+      setError(caught instanceof Error ? caught.message : String(caught));
     }
   };
 
@@ -1083,6 +1385,7 @@ const App = () => {
   const agentAuthRequired = agentUnavailable && agentStatus?.error?.code === 'AUTH_REQUIRED';
   const canSendChat = Boolean((chatInput.trim() || chatAttachments.length > 0) && chatState !== 'streaming' && !agentUnavailable && status !== 'loading');
   const agentErrorText = agentStatus?.error?.remediation ? `${agentStatus.error.message} ${agentStatus.error.remediation}` : agentStatus?.error?.message;
+  const selectedQueueTagCount = Object.values(queueTagStates).filter((state) => state === 'include' || state === 'exclude').length;
   const pendingAssistantMessageId =
     chatState === 'streaming' ? [...messages].reverse().find((message) => message.role === 'assistant')?.id : undefined;
   const pendingNavigationBlockedByChat = Boolean(pendingNavigation && chatState === 'streaming');
@@ -1223,20 +1526,70 @@ const App = () => {
         >
           <span aria-hidden="true">+</span>
         </button>
-        {selectedProjectId && project ? (
+        <button
+          type="button"
+          className="secondary-button header-action-button action-icon-button"
+          aria-label="Configure"
+          data-tooltip="Configure project"
+          disabled={!selectedProjectId || !project}
+          onClick={openProjectConfiguration}
+        >
+          <span aria-hidden="true">⚙</span>
+        </button>
+        <span className="header-separator" aria-hidden="true">
+          |
+        </span>
+        {isAzureBackend && queues.length > 0 ? (
+          <div className="queue-consumer" aria-label="Queue consumer">
+            <label>
+              <span className="queue-consumer-label">Queue</span>
+              <select value={selectedQueueName} onChange={(event) => setSelectedQueueName(event.target.value)}>
+                {queues.map((queue) => (
+                  <option key={queue.name} value={queue.name}>
+                    {queue.name} ({queue.messageCount})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="create-project-button header-action-button action-icon-button queue-get-button"
+              aria-label="Get Record"
+              data-tooltip="Get from queue"
+              disabled={!selectedQueueName || status === 'loading'}
+              onClick={() => void getRecordFromQueue()}
+            >
+              <QueueGetIcon />
+            </button>
+          </div>
+        ) : null}
+        {isAzureBackend ? (
           <button
             type="button"
             className="secondary-button header-action-button action-icon-button"
-            aria-label="Configure"
-            data-tooltip="Configure project"
-            disabled={!draftFeedbackConfig}
-            onClick={() => {
-              setDraftFeedbackConfig(feedbackConfig);
-              setFeedbackConfigOpen(true);
-            }}
+            aria-label="Refresh queues"
+            data-tooltip="Refresh queues"
+            disabled={status === 'loading'}
+            onClick={() => void refreshQueues()}
           >
-            <span aria-hidden="true">⚙</span>
+            <span aria-hidden="true">↻</span>
           </button>
+        ) : null}
+        {isAzureBackend ? (
+          <button
+            type="button"
+            className="secondary-button header-action-button action-icon-button"
+            aria-label="Queues"
+            data-tooltip="Manage queues"
+            onClick={openQueueManager}
+          >
+            <span aria-hidden="true">☷</span>
+          </button>
+        ) : null}
+        {isAzureBackend ? (
+          <span className="header-separator" aria-hidden="true">
+            |
+          </span>
         ) : null}
         <button
           type="button"
@@ -1258,6 +1611,184 @@ const App = () => {
           </span>
         ) : null}
       </header>
+
+      {isQueueManagerOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal queue-manager-modal" role="dialog" aria-modal="true" aria-labelledby="queue-manager-title">
+            <div className="queue-manager-header">
+              <div>
+                <h2 id="queue-manager-title">Queue Manager</h2>
+                <p className="modal-help">Create Azure queues, add filtered records, and refresh queue counts.</p>
+              </div>
+              <button type="button" className="secondary-button" onClick={() => setQueueManagerOpen(false)}>
+                Close
+              </button>
+            </div>
+            {queueError ? (
+              <p className="form-error" role="alert">
+                {queueError}
+              </p>
+            ) : null}
+            {queueSuccess ? (
+              <p className="queue-success" role="status">
+                {queueSuccess}
+              </p>
+            ) : null}
+
+            <section className="queue-manager-section queue-manager-section-compact" aria-labelledby="queue-controls-heading">
+              <div className="queue-section-heading">
+                <h3 id="queue-controls-heading">Queues</h3>
+              </div>
+              <form className="queue-controls-form" onSubmit={(event) => void createQueue(event)}>
+                <div className="queue-list">
+                  {queues.length > 0 ? (
+                    <label>
+                      <span>Selected queue</span>
+                      <select value={selectedQueueName} onChange={(event) => setSelectedQueueName(event.target.value)}>
+                        {queues.map((queue) => (
+                          <option key={queue.name} value={queue.name}>
+                            {queue.name} ({queue.messageCount} messages)
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <p className="empty">No queues created yet. Create one to get started.</p>
+                  )}
+                  <div className="queue-actions">
+                    <button
+                      type="button"
+                      className="secondary-button action-icon-button"
+                      aria-label="Refresh queues"
+                      data-tooltip="Refresh queues"
+                      disabled={isQueueLoading}
+                      onClick={() => void refreshQueues()}
+                    >
+                      <span aria-hidden="true">↻</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button action-icon-button"
+                      aria-label="Clear queue"
+                      data-tooltip="Clear queue"
+                      disabled={!selectedQueueName || isQueueLoading}
+                      onClick={() => void clearQueue()}
+                    >
+                      <span aria-hidden="true" className="clear-icon-text">CLR</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button danger-button action-icon-button queue-delete-button"
+                      aria-label="Delete queue"
+                      data-tooltip="Delete queue"
+                      disabled={!selectedQueueName || isQueueLoading}
+                      onClick={() => void deleteQueue()}
+                    >
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  </div>
+                </div>
+                <label>
+                  <span>New queue</span>
+                  <input
+                    value={newQueueName}
+                    onChange={(event) => setNewQueueName(event.target.value)}
+                    placeholder="legal-review-2026-q2"
+                    pattern="[a-z0-9-]{1,63}"
+                    title="Use lowercase letters, numbers, and hyphens."
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className="create-project-button action-icon-button"
+                  aria-label="Create queue"
+                  data-tooltip="Create queue"
+                  disabled={!newQueueName.trim() || isQueueLoading}
+                >
+                  <span aria-hidden="true">+</span>
+                </button>
+              </form>
+            </section>
+
+            <section className="queue-manager-section" aria-labelledby="add-work-heading">
+              <h3 id="add-work-heading">Add Records For Review</h3>
+              <div className="queue-add-work">
+                <label>
+                  <span>Project</span>
+                  <select value={queueProjectId} onChange={(event) => void selectQueueProject(event.target.value)}>
+                    <option value="">Choose a project</option>
+                    {(bootstrap?.projects ?? []).map((projectOption) => (
+                      <option key={projectOption.id} value={projectOption.id}>
+                        {projectOption.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {isQueueProjectLoading ? (
+                  <p className="modal-help" aria-live="polite">Loading tags...</p>
+                ) : queueTagNames.length > 0 ? (
+                  <div className="queue-tag-filter" aria-label="Tag filters">
+                    <span className="queue-tag-filter-count">
+                      tags ({selectedQueueTagCount}/{queueTagNames.length})
+                    </span>
+                    {queueTagNames.map((tagName) => (
+                      <button
+                        key={tagName}
+                        type="button"
+                        className="queue-tag-filter-option"
+                        data-state={queueTagStates[tagName] ?? 'ignore'}
+                        aria-label={`${tagName} tag filter ${queueTagStates[tagName] ?? 'ignore'}`}
+                        onClick={() => cycleQueueTagState(tagName)}
+                      >
+                        <span className="queue-tag-filter-box" aria-hidden="true">
+                          {queueTagStates[tagName] === 'include' ? '✓' : queueTagStates[tagName] === 'exclude' ? '×' : ''}
+                        </span>
+                        <span className="queue-tag-filter-name">{tagName}</span>
+                      </button>
+                    ))}
+                    <button type="button" className="secondary-button queue-tag-filter-apply" disabled={!queueProjectId || isQueueLoading || isQueueProjectLoading} onClick={() => void searchQueueRecords()}>
+                      Search
+                    </button>
+                  </div>
+                ) : queueProjectId ? (
+                  <p className="modal-help">No tags configured for this project. Searches without filters return all records.</p>
+                ) : (
+                  <p className="modal-help">Select a project to load tag filters. Searches without filters return all records.</p>
+                )}
+                <section className="queue-search-results" aria-label="Records found">
+                  <h4>{isQueueLoading ? 'Searching records...' : `${queueSearchResults.length} matching record${queueSearchResults.length === 1 ? '' : 's'}`}</h4>
+                  {isQueueLoading ? null : queueSearchResults.length > 0 ? (
+                    <p className="queue-search-result-names">{queueSearchResults.map((item) => item.displayName).join(', ')}</p>
+                  ) : (
+                    <p className="modal-help">No records selected for review yet.</p>
+                  )}
+                </section>
+                <label>
+                  <span>Instructions</span>
+                  <textarea value={queueInstructions} onChange={(event) => setQueueInstructions(event.target.value)} rows={3} maxLength={1000} />
+                </label>
+                <div className="queue-sample-actions" aria-label="Add records to queue">
+                  <span>Add</span>
+                  <button type="button" className="create-project-button" disabled={!selectedQueueName || queueSearchResults.length === 0 || isQueueLoading} onClick={() => void enqueueRecords('all')}>
+                    all
+                  </button>
+                  <span>or</span>
+                  <input
+                    aria-label="Sample count"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={String(sampleSize)}
+                    onChange={(event) => setSampleSize(Number(event.target.value.replace(/\D/g, '') || '0'))}
+                  />
+                  <button type="button" className="secondary-button" disabled={!selectedQueueName || queueSearchResults.length === 0 || isQueueLoading} onClick={() => void enqueueRecords('sample')}>
+                    samples
+                  </button>
+                </div>
+              </div>
+            </section>
+          </section>
+        </div>
+      ) : null}
 
       {isThemeManagerOpen ? (
         <div className="modal-backdrop" role="presentation">
@@ -1576,6 +2107,13 @@ const App = () => {
                 <li key={item.id}>
                   <button
                     type="button"
+                    ref={(element) => {
+                      if (element) {
+                        recordButtonRefs.current.set(item.id, element);
+                      } else {
+                        recordButtonRefs.current.delete(item.id);
+                      }
+                    }}
                     className={item.id === selectedRecordId ? 'selected record-button' : 'record-button'}
                     onClick={() => void requestRecordOpen(item.id)}
                   >
@@ -1622,6 +2160,14 @@ const App = () => {
             </div>
           </div>
           {status === 'loading' ? <p aria-live="polite">Loading...</p> : null}
+          {activeQueueWork?.bannerVisible && record?.recordId === activeQueueWork.recordId && selectedProjectId === activeQueueWork.projectId ? (
+            <section className="queue-instructions" aria-label="Queue instructions">
+              <p>{activeQueueWork.instructions}</p>
+              <button type="button" className="secondary-button" onClick={() => setActiveQueueWork((current) => (current ? { ...current, bannerVisible: false } : current))}>
+                Dismiss
+              </button>
+            </section>
+          ) : null}
           {record ? (
             <RecordDetails
               record={record}
@@ -1739,7 +2285,7 @@ const App = () => {
                   onClick={() => void selectChatAttachments()}
                   disabled={chatState === 'streaming' || agentUnavailable}
                 >
-                  <span aria-hidden="true">📎</span>
+                  <AttachIcon />
                 </button>
                 <button
                   type="button"
@@ -1905,6 +2451,21 @@ const ThemeIcon = () => (
     <path
       fill="currentColor"
       d="M8 1.25a6.75 6.75 0 0 0 0 13.5h.7c.89 0 1.55-.28 1.91-.8.36-.52.39-1.2.08-1.92-.13-.3-.11-.5.05-.66.17-.17.46-.26.81-.26H12A2.75 2.75 0 0 0 14.75 8.36 7.1 7.1 0 0 0 8 1.25Zm0 1.5a5.6 5.6 0 0 1 5.25 5.61c0 .69-.56 1.25-1.25 1.25h-.45c-.72 0-1.39.24-1.88.72-.57.56-.71 1.38-.36 2.29.1.24.09.41.07.45-.03.05-.21.18-.68.18H8a5.25 5.25 0 0 1 0-10.5ZM4.75 7a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm2.5-1.75a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM10.75 7a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM5.5 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
+    />
+  </svg>
+);
+
+const QueueGetIcon = () => (
+  <svg className="action-svg-icon" aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+    <path fill="currentColor" d="M7.25 2h1.5v7.4l2.72-2.72 1.06 1.06L8 12.27 3.47 7.74l1.06-1.06L7.25 9.4V2ZM3 13.5h10V15H3v-1.5Z" />
+  </svg>
+);
+
+const AttachIcon = () => (
+  <svg className="action-svg-icon" aria-hidden="true" viewBox="0 0 16 16" focusable="false">
+    <path
+      fill="currentColor"
+      d="M4.47 10.78 10.9 4.35a2.25 2.25 0 0 1 3.18 3.18l-7.25 7.25a4 4 0 0 1-5.66-5.66l7.07-7.07 1.06 1.06-7.07 7.07a2.5 2.5 0 0 0 3.54 3.54l7.25-7.25a.75.75 0 0 0-1.06-1.06l-6.43 6.43a1.25 1.25 0 0 1-1.77-1.77l5.66-5.66 1.06 1.06-5.66 5.66a.25.25 0 0 0-.07.18.24.24 0 0 0 .07.17.25.25 0 0 0 .35 0Z"
     />
   </svg>
 );

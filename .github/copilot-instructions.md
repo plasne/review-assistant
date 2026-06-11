@@ -18,3 +18,7 @@
 - Expose renderer capabilities only through the typed preload API and allowlisted IPC channels.
 - When adding a preload `ipcRenderer.invoke(...)` channel, add the matching `ipcMain.handle(...)` registration and ensure `npm run smoke` covers the channel pairing.
 - Keep storage backends behind `StorageAdapter`; do not leak local filesystem or Azure Blob details into renderer code.
+
+## UI conventions
+
+- Use compact icon action buttons for common create, refresh, clear, delete, save, attach, cancel, and similar toolbar/modal actions: `action-icon-button` plus semantic color classes (`create-project-button` for positive create/save, `secondary-button` for neutral actions, `danger-button` for destructive actions). Include an accessible `aria-label`, `data-tooltip`, and an `aria-hidden` icon glyph so action size, color, and tooltip behavior match the rest of the app.

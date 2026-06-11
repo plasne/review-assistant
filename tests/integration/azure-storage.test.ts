@@ -1,10 +1,12 @@
 import { BlobServiceClient } from '@azure/storage-blob';
+import { QueueServiceClient } from '@azure/storage-queue';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RecordDraftStore } from '../../src/main/drafts';
 import { AzureBlobStorageAdapter, RECORD_DRAFT_CONFLICT_MESSAGE } from '../../src/main/storage';
 
 const connectionString = 'UseDevelopmentStorage=true';
 const client = BlobServiceClient.fromConnectionString(connectionString);
+const queueServiceClient = QueueServiceClient.fromConnectionString(connectionString);
 
 describe('azure blob storage adapter with Azurite', () => {
   let containerName: string;
@@ -17,7 +19,8 @@ describe('azure blob storage adapter with Azurite', () => {
       appEnvPath: '/unused/config/.env',
       values: {
         AZURE_STORAGE_ACCOUNT_CONNSTRING: connectionString,
-        AZURE_STORAGE_CONTAINER: containerName
+        AZURE_STORAGE_CONTAINER: containerName,
+        USERNAME: 'sme@example.com'
       }
     });
     await client.getContainerClient(containerName).create();
@@ -99,6 +102,45 @@ describe('azure blob storage adapter with Azurite', () => {
     const updated = await adapter.updateRecord('sample-project', 'record-1', { answer: 'Core update', tags: ['project-tag'] });
     expect(updated.data).toEqual({ answer: 'Core update', tags: ['project-tag'] });
     expect(updated.feedbackHistory?.['/answer'].comments[0]).toMatchObject({ value: 'Clear', username: 'project@example.com' });
+  });
+
+  it('creates queues, searches tagged records, and completes dequeued messages', async () => {
+    await adapter.createProject('queue-project');
+    await uploadText(
+      'queue-project/config/config.json',
+      JSON.stringify({
+        properties: {
+          '/tags': {
+            path: '/tags',
+            target: 'Tags',
+            tab: 'Main',
+            feedback: 'none',
+            comments: false,
+            mapping: 'tags',
+            presentation: 'tags'
+          }
+        }
+      })
+    );
+    await uploadText('queue-project/record-1.json', '{"answer":"One","tags":["needs-review","complex-query"]}\n');
+    await uploadText('queue-project/record-2.json', '{"answer":"Two","tags":["approved","multi-turn"]}\n');
+    const queueName = `raqueue${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+
+    await expect(adapter.createQueue(queueName)).resolves.toMatchObject({ name: queueName, messageCount: 0 });
+    await expect(adapter.listProjectTags('queue-project')).resolves.toEqual(['approved', 'complex-query', 'multi-turn', 'needs-review']);
+    await expect(adapter.searchRecords('queue-project', { included: ['needs-review'], excluded: [] })).resolves.toEqual([
+      { id: 'record-1', displayName: 'record-1' }
+    ]);
+    await adapter.enqueueMessage(queueName, { project: 'queue-project', filename: 'record-1', instructions: 'Check evidence.' });
+
+    const dequeued = await adapter.dequeueMessage(queueName);
+    expect(dequeued).toMatchObject({
+      message: { project: 'queue-project', filename: 'record-1', instructions: 'Check evidence.' }
+    });
+    expect(dequeued?.popReceipt).toEqual(expect.any(String));
+    await adapter.completeMessage(queueName, dequeued?.popReceipt ?? '');
+    await expect(adapter.dequeueMessage(queueName)).resolves.toBeNull();
+    await queueServiceClient.getQueueClient(queueName).deleteIfExists();
   });
 
   it('uses blob conditions for new draft creates and rotates schema backups', async () => {

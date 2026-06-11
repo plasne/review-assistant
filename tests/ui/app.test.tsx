@@ -39,6 +39,7 @@ const api: Api = {
   listProjects: vi.fn(),
   createProject: vi.fn(),
   openProject: vi.fn(),
+  listProjectTags: vi.fn(),
   createRecordDraft: vi.fn(),
   getRecord: vi.fn(),
   updateRecordData: vi.fn(),
@@ -46,6 +47,15 @@ const api: Api = {
   getRecordDraftStatus: vi.fn(),
   saveRecordChanges: vi.fn(),
   discardRecordChanges: vi.fn(),
+  queue: {
+    listQueues: vi.fn(),
+    createQueue: vi.fn(),
+    deleteQueue: vi.fn(),
+    clearQueue: vi.fn(),
+    searchRecords: vi.fn(),
+    enqueueMessage: vi.fn(),
+    dequeueMessage: vi.fn()
+  },
   getFeedbackConfig: vi.fn(),
   saveFeedbackConfig: vi.fn(),
   getThemeState: vi.fn(),
@@ -160,6 +170,7 @@ beforeEach(() => {
   });
   vi.mocked(api.getProjectUser).mockResolvedValue({ username: 'sme@example.com', valid: true });
   vi.mocked(api.getRecordDraftStatus).mockResolvedValue({ hasUnsavedChanges: false });
+  vi.mocked(api.listProjectTags).mockResolvedValue([]);
   vi.mocked(api.updateRecordData).mockImplementation(async (projectId, recordId, data) => ({
     projectId,
     recordId,
@@ -172,6 +183,13 @@ beforeEach(() => {
   vi.mocked(api.saveRecordChanges).mockImplementation(async (projectId, recordId) => ({ record: await api.getRecord(projectId, recordId) }));
   vi.mocked(api.computeRecordTags).mockImplementation(async (projectId, recordId) => ({ record: await api.getRecord(projectId, recordId) }));
   vi.mocked(api.discardRecordChanges).mockResolvedValue({ hasUnsavedChanges: false });
+  vi.mocked(api.queue.listQueues).mockResolvedValue([]);
+  vi.mocked(api.queue.createQueue).mockImplementation(async (queueName) => ({ name: queueName, messageCount: 0 }));
+  vi.mocked(api.queue.deleteQueue).mockResolvedValue(undefined);
+  vi.mocked(api.queue.clearQueue).mockResolvedValue(undefined);
+  vi.mocked(api.queue.searchRecords).mockResolvedValue([]);
+  vi.mocked(api.queue.enqueueMessage).mockResolvedValue(undefined);
+  vi.mocked(api.queue.dequeueMessage).mockResolvedValue(null);
   vi.mocked(api.saveFeedbackConfig).mockImplementation(async (_projectId, config) => config);
   vi.mocked(api.closeWindow).mockResolvedValue(undefined);
   vi.mocked(api.continueWithGitHub).mockResolvedValue({
@@ -292,6 +310,361 @@ describe('review UI', () => {
     expect(api.setActiveTheme).toHaveBeenCalledWith('custom-ocean');
     await waitFor(() => expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#001122'));
     expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#33ddff');
+  });
+
+  it('dequeues a record, shows instructions, and saves with queue completion options', async () => {
+    const scrollIntoView = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'azure-connection-string',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      themeState: createThemeState(),
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.queue.listQueues).mockResolvedValue([{ name: 'review-work', messageCount: 1 }]);
+    vi.mocked(api.queue.dequeueMessage).mockResolvedValue({
+      message: { project: 'sample-project', filename: 'q16', instructions: 'Check the answer.' },
+      popReceipt: 'opaque-receipt'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: Array.from({ length: 16 }, (_value, index) => {
+        const id = `q${String(index + 1).padStart(2, '0')}`;
+        return { id, displayName: id };
+      }),
+      feedbackConfig: { properties: {} }
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'q16',
+      displayName: 'q16',
+      data: { answer: 'Initial' },
+      schema: {},
+      validationIssues: [],
+      renderTree: { kind: 'object', label: 'record', path: '', children: [], validationIssues: [] }
+    });
+    vi.mocked(api.getRecordDraftStatus).mockResolvedValue({ hasUnsavedChanges: true });
+    vi.mocked(api.saveRecordChanges).mockImplementation(async (projectId, recordId) => ({
+      record: {
+        projectId,
+        recordId,
+        displayName: recordId,
+        data: { answer: 'Saved' },
+        schema: {},
+        validationIssues: [],
+        renderTree: { kind: 'object', label: 'record', path: '', children: [], validationIssues: [] }
+      }
+    }));
+
+    render(<App />);
+    const getRecordButton = await screen.findByRole('button', { name: 'Get Record' });
+    expect(getRecordButton).toHaveClass('create-project-button', 'header-action-button', 'action-icon-button');
+    expect(getRecordButton).toHaveAttribute('data-tooltip', 'Get from queue');
+    expect(getRecordButton.querySelector('.action-svg-icon')).not.toBeNull();
+    const manageQueuesButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Queues' });
+    expect(manageQueuesButton).toHaveClass('secondary-button', 'header-action-button', 'action-icon-button');
+    expect(manageQueuesButton).toHaveAttribute('data-tooltip', 'Manage queues');
+    const configureButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Configure' });
+    expect(configureButton).toBeDisabled();
+    await userEvent.click(getRecordButton);
+
+    expect(await screen.findByLabelText('Queue instructions')).toHaveTextContent('Check the answer.');
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' }));
+    const banner = screen.getByRole('banner');
+    const projectSelect = within(banner).getByLabelText('Current project');
+    const createProjectButton = within(banner).getByRole('button', { name: 'Create project' });
+    const queueSelect = within(banner).getByLabelText('Queue');
+    const refreshQueuesButton = within(banner).getByRole('button', { name: 'Refresh queues' });
+    const manageThemesButton = within(banner).getByRole('button', { name: 'Manage themes' });
+    expect(projectSelect.compareDocumentPosition(createProjectButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(createProjectButton.compareDocumentPosition(configureButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(configureButton).toBeEnabled();
+    expect(configureButton.compareDocumentPosition(queueSelect) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(queueSelect.compareDocumentPosition(getRecordButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(getRecordButton.compareDocumentPosition(refreshQueuesButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(refreshQueuesButton.compareDocumentPosition(manageQueuesButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(manageQueuesButton.compareDocumentPosition(manageThemesButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(banner).getAllByText('|')).toHaveLength(2);
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(api.queue.dequeueMessage).toHaveBeenCalledWith('review-work');
+    expect(api.saveRecordChanges).toHaveBeenCalledWith('sample-project', 'q16', {
+      queue: { queueName: 'review-work', popReceipt: 'opaque-receipt' }
+    });
+  });
+
+  it('shows a visible message when a queue has no visible messages to dequeue', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'azure-connection-string',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      themeState: createThemeState(),
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.queue.listQueues).mockResolvedValue([{ name: 'review-work', messageCount: 1 }]);
+    vi.mocked(api.queue.dequeueMessage).mockResolvedValue(null);
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Get Record' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "No visible messages are available in 'review-work'. The queue may be empty or its messages may still be invisible."
+    );
+    expect(api.openProject).not.toHaveBeenCalled();
+    expect(api.getRecord).not.toHaveBeenCalled();
+  });
+
+  it('does not show queue instructions when dequeued work has no instructions', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'azure-connection-string',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      themeState: createThemeState(),
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.queue.listQueues).mockResolvedValue([{ name: 'review-work', messageCount: 1 }]);
+    vi.mocked(api.queue.dequeueMessage).mockResolvedValue({
+      message: { project: 'sample-project', filename: 'valid-record', instructions: '   ' },
+      popReceipt: 'opaque-receipt'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'sample-project', name: 'sample-project' },
+      projectConfig: {},
+      schema: {},
+      records: [{ id: 'valid-record', displayName: 'valid-record' }],
+      feedbackConfig: { properties: {} }
+    });
+    vi.mocked(api.getRecord).mockResolvedValue({
+      projectId: 'sample-project',
+      recordId: 'valid-record',
+      displayName: 'valid-record',
+      data: { answer: 'Initial' },
+      schema: {},
+      validationIssues: [],
+      renderTree: { kind: 'object', label: 'record', path: '', children: [], validationIssues: [] }
+    });
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Get Record' }));
+
+    await screen.findByText('Record details');
+    expect(screen.queryByLabelText('Queue instructions')).not.toBeInTheDocument();
+    expect(screen.queryByText('No instructions provided')).not.toBeInTheDocument();
+  });
+
+  it('combines queue selection and creation into compact icon actions', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'azure-connection-string',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      themeState: createThemeState(),
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.queue.listQueues).mockResolvedValue([{ name: 'sprint01', messageCount: 0 }]);
+
+    render(<App />);
+    const manageQueuesButton = await screen.findByRole('button', { name: 'Queues' });
+    expect(manageQueuesButton).toHaveClass('secondary-button', 'header-action-button', 'action-icon-button');
+    expect(manageQueuesButton).toHaveAttribute('data-tooltip', 'Manage queues');
+    await userEvent.click(manageQueuesButton);
+    const dialog = await screen.findByRole('dialog', { name: 'Queue Manager' });
+
+    expect(within(dialog).getByRole('heading', { name: 'Queues' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Add Records For Review' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('heading', { name: 'Existing Queues' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('heading', { name: 'Create Queue' })).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Selected queue')).toHaveValue('sprint01');
+    expect(within(dialog).getByLabelText('Project')).toHaveValue('');
+    for (const action of ['Refresh queues', 'Clear queue', 'Delete queue', 'Create queue']) {
+      expect(within(dialog).getByRole('button', { name: action })).toHaveClass('action-icon-button');
+    }
+    const queueSelect = within(dialog).getByLabelText('Selected queue');
+    const refreshButton = within(dialog).getByRole('button', { name: 'Refresh queues' });
+    const clearButton = within(dialog).getByRole('button', { name: 'Clear queue' });
+    expect(queueSelect.compareDocumentPosition(refreshButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(refreshButton.compareDocumentPosition(clearButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Create queue' })).toHaveClass('create-project-button');
+    expect(within(dialog).getByRole('button', { name: 'Delete queue' })).toHaveClass('danger-button', 'queue-delete-button');
+  });
+
+  it('creates, clears, and deletes queues from the queue manager', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'azure-connection-string',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      themeState: createThemeState(),
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.queue.listQueues).mockResolvedValue([{ name: 'sprint01', messageCount: 7 }]);
+    vi.mocked(api.queue.createQueue).mockResolvedValue({ name: 'sprint02', messageCount: 0 });
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Queues' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Queue Manager' });
+    await userEvent.type(within(dialog).getByLabelText('New queue'), 'sprint02');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Create queue' }));
+
+    await waitFor(() => expect(api.queue.createQueue).toHaveBeenCalledWith('sprint02'));
+    expect(within(dialog).getByLabelText('Selected queue')).toHaveValue('sprint02');
+    expect(within(dialog).getByRole('status')).toHaveTextContent("Created queue 'sprint02'.");
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Clear queue' }));
+
+    await waitFor(() => expect(api.queue.clearQueue).toHaveBeenCalledWith('sprint02'));
+    expect(confirmSpy).toHaveBeenCalledWith("Clear all messages from 'sprint02'?");
+    expect(within(dialog).getByRole('status')).toHaveTextContent("Cleared queue 'sprint02'.");
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete queue' }));
+
+    await waitFor(() => expect(api.queue.deleteQueue).toHaveBeenCalledWith('sprint01'));
+    expect(confirmSpy).toHaveBeenCalledWith("Delete queue 'sprint01'?");
+    expect(within(dialog).getByRole('status')).toHaveTextContent("Deleted queue 'sprint01'.");
+    confirmSpy.mockRestore();
+  });
+
+  it('shows a queue validation error before creating invalid queue names', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'azure-connection-string',
+      projects: [{ id: 'sample-project', name: 'sample-project' }],
+      themeState: createThemeState(),
+      version: 'v0.1.0-test'
+    });
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Queues' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Queue Manager' });
+    const newQueueInput = within(dialog).getByLabelText('New queue');
+    await userEvent.type(newQueueInput, 'Bad Queue');
+    newQueueInput.removeAttribute('pattern');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Create queue' }));
+
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Queue name must contain only lowercase letters, numbers, and hyphens');
+    expect(api.queue.createQueue).not.toHaveBeenCalled();
+  });
+
+  it('does not default queue work to the first project and loads tags for the selected queue project', async () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValueOnce(0).mockReturnValueOnce(0.9);
+    let resolveProjectTags: ((value: Awaited<ReturnType<Api['listProjectTags']>>) => void) | undefined;
+    const projectTagsPromise = new Promise<Awaited<ReturnType<Api['listProjectTags']>>>((resolve) => {
+      resolveProjectTags = resolve;
+    });
+    let resolveSearchRecords: ((value: Awaited<ReturnType<Api['queue']['searchRecords']>>) => void) | undefined;
+    const searchRecordsPromise = new Promise<Awaited<ReturnType<Api['queue']['searchRecords']>>>((resolve) => {
+      resolveSearchRecords = resolve;
+    });
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'azure-connection-string',
+      projects: [
+        { id: 'agent01', name: 'agent01' },
+        { id: 'agent02', name: 'agent02' }
+      ],
+      themeState: createThemeState(),
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.queue.listQueues).mockResolvedValue([{ name: 'sprint01', messageCount: 0 }]);
+    vi.mocked(api.listProjectTags).mockReturnValue(projectTagsPromise);
+    vi.mocked(api.queue.searchRecords).mockReturnValue(searchRecordsPromise);
+
+    render(<App />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Queues' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Queue Manager' });
+    const projectSelect = within(dialog).getByLabelText('Project');
+
+    expect(projectSelect).toHaveValue('');
+    expect(screen.getByLabelText('Current project')).toHaveValue('');
+    expect(within(dialog).queryByLabelText('Tag filters')).not.toBeInTheDocument();
+    expect(api.listProjectTags).not.toHaveBeenCalled();
+
+    await userEvent.selectOptions(projectSelect, 'agent02');
+
+    expect(within(dialog).getByText('Loading tags...')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Select a project to load tag filters. Searches without filters return all records.')).not.toBeInTheDocument();
+    resolveProjectTags?.(['complex-query', 'domain:finance', 'domain:legal', 'multi-turn']);
+
+    await waitFor(() => expect(api.listProjectTags).toHaveBeenCalledWith('agent02'));
+    const tagFilters = await within(dialog).findByLabelText('Tag filters');
+    expect(within(tagFilters).getByText(/tags/)).toHaveTextContent('tags (0/4)');
+    expect(within(tagFilters).getByText('complex-query')).toBeInTheDocument();
+    expect(within(tagFilters).getByText('domain:legal')).toBeInTheDocument();
+    expect(within(tagFilters).getByText('domain:finance')).toBeInTheDocument();
+    expect(within(tagFilters).getByText('multi-turn')).toBeInTheDocument();
+
+    await userEvent.click(within(tagFilters).getByRole('button', { name: 'domain:legal tag filter ignore' }));
+    await userEvent.click(within(tagFilters).getByRole('button', { name: 'domain:finance tag filter ignore' }));
+    await userEvent.click(within(tagFilters).getByRole('button', { name: 'domain:finance tag filter include' }));
+    expect(within(tagFilters).getByText(/tags/)).toHaveTextContent('tags (2/4)');
+    await userEvent.click(within(tagFilters).getByRole('button', { name: 'Search' }));
+
+    expect(api.queue.searchRecords).toHaveBeenCalledWith('agent02', {
+      included: ['domain:legal'],
+      excluded: ['domain:finance']
+    });
+    expect(within(dialog).getByRole('heading', { name: 'Searching records...' })).toBeInTheDocument();
+    resolveSearchRecords?.([
+      { id: 'record-1', displayName: 'record-1' },
+      { id: 'record-2', displayName: 'record-2' },
+      { id: 'record-3', displayName: 'record-3' }
+    ]);
+    const recordsFound = await within(dialog).findByLabelText('Records found');
+    expect(within(recordsFound).getByRole('heading', { name: '3 matching records' })).toBeInTheDocument();
+    expect(within(recordsFound).getByText('record-1, record-2, record-3')).toBeInTheDocument();
+    const sampleCount = within(dialog).getByLabelText('Sample count');
+    await userEvent.clear(sampleCount);
+    await userEvent.type(sampleCount, '1a2');
+    expect(sampleCount).toHaveValue('12');
+    expect(within(dialog).getByRole('button', { name: 'all' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'samples' })).toBeInTheDocument();
+    await userEvent.clear(sampleCount);
+    await userEvent.type(sampleCount, '2');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'samples' }));
+    expect(api.queue.enqueueMessage).toHaveBeenNthCalledWith(1, 'sprint01', { project: 'agent02', filename: 'record-3' });
+    expect(api.queue.enqueueMessage).toHaveBeenNthCalledWith(2, 'sprint01', { project: 'agent02', filename: 'record-2' });
+    randomSpy.mockRestore();
+    expect(screen.getByLabelText('Current project')).toHaveValue('');
+  });
+
+  it('does not preselect the current project when opening the queue manager', async () => {
+    let resolveProjectTags: ((value: Awaited<ReturnType<Api['listProjectTags']>>) => void) | undefined;
+    const projectTagsPromise = new Promise<Awaited<ReturnType<Api['listProjectTags']>>>((resolve) => {
+      resolveProjectTags = resolve;
+    });
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'azure-connection-string',
+      projects: [
+        { id: 'agent01', name: 'agent01' },
+        { id: 'agent02', name: 'agent02' }
+      ],
+      themeState: createThemeState(),
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.openProject).mockResolvedValue({
+      project: { id: 'agent01', name: 'agent01' },
+      projectConfig: {},
+      schema: {},
+      records: [],
+      feedbackConfig: { properties: {} }
+    });
+    vi.mocked(api.queue.listQueues).mockResolvedValue([{ name: 'sprint01', messageCount: 0 }]);
+    vi.mocked(api.listProjectTags).mockReturnValue(projectTagsPromise);
+
+    render(<App />);
+    await userEvent.selectOptions(await screen.findByLabelText('Current project'), 'agent01');
+    await waitFor(() => expect(api.openProject).toHaveBeenCalledWith('agent01'));
+    await userEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Queues' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Queue Manager' });
+    const projectSelect = within(dialog).getByLabelText('Project');
+
+    expect(projectSelect).toHaveValue('');
+    expect(within(dialog).getByText('Select a project to load tag filters. Searches without filters return all records.')).toBeInTheDocument();
+    expect(api.listProjectTags).not.toHaveBeenCalled();
+
+    await userEvent.selectOptions(projectSelect, 'agent01');
+
+    expect(within(dialog).getByText('Loading tags...')).toBeInTheDocument();
+    resolveProjectTags?.(['needs-review', 'priority']);
+    await waitFor(() => expect(api.listProjectTags).toHaveBeenCalledWith('agent01'));
+    const tagFilters = await within(dialog).findByLabelText('Tag filters');
+    expect(within(tagFilters).getByText('needs-review')).toBeInTheDocument();
+    expect(within(tagFilters).getByText('priority')).toBeInTheDocument();
   });
 
   it('renders request and response presentations with distinct classes', () => {
@@ -965,7 +1338,10 @@ describe('review UI', () => {
 
     render(<App />);
     await screen.findByLabelText('Current project');
-    expect(screen.queryByRole('button', { name: 'Configure' })).not.toBeInTheDocument();
+    const initialConfigureButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Configure' });
+    expect(initialConfigureButton).toBeDisabled();
+    expect(initialConfigureButton).toHaveClass('header-action-button', 'action-icon-button');
+    expect(initialConfigureButton).toHaveAttribute('data-tooltip', 'Configure project');
     const createProjectButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Create project' });
     expect(createProjectButton).toHaveClass('header-action-button', 'action-icon-button');
     expect(createProjectButton).toHaveAttribute('data-tooltip', 'Create project');
@@ -980,9 +1356,13 @@ describe('review UI', () => {
     await waitFor(() => expect(screen.getByLabelText('Current feedback username')).toHaveTextContent('sme@example.com'));
     expect(await screen.findByRole('button', { name: 'Configure' })).toBeInTheDocument();
     const configureButton = within(screen.getByRole('banner')).getByRole('button', { name: 'Configure' });
+    expect(configureButton).toBeEnabled();
     expect(configureButton).toHaveClass('header-action-button', 'action-icon-button');
     expect(configureButton).toHaveAttribute('data-tooltip', 'Configure project');
-    expect(configureButton.nextElementSibling).toBe(manageThemesButton);
+    expect(configureButton.nextElementSibling).toHaveClass('header-separator');
+    expect(configureButton.nextElementSibling?.nextElementSibling).toBe(manageThemesButton);
+    expect(screen.queryByRole('button', { name: 'Queues' })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('banner')).getByText('|')).toBeInTheDocument();
     const createRecordButton = getRecordCreateButton();
     const refreshRecordsButton = screen.getByRole('button', { name: 'Refresh records' });
     expect(createRecordButton).toBeEnabled();
@@ -1190,6 +1570,7 @@ describe('review UI', () => {
     expect(loginButton.parentElement).toHaveClass('chat-login-actions');
     expect(loginButton.parentElement?.nextElementSibling).toHaveClass('chat-actions');
     expect(screen.getByRole('button', { name: 'Attach' })).toHaveClass('action-icon-button');
+    expect(screen.getByRole('button', { name: 'Attach' }).querySelector('.action-svg-icon')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Send' })).toHaveClass('action-icon-button');
     expect(screen.getByRole('button', { name: 'Send' })).toHaveTextContent('↵');
     expect(screen.getByRole('button', { name: 'Clear' })).toHaveClass('action-icon-button');

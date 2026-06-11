@@ -63,6 +63,40 @@ export type RecordSummary = {
   displayName: string;
 };
 
+export type QueueMessage = {
+  project: string;
+  filename: string;
+  instructions?: string;
+};
+
+export type QueueInfo = {
+  name: string;
+  messageCount: number;
+};
+
+export type DequeueResult = {
+  message: QueueMessage;
+  popReceipt: string;
+};
+
+export type TagFilter = {
+  included: string[];
+  excluded: string[];
+};
+
+export type HistoryEntry = {
+  username: string;
+  timestamp: string;
+  action: 'saved' | 'reviewed';
+};
+
+export type RecordSaveOptions = {
+  queue?: {
+    queueName: string;
+    popReceipt: string;
+  };
+};
+
 export type ValidationIssue = {
   path: string;
   message: string;
@@ -357,13 +391,23 @@ export type Api = {
   listProjects: () => Promise<ProjectSummary[]>;
   createProject: (projectId: string) => Promise<ProjectSummary>;
   openProject: (projectId: string) => Promise<OpenProjectResult>;
+  listProjectTags: (projectId: string) => Promise<string[]>;
   createRecordDraft: (projectId: string, recordId: string) => Promise<RecordDetail>;
   getRecord: (projectId: string, recordId: string) => Promise<RecordDetail>;
   updateRecordData: (projectId: string, recordId: string, data: unknown) => Promise<RecordDetail>;
   computeRecordTags: (projectId: string, recordId: string) => Promise<RecordSaveResult>;
   getRecordDraftStatus: (projectId: string, recordId: string) => Promise<RecordDraftStatus>;
-  saveRecordChanges: (projectId: string, recordId: string) => Promise<RecordSaveResult>;
+  saveRecordChanges: (projectId: string, recordId: string, options?: RecordSaveOptions) => Promise<RecordSaveResult>;
   discardRecordChanges: (projectId: string, recordId: string) => Promise<RecordDraftStatus>;
+  queue: {
+    listQueues: () => Promise<QueueInfo[]>;
+    createQueue: (queueName: string) => Promise<QueueInfo>;
+    deleteQueue: (queueName: string) => Promise<void>;
+    clearQueue: (queueName: string) => Promise<void>;
+    searchRecords: (projectId: string, tagFilter: TagFilter) => Promise<RecordSummary[]>;
+    enqueueMessage: (queueName: string, message: QueueMessage) => Promise<void>;
+    dequeueMessage: (queueName: string) => Promise<DequeueResult | null>;
+  };
   getFeedbackConfig: (projectId: string) => Promise<FeedbackConfig>;
   saveFeedbackConfig: (projectId: string, config: FeedbackConfig) => Promise<FeedbackConfig>;
   getProjectUser: (projectId: string) => Promise<ProjectUser>;

@@ -18,17 +18,25 @@ import {
   assertFeedbackSubmissionInput,
   assertFeedbackSubmissionResult,
   assertContinueWithGitHubResult,
+  assertDequeueResult,
   assertGitHubLoginCompletion,
   assertNewProjectId,
   assertOpenProjectResult,
   assertProjectId,
   assertProjectUser,
+  assertQueueInfos,
+  assertQueueMessage,
+  assertQueueName,
   assertProjectSummary,
   assertProjectSummaries,
   assertRecordDraftStatus,
   assertRecordDetail,
   assertRecordSaveResult,
   assertRecordId,
+  assertRecordSaveOptions,
+  assertRecordSummaries,
+  assertTagFilter,
+  assertTagNameArray,
   assertChatAttachmentId,
   assertTheme,
   assertThemeId,
@@ -122,6 +130,27 @@ const requireThemeStore = (): ThemeStore => {
 
 const drafts = new RecordDraftStore(requireStorage);
 
+const logQueueOperation = async <T>(
+  eventName: string,
+  fields: { requestId: string; queueName?: string; projectId?: string; recordId?: string; messageCount?: number },
+  action: () => Promise<T>
+): Promise<T> => {
+  const startedAt = Date.now();
+  try {
+    const result = await action();
+    logInfo(eventName, { ...fields, elapsedMs: Date.now() - startedAt, status: 'success' });
+    return result;
+  } catch (error) {
+    logError(eventName, {
+      ...fields,
+      elapsedMs: Date.now() - startedAt,
+      status: 'failure',
+      error: { message: error instanceof Error ? error.message : String(error), code: error instanceof Error ? error.name : 'ERROR' }
+    });
+    throw error;
+  }
+};
+
 const readChatAttachment = async (filePath: string): Promise<ChatAttachmentContent> => {
   const stat = await fs.stat(filePath);
   if (!stat.isFile()) {
@@ -178,6 +207,14 @@ const registerIpc = (): void => {
     await drafts.releaseForProjectChange(validProjectId);
     return assertOpenProjectResult(await requireStorage().openProject(validProjectId));
   });
+  ipcMain.handle('projects:listTags', async (_event, projectId: unknown) => {
+    const validProjectId = assertProjectId(projectId);
+    const activeStorage = requireStorage();
+    if (!activeStorage.listProjectTags) {
+      throw new Error('Project tag listing is unavailable for this storage backend.');
+    }
+    return assertTagNameArray(await activeStorage.listProjectTags(validProjectId));
+  });
   ipcMain.handle('records:createDraft', async (_event, projectId: unknown, recordId: unknown) =>
     assertRecordDetail(await drafts.createRecord(assertProjectId(projectId), assertRecordId(recordId)))
   );
@@ -193,9 +230,23 @@ const registerIpc = (): void => {
   ipcMain.handle('records:getDraftStatus', async (_event, projectId: unknown, recordId: unknown) =>
     assertRecordDraftStatus(drafts.getStatus(assertProjectId(projectId), assertRecordId(recordId)))
   );
-  ipcMain.handle('records:saveChanges', async (_event, projectId: unknown, recordId: unknown) =>
-    assertRecordSaveResult(await drafts.saveDraft(assertProjectId(projectId), assertRecordId(recordId)))
-  );
+  ipcMain.handle('records:saveChanges', async (_event, projectId: unknown, recordId: unknown, options: unknown) => {
+    const validProjectId = assertProjectId(projectId);
+    const validRecordId = assertRecordId(recordId);
+    const validOptions = assertRecordSaveOptions(options);
+    const queueOptions = validOptions?.queue;
+    const result = assertRecordSaveResult(await drafts.saveDraft(validProjectId, validRecordId, queueOptions ? 'reviewed' : 'saved'));
+    if (queueOptions) {
+      await logQueueOperation(
+        'review-assistant.queue.record-saved-from-queue',
+        { requestId: randomUUID(), queueName: queueOptions.queueName, projectId: validProjectId, recordId: validRecordId },
+        async () => {
+          await requireStorage().completeMessage(queueOptions.queueName, queueOptions.popReceipt);
+        }
+      );
+    }
+    return result;
+  });
   ipcMain.handle('records:discardChanges', async (_event, projectId: unknown, recordId: unknown) =>
     assertRecordDraftStatus(drafts.discardDraft(assertProjectId(projectId), assertRecordId(recordId)))
   );
@@ -217,6 +268,52 @@ const registerIpc = (): void => {
       await drafts.submitFeedback(assertProjectId(projectId), assertRecordId(recordId), assertFeedbackSubmissionInput(input))
     )
   );
+  ipcMain.handle('queue:listQueues', async () =>
+    logQueueOperation('review-assistant.queue.list-queues', { requestId: randomUUID() }, async () =>
+      assertQueueInfos(await requireStorage().listQueues())
+    )
+  );
+  ipcMain.handle('queue:createQueue', async (_event, queueName: unknown) => {
+    const validQueueName = assertQueueName(queueName);
+    return logQueueOperation('review-assistant.queue.create-queue', { requestId: randomUUID(), queueName: validQueueName }, async () =>
+      assertQueueInfos([await requireStorage().createQueue(validQueueName)])[0]
+    );
+  });
+  ipcMain.handle('queue:deleteQueue', async (_event, queueName: unknown) => {
+    const validQueueName = assertQueueName(queueName);
+    await logQueueOperation('review-assistant.queue.delete-queue', { requestId: randomUUID(), queueName: validQueueName }, async () => {
+      await requireStorage().deleteQueue(validQueueName);
+    });
+  });
+  ipcMain.handle('queue:clearQueue', async (_event, queueName: unknown) => {
+    const validQueueName = assertQueueName(queueName);
+    await logQueueOperation('review-assistant.queue.clear-queue', { requestId: randomUUID(), queueName: validQueueName }, async () => {
+      await requireStorage().clearQueue(validQueueName);
+    });
+  });
+  ipcMain.handle('queue:searchRecords', async (_event, projectId: unknown, tagFilter: unknown) => {
+    const validProjectId = assertProjectId(projectId);
+    return logQueueOperation('review-assistant.queue.search-records', { requestId: randomUUID(), projectId: validProjectId }, async () =>
+      assertRecordSummaries(await requireStorage().searchRecords(validProjectId, assertTagFilter(tagFilter)))
+    );
+  });
+  ipcMain.handle('queue:enqueueMessage', async (_event, queueName: unknown, message: unknown) => {
+    const validQueueName = assertQueueName(queueName);
+    const validMessage = assertQueueMessage(message);
+    await logQueueOperation(
+      'review-assistant.queue.enqueue-message',
+      { requestId: randomUUID(), queueName: validQueueName, projectId: validMessage.project, recordId: validMessage.filename },
+      async () => {
+        await requireStorage().enqueueMessage(validQueueName, validMessage);
+      }
+    );
+  });
+  ipcMain.handle('queue:dequeueMessage', async (_event, queueName: unknown) => {
+    const validQueueName = assertQueueName(queueName);
+    return logQueueOperation('review-assistant.queue.dequeue-message', { requestId: randomUUID(), queueName: validQueueName }, async () =>
+      assertDequeueResult(await requireStorage().dequeueMessage(validQueueName))
+    );
+  });
   ipcMain.handle('app:closeWindow', async () => {
     await drafts.releaseAll();
     allowClose = true;

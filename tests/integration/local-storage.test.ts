@@ -61,6 +61,14 @@ describe('local storage adapter', () => {
     await expect(adapter.releaseExclusiveLease('sample-project', 'valid-record')).resolves.toBeUndefined();
   });
 
+  it('keeps queue distribution unavailable for local projects', async () => {
+    await expect(adapter.listQueues()).resolves.toEqual([]);
+    await expect(adapter.createQueue('review-work')).rejects.toThrow('Queues are only available with Azure Blob Storage backend');
+    await expect(adapter.searchRecords('sample-project', { included: [], excluded: [] })).rejects.toThrow(
+      'Queues are only available with Azure Blob Storage backend'
+    );
+  });
+
   it('keeps local record files parseable after concurrent writes', async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
     await fs.mkdir(path.join(tempRoot, 'write-project', 'config'), { recursive: true });
@@ -160,6 +168,27 @@ describe('local storage adapter', () => {
         { name: 'approved', description: 'Approved' }
       ]
     });
+  });
+
+  it('lists manual and computed project tags from persisted records', async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-'));
+    const projectsRoot = path.join(tempRoot, 'projects');
+    await fs.mkdir(path.join(projectsRoot, 'tag-project', 'config'), { recursive: true });
+    await fs.writeFile(path.join(projectsRoot, 'tag-project', 'config', 'schema.json'), JSON.stringify({ type: 'object', properties: { tags: { type: 'array', items: { type: 'string' } } } }));
+    await fs.writeFile(
+      path.join(projectsRoot, 'tag-project', 'config', 'config.json'),
+      JSON.stringify({ properties: { '/tags': { path: '/tags', target: 'Tags', tab: 'Main', feedback: 'none', comments: false, mapping: 'tags', presentation: 'tags' } } })
+    );
+    await fs.writeFile(path.join(projectsRoot, 'tag-project', 'config', 'tags.json'), JSON.stringify([{ name: 'domain:legal', description: 'Legal domain review tag.' }]));
+    await fs.writeFile(path.join(projectsRoot, 'tag-project', 'record-1.json'), JSON.stringify({ tags: ['complex-query', 'domain:legal'] }));
+    await fs.writeFile(path.join(projectsRoot, 'tag-project', 'record-2.json'), JSON.stringify({ tags: ['multi-turn', 'domain:finance'] }));
+    const tempAdapter = new LocalStorageAdapter({
+      backendKind: 'local',
+      appEnvPath: path.join(tempRoot, 'config', '.env'),
+      values: { LOCAL_PATH: projectsRoot }
+    });
+
+    await expect(tempAdapter.listProjectTags('tag-project')).resolves.toEqual(['complex-query', 'domain:finance', 'domain:legal', 'multi-turn']);
   });
 
   it('runs computed tag plugins only from the trusted app config folder', async () => {

@@ -50,7 +50,15 @@ export class RecordDraftStore {
       getTagDefinitions: (projectId) => storage.getTagDefinitions(projectId),
       reconcileRecordTags: (projectId, data) => storage.reconcileRecordTags(projectId, data),
       obtainExclusiveLease: (projectId, recordId) => storage.obtainExclusiveLease(projectId, recordId),
-      releaseExclusiveLease: (projectId, recordId) => storage.releaseExclusiveLease(projectId, recordId)
+      releaseExclusiveLease: (projectId, recordId) => storage.releaseExclusiveLease(projectId, recordId),
+      listQueues: () => storage.listQueues(),
+      createQueue: (queueName) => storage.createQueue(queueName),
+      deleteQueue: (queueName) => storage.deleteQueue(queueName),
+      clearQueue: (queueName) => storage.clearQueue(queueName),
+      enqueueMessage: (queueName, message) => storage.enqueueMessage(queueName, message),
+      dequeueMessage: (queueName) => storage.dequeueMessage(queueName),
+      completeMessage: (queueName, popReceipt) => storage.completeMessage(queueName, popReceipt),
+      searchRecords: (projectId, tagFilter) => storage.searchRecords(projectId, tagFilter)
     };
   }
 
@@ -139,7 +147,7 @@ export class RecordDraftStore {
     return { username: user.username, record: await this.renderRecordData(projectId, recordId, data) };
   }
 
-  async saveDraft(projectId: string, recordId: string): Promise<RecordSaveResult> {
+  async saveDraft(projectId: string, recordId: string, action: 'saved' | 'reviewed' = 'saved'): Promise<RecordSaveResult> {
     const key = this.key(projectId, recordId);
     const draft = this.drafts.get(key);
     if (!draft) {
@@ -147,6 +155,7 @@ export class RecordDraftStore {
     }
     const data = cloneJson(draft.data);
     const reconciled = await this.getStorage().reconcileRecordTags(projectId, data);
+    await this.appendHistory(projectId, reconciled.data, action);
     const record = await this.requireDraftCapableStorage().writeRecordDataIfUnchanged(projectId, recordId, reconciled.data, draft.baseData);
     this.drafts.delete(key);
     this.loadedRecords.set(key, cloneJson(reconciled.data));
@@ -210,6 +219,24 @@ export class RecordDraftStore {
     });
   }
 
+  private async appendHistory(projectId: string, data: unknown, action: 'saved' | 'reviewed'): Promise<void> {
+    if (!isPlainRecord(data)) {
+      throw new Error('Record history can only be added to object records.');
+    }
+    const user = await this.getStorage().getProjectUser(projectId);
+    if (!user.valid || !user.username) {
+      throw new Error(user.validationMessage);
+    }
+    const currentHistory = data._history;
+    if (currentHistory !== undefined && !Array.isArray(currentHistory)) {
+      throw new Error('Record _history must be an array.');
+    }
+    data._history = [
+      ...(Array.isArray(currentHistory) ? currentHistory : []),
+      { username: user.username, timestamp: new Date().toISOString(), action }
+    ];
+  }
+
   private async activateLease(projectId: string, recordId: string): Promise<void> {
     const key = this.key(projectId, recordId);
     if (this.activeLeaseKey === key) {
@@ -249,7 +276,7 @@ export class RecordDraftStore {
 }
 
 const feedbackProperties = (record: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(record).filter(([key]) => key.startsWith('_feedback')));
+  Object.fromEntries(Object.entries(record).filter(([key]) => key.startsWith('_feedback') || key === '_history'));
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 

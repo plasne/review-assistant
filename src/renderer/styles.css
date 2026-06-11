@@ -107,21 +107,36 @@ section:focus-visible,
   gap: 0.5rem;
 }
 
+.project-picker > span,
+.queue-consumer .queue-consumer-label {
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
 .create-project-button,
 .secondary-button,
 .github-login-button {
-  background: var(--success);
-  border: 1px solid color-mix(in srgb, var(--success) 60%, var(--text));
+  background: var(--surface-2);
+  border: 1px solid color-mix(in srgb, var(--border) 65%, var(--text-dim));
   border-radius: 0.375rem;
-  color: var(--success-text);
+  color: var(--text);
   cursor: pointer;
   padding: 0.5rem 0.75rem;
 }
 
-.secondary-button {
-  background: var(--surface-2);
-  border-color: color-mix(in srgb, var(--border) 65%, var(--text-dim));
-  color: var(--text);
+.create-project-button:not(:disabled):hover,
+.create-project-button:not(:disabled):focus-visible,
+.secondary-button:not(:disabled):hover,
+.secondary-button:not(:disabled):focus-visible,
+.github-login-button:not(:disabled):hover,
+.github-login-button:not(:disabled):focus-visible,
+.create-record-button:not(:disabled):hover,
+.create-record-button:not(:disabled):focus-visible,
+.refresh-records-button:not(:disabled):hover,
+.refresh-records-button:not(:disabled):focus-visible {
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
 }
 
 .github-login-button {
@@ -142,6 +157,13 @@ section:focus-visible,
 .header-action-button {
   font-size: 0.8125rem;
   padding: 0.375rem 0.625rem;
+}
+
+.header-separator {
+  color: color-mix(in srgb, var(--text-dim) 70%, transparent);
+  font-size: 1.25rem;
+  line-height: 1;
+  margin: 0 -0.25rem;
 }
 
 .modal-backdrop {
@@ -194,8 +216,14 @@ section:focus-visible,
 }
 
 .project-picker select,
+.queue-consumer select,
 .new-project-form input,
 .new-record-form input,
+.queue-controls-form input,
+.queue-add-work input,
+.queue-add-work select,
+.queue-add-work textarea,
+.queue-list select,
 .chat-form textarea {
   background: var(--bg-2);
   border: 1px solid color-mix(in srgb, var(--border) 65%, var(--text-dim));
@@ -206,6 +234,39 @@ section:focus-visible,
 
 .header-spacer {
   flex: 1;
+}
+
+.queue-consumer {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.queue-get-button {
+  color: var(--text);
+}
+
+.queue-consumer label,
+.queue-list label,
+.queue-controls-form label,
+.queue-add-work label,
+.queue-tag-filter label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.queue-consumer label {
+  align-items: center;
+  grid-auto-flow: column;
+}
+
+.queue-consumer span,
+.queue-list span,
+.queue-controls-form span,
+.queue-add-work span,
+.queue-tag-filter span {
+  color: var(--text-dim);
+  font-size: 0.8125rem;
 }
 
 .modal-backdrop {
@@ -243,6 +304,186 @@ section:focus-visible,
   max-width: 76rem;
   overflow: auto;
   width: min(76rem, calc(100vw - 2rem));
+}
+
+.queue-manager-modal {
+  display: grid;
+  gap: 1rem;
+  max-height: calc(100vh - 2rem);
+  max-width: 72rem;
+  overflow: auto;
+  width: min(72rem, calc(100vw - 2rem));
+}
+
+.queue-manager-header,
+.queue-section-heading,
+.queue-list,
+.queue-controls-form {
+  align-items: end;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.queue-manager-header {
+  align-items: start;
+}
+
+.queue-manager-header h2,
+.queue-manager-header p,
+.queue-manager-section h3,
+.queue-section-heading h3 {
+  margin: 0;
+}
+
+.queue-manager-section {
+  background: color-mix(in srgb, var(--surface-2) 35%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--border) 70%, var(--text-dim));
+  border-radius: 0.75rem;
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.queue-manager-section-compact {
+  gap: 0.75rem;
+}
+
+.queue-controls-form {
+  grid-template-columns: minmax(18rem, 1fr) minmax(14rem, 0.7fr) auto;
+}
+
+.queue-list {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.queue-list .empty {
+  align-self: center;
+  margin: 0;
+}
+
+.queue-success {
+  color: color-mix(in srgb, var(--success) 30%, var(--text));
+  margin: 0;
+}
+
+.queue-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.queue-delete-button {
+  border-color: color-mix(in srgb, var(--border) 65%, var(--text-dim));
+}
+
+.queue-add-work {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.queue-tag-filter {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+}
+
+.queue-tag-filter-count {
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.queue-tag-filter-option {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  gap: 0.65rem;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.queue-tag-filter-option:hover .queue-tag-filter-name,
+.queue-tag-filter-option:focus-visible .queue-tag-filter-name {
+  color: var(--accent-2);
+}
+
+.queue-tag-filter-box {
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--text) 80%, var(--border));
+  color: var(--text);
+  display: inline-flex;
+  font-size: 1.25rem;
+  height: 1.75rem;
+  justify-content: center;
+  line-height: 1;
+  width: 1.75rem;
+}
+
+.queue-tag-filter-option[data-state="include"] .queue-tag-filter-box,
+.queue-tag-filter-option[data-state="exclude"] .queue-tag-filter-box {
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+.queue-tag-filter-name {
+  color: var(--text);
+  font-size: 1rem;
+  white-space: nowrap;
+}
+
+.queue-tag-filter-apply {
+  margin-left: auto;
+}
+
+.queue-search-results {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.queue-search-results h4,
+.queue-search-results p {
+  margin: 0;
+}
+
+.queue-search-result-names {
+  line-height: 1.5;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.queue-sample-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.queue-sample-actions input {
+  max-width: 5rem;
+  text-align: right;
+}
+
+.queue-instructions {
+  align-items: start;
+  background: color-mix(in srgb, var(--accent-2) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent-2) 60%, var(--border));
+  border-radius: 0.75rem;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+}
+
+.queue-instructions p {
+  margin: 0;
+  white-space: pre-wrap;
 }
 
 .theme-manager-header,
@@ -666,12 +907,6 @@ h3 {
   font-size: 0.8125rem;
   justify-content: center;
   padding: 0.375rem 0.625rem;
-}
-
-.create-record-button {
-  background: var(--success);
-  border-color: color-mix(in srgb, var(--success) 60%, var(--text));
-  color: var(--success-text);
 }
 
 .action-icon-button {
@@ -1575,9 +1810,7 @@ pre {
 }
 
 .chat-login-actions {
-  border-right: 1px solid var(--border);
   flex-shrink: 0;
-  padding-right: 0.75rem;
 }
 
 .chat-login-actions .chat-login-button {
