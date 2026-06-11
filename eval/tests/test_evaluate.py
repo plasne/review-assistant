@@ -18,6 +18,7 @@ from eval.evaluate import (
     evaluation_blob_name,
     experiment_catalog_api_base_url,
     experiment_catalog_metrics,
+    force_ground_truth_local_path,
     list_experiment_catalog_sets,
     next_experiment_catalog_set,
     next_suffixed_set_name,
@@ -132,6 +133,16 @@ class EvaluateMetricsTests(unittest.TestCase):
         self.assertEqual(unquote_env_value('"container"'), "container")
         self.assertEqual(unquote_env_value("'container'"), "container")
         self.assertEqual(unquote_env_value("container"), "container")
+
+    def test_evaluation_forces_local_path_to_ground_truth_folder(self):
+        previous_cwd = Path.cwd()
+        try:
+            with patch.dict(os.environ, {"LOCAL_PATH": "/elsewhere"}, clear=True):
+                force_ground_truth_local_path()
+
+                self.assertEqual(os.environ["LOCAL_PATH"], str((previous_cwd / "ground-truth").resolve()))
+        finally:
+            os.chdir(previous_cwd)
 
     def test_evaluation_progress_logs_to_stderr(self):
         stderr = io.StringIO()
@@ -474,6 +485,77 @@ class EvaluateMetricsTests(unittest.TestCase):
                 "inference_fact_count": 2,
             },
         )
+
+    def test_generation_metrics_ignores_inference_fact_ids_on_missing_comparisons(self):
+        class StubbornFactJudge:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, _expected_answer, _actual_answer):
+                self.calls += 1
+                return missing_with_inference_ids_judge_output()
+
+        fact_judge = StubbornFactJudge()
+        metrics = generation_metrics_for_answers("expected", "actual", fact_judge=fact_judge)
+
+        self.assertEqual(fact_judge.calls, 3)
+        self.assertEqual(metrics["generation_accuracy"]["score"], 0.0)
+        self.assertEqual(metrics["generation_recall"]["supported_ground_truth_fact_count"], 0)
+        self.assertEqual(metrics["generation_precision"]["supported_inference_fact_count"], 0)
+        self.assertEqual(metrics["generation_accuracy"]["ground_truth_facts"][0]["supported_by_inference"], False)
+        self.assertEqual(metrics["generation_accuracy"]["inference_facts"][0]["supported_by_ground_truth"], False)
+
+    def test_generation_metrics_retries_invalid_judge_json(self):
+        class RetryingFactJudge:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, _expected_answer, _actual_answer):
+                self.calls += 1
+                if self.calls == 1:
+                    raise ValueError("Fact judge response content is invalid JSON: Expecting value: line 1 column 1 (char 0)")
+                return equivalent_fact_judge(_expected_answer, _actual_answer)
+
+        fact_judge = RetryingFactJudge()
+        metrics = generation_metrics_for_answers("expected", "actual", fact_judge=fact_judge)
+
+        self.assertEqual(fact_judge.calls, 2)
+        self.assertEqual(metrics["generation_accuracy"]["score"], 1.0)
+
+    def test_generation_metrics_retries_missing_comparison_links_before_normalizing(self):
+        class RepairingFactJudge:
+            def __init__(self):
+                self.calls = 0
+                self.feedback = []
+
+            def __call__(self, _expected_answer, _actual_answer):
+                self.calls += 1
+                return missing_with_inference_ids_judge_output()
+
+            def judge_with_feedback(self, _expected_answer, _actual_answer, retry_feedback):
+                self.feedback.append(retry_feedback)
+                return {
+                    "schema_version": "review-assistant.fact-judge.v1",
+                    "ground_truth_facts": [{"id": "gt-1", "fact": "Hunters must use train tickets for rail movement."}],
+                    "inference_facts": [{"id": "inf-1", "fact": "Hunters must use train tickets for rail movement."}],
+                    "comparisons": [
+                        {
+                            "ground_truth_fact_id": "gt-1",
+                            "inference_fact_ids": ["inf-1"],
+                            "label": "equivalent",
+                            "rationale": "The retry corrected the label to match the referenced fact.",
+                        }
+                    ],
+                }
+
+        fact_judge = RepairingFactJudge()
+        metrics = generation_metrics_for_answers("expected", "actual", fact_judge=fact_judge)
+
+        self.assertEqual(fact_judge.calls, 1)
+        self.assertEqual(len(fact_judge.feedback), 1)
+        self.assertIn("must not include inference_fact_ids for missing facts", fact_judge.feedback[0])
+        self.assertEqual(metrics["generation_accuracy"]["score"], 1.0)
+        self.assertEqual(metrics["generation_precision"]["supported_inference_fact_count"], 1)
 
     def test_generation_metrics_reject_incomplete_judge_output(self):
         def fact_judge(_expected_answer, _actual_answer):
@@ -1322,6 +1404,22 @@ def equivalent_fact_judge(_expected_answer, _actual_answer):
                 "inference_fact_ids": ["inf-1"],
                 "label": "equivalent",
                 "rationale": "The statements are identical.",
+            }
+        ],
+    }
+
+
+def missing_with_inference_ids_judge_output():
+    return {
+        "schema_version": "review-assistant.fact-judge.v1",
+        "ground_truth_facts": [{"id": "gt-1", "fact": "Hunters must use train tickets for rail movement."}],
+        "inference_facts": [{"id": "inf-1", "fact": "Hunters move by road, rail, and sea."}],
+        "comparisons": [
+            {
+                "ground_truth_fact_id": "gt-1",
+                "inference_fact_ids": ["inf-1"],
+                "label": "missing",
+                "rationale": "The inference does not mention train tickets.",
             }
         ],
     }

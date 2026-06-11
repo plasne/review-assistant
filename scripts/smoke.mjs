@@ -12,16 +12,16 @@ if (!main.includes('contextIsolation') || !main.includes('nodeIntegration') || !
   throw new Error('Smoke check failed: secure Electron webPreferences are missing from built main bundle.');
 }
 
-const mainChannels = extractChannels(main, /handle\(\s*"([^"]+)"/g);
-const preloadChannels = extractChannels(preload, /invoke\("([^"]+)"/g);
+const mainChannels = extractChannels(main, /handle\(\s*["']([^"']+)["']/g);
+const preloadChannels = extractChannels(preload, /invoke\(\s*["']([^"']+)["']/g);
 const missingHandlers = [...preloadChannels].filter((channel) => !mainChannels.has(channel));
 
 if (missingHandlers.length > 0) {
   throw new Error(`Smoke check failed: missing ipcMain handlers for ${missingHandlers.join(', ')}.`);
 }
 
-const mainEvents = extractChannels(main, /send\(\s*"([^"]+)"/g);
-const preloadEvents = unionChannels(extractChannels(preload, /on\(\s*"([^"]+)"/g), extractChannels(preload, /onEvent\(\s*"([^"]+)"/g));
+const mainEvents = extractChannels(main, /send\(\s*["']([^"']+)["']/g);
+const preloadEvents = unionChannels(extractChannels(preload, /on\(\s*["']([^"']+)["']/g), extractChannels(preload, /onEvent\(\s*["']([^"']+)["']/g));
 const missingEventSenders = [...preloadEvents].filter((channel) => !mainEvents.has(channel));
 const missingEventBridges = [...mainEvents].filter((channel) => !preloadEvents.has(channel));
 

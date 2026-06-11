@@ -123,6 +123,8 @@ Streaming is always enabled and is not configurable.
 
 ## Evaluation judge settings
 
+For `npm run inference` and `npm run evaluation`, the repository `ground-truth/` folder is treated as `LOCAL_PATH` for app/project configs and local tools. Inference and evaluation artifacts still read from and write to the blob storage configured in `ground-truth/config/.env` via `INFERENCE_CONTAINER`.
+
 `npm run evaluation` uses the Python evaluator and the native GitHub Copilot Python SDK to extract comparable facts and score material equivalence. Set Copilot authentication and optional model settings in `ground-truth/config/.env` or the shell before running evaluation:
 
 ```bash

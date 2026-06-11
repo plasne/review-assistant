@@ -1,5 +1,7 @@
 import path from 'node:path';
-import { loadAppConfig } from './env';
+import { logInfo } from '../shared/logging';
+import type { AppConfig } from '../shared/types';
+import { parseAgentSettings, readEnvFile, redactConfig, selectBackend } from './env';
 import { AzureInferenceArtifactWriter, runInference } from './inference';
 
 export const getInferenceAppEnvPath = (repoRoot: string): string =>
@@ -29,9 +31,33 @@ export const resolveInferenceIterations = (
   envValues: Record<string, string | undefined> = process.env
 ): number => parseIterations(envValues.ITERATIONS ?? configValues.ITERATIONS);
 
+export const getInferenceLocalPath = (repoRoot: string): string =>
+  path.join(repoRoot, 'ground-truth');
+
+export const resolveInferenceCliConfig = (repoRoot: string): AppConfig => {
+  const appEnvPath = getInferenceAppEnvPath(repoRoot);
+  const values = {
+    ...readEnvFile(appEnvPath),
+    LOCAL_PATH: getInferenceLocalPath(repoRoot)
+  };
+  const backendKind = selectBackend(values);
+  const config: AppConfig = {
+    backendKind,
+    values,
+    appEnvPath,
+    agentSettings: parseAgentSettings(values)
+  };
+  logInfo('review-assistant.config', {
+    source: appEnvPath,
+    backendKind,
+    values: redactConfig(values)
+  });
+  return config;
+};
+
 const main = async (): Promise<void> => {
   const repoRoot = path.resolve(__dirname, '../..');
-  const config = loadAppConfig(getInferenceAppEnvPath(repoRoot));
+  const config = resolveInferenceCliConfig(repoRoot);
   const runFolder = String(Date.now());
   const iterations = resolveInferenceIterations(config.values);
   const containerName = requireConfigValue(config.values, 'INFERENCE_CONTAINER');

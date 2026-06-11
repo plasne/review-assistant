@@ -8,7 +8,11 @@
     },
     "bucket": {
       "type": "string",
-      "enum": ["TPM", "developer", "SME"],
+      "enum": [
+        "TPM",
+        "developer",
+        "SME"
+      ],
       "description": "Bucket categorizing the record for organizational purposes."
     },
     "question": {
@@ -37,7 +41,12 @@
             "type": "number"
           }
         },
-        "required": ["id", "title", "url", "excerpt"],
+        "required": [
+          "id",
+          "title",
+          "url",
+          "excerpt"
+        ],
         "additionalProperties": false
       }
     },
@@ -46,6 +55,12 @@
       "description": "The answer supported by the evidence."
     }
   },
-  "required": ["id", "bucket", "question", "evidence", "answer"],
+  "required": [
+    "id",
+    "bucket",
+    "question",
+    "evidence",
+    "answer"
+  ],
   "additionalProperties": false
 }

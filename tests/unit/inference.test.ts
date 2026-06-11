@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { getInferenceAppEnvPath, resolveInferenceIterations } from '../../src/main/inference-cli';
+import { getInferenceAppEnvPath, getInferenceLocalPath, resolveInferenceCliConfig, resolveInferenceIterations } from '../../src/main/inference-cli';
 import {
   caseArtifactPath,
   createInferenceAgent,
@@ -60,6 +60,35 @@ describe('inference CLI config', () => {
     const repoRoot = await createTempRepo();
 
     expect(getInferenceAppEnvPath(repoRoot)).toBe(path.join(repoRoot, 'ground-truth', 'config', '.env'));
+  });
+
+  it('treats ground-truth as LOCAL_PATH while preserving Azure output config', async () => {
+    const repoRoot = await createTempRepo();
+    await fs.writeFile(
+      path.join(repoRoot, 'ground-truth', 'config', '.env'),
+      [
+        'AZURE_STORAGE_ACCOUNT_NAME=account',
+        'INFERENCE_CONTAINER=inference-output',
+        'AGENT_MODEL=gpt-5.4-mini',
+        'ITERATIONS=2'
+      ].join('\n')
+    );
+
+    const config = resolveInferenceCliConfig(repoRoot);
+
+    expect(getInferenceLocalPath(repoRoot)).toBe(path.join(repoRoot, 'ground-truth'));
+    expect(config).toMatchObject({
+      backendKind: 'azure-default-credential',
+      appEnvPath: path.join(repoRoot, 'ground-truth', 'config', '.env'),
+      values: {
+        AZURE_STORAGE_ACCOUNT_NAME: 'account',
+        INFERENCE_CONTAINER: 'inference-output',
+        AGENT_MODEL: 'gpt-5.4-mini',
+        ITERATIONS: '2',
+        LOCAL_PATH: path.join(repoRoot, 'ground-truth')
+      },
+      agentSettings: { model: 'gpt-5.4-mini' }
+    });
   });
 
   it('passes inference config values into the default agent environment and agent settings', () => {

@@ -21,7 +21,7 @@
         "title": "Hunter movement by road, rail, and sea",
         "url": "fury-of-dracula-4e://rules/hunter-movement",
         "excerpt": "A hunter move action changes the hunter location by road, rail, or sea. Road movement moves along one connected road route to an adjacent city. Rail movement requires spending a train ticket and following the ticket result to determine how far the hunter may travel along connected rail routes; rail is useful for long repositioning but depends on tickets and legal rail connections. A hunter can reserve a ticket as a separate action by drawing ticket options and keeping a legal ticket according to the rules. Sea movement lets a hunter move between a port and an adjacent sea zone, or between connected sea zones, and usually causes damage or risk because hunters are vulnerable while traveling by sea. Hunters at sea have limited action options and often must keep moving until they return to land. Movement can trigger encounters, reveal information, or force combat if the hunter enters Dracula location or a space containing an encounter token.",
-        "score": 0.0
+        "score": 0
       }
     ],
     "answer": "Hunters move by road, rail, or sea: road moves to an adjacent city, rail spends train tickets for variable-distance rail travel, and sea travel moves through ports and sea zones with added risk and limited options while at sea."
@@ -31,5 +31,9 @@
     "answer_path": "/answer",
     "evidence_key": "url"
   },
-  "tags": ["turns:single", "mapped:true", "state:new-question"]
+  "tags": [
+    "turns:single",
+    "mapped:true",
+    "state:new-question"
+  ]
 }

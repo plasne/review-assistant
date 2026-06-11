@@ -40,6 +40,7 @@ Long-running chat and tool workflows should also include:
 | `review-assistant.config` | App-level config source, selected backend, and redacted values. |
 | `review-assistant.project-config` | Project-level config merge with secrets redacted. |
 | `review-assistant.config-error` | Startup configuration failures that block project browsing. |
+| `review-assistant.storage-lease-renewal-failed` | Azure Blob Storage record lease renewal failed, including `projectId`, `recordId`, and a safe error message. |
 | `review-assistant.chat-start-context` | Main-process chat context assembly summary. |
 | `review-assistant.agent-request-started` | Agent runtime accepted a chat request. |
 | `review-assistant.agent-request-completed` | Agent runtime completed a chat request. |

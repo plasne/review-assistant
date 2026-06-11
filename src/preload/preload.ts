@@ -24,14 +24,22 @@ import {
   assertChatStreamError,
   assertChatStreamStart,
   assertContinueWithGitHubResult,
+  assertDequeueResult,
   assertFeedbackConfig,
   assertFeedbackSubmissionInput,
   assertFeedbackSubmissionResult,
   assertGitHubLoginCompletion,
   assertProjectUser,
+  assertQueueInfos,
+  assertQueueMessage,
+  assertQueueName,
   assertTheme,
   assertThemeId,
-  assertThemeState
+  assertThemeState,
+  assertRecordSaveOptions,
+  assertRecordSummaries,
+  assertTagFilter,
+  assertTagNameArray
 } from '../shared/validators';
 
 const invoke = async <T>(channel: string, validator: (value: unknown) => T, ...args: unknown[]): Promise<T> =>
@@ -50,6 +58,7 @@ const api: Api = {
   listProjects: () => invoke('projects:list', assertProjectSummaries),
   createProject: (projectId) => invoke('projects:create', assertProjectSummary, assertNewProjectId(projectId)),
   openProject: (projectId) => invoke('projects:open', assertOpenProjectResult, assertProjectId(projectId)),
+  listProjectTags: (projectId) => invoke('projects:listTags', assertTagNameArray, assertProjectId(projectId)),
   createRecordDraft: (projectId, recordId) =>
     invoke('records:createDraft', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId)),
   getRecord: (projectId, recordId) => invoke('records:get', assertRecordDetail, assertProjectId(projectId), assertRecordId(recordId)),
@@ -59,10 +68,26 @@ const api: Api = {
     invoke('records:computeTags', assertRecordSaveResult, assertProjectId(projectId), assertRecordId(recordId)),
   getRecordDraftStatus: (projectId, recordId) =>
     invoke('records:getDraftStatus', assertRecordDraftStatus, assertProjectId(projectId), assertRecordId(recordId)),
-  saveRecordChanges: (projectId, recordId) =>
-    invoke('records:saveChanges', assertRecordSaveResult, assertProjectId(projectId), assertRecordId(recordId)),
+  saveRecordChanges: (projectId, recordId, options) =>
+    invoke('records:saveChanges', assertRecordSaveResult, assertProjectId(projectId), assertRecordId(recordId), assertRecordSaveOptions(options)),
   discardRecordChanges: (projectId, recordId) =>
     invoke('records:discardChanges', assertRecordDraftStatus, assertProjectId(projectId), assertRecordId(recordId)),
+  queue: {
+    listQueues: () => invoke('queue:listQueues', assertQueueInfos),
+    createQueue: (queueName) => invoke('queue:createQueue', (value) => assertQueueInfos([value])[0], assertQueueName(queueName)),
+    deleteQueue: async (queueName) => {
+      await ipcRenderer.invoke('queue:deleteQueue', assertQueueName(queueName));
+    },
+    clearQueue: async (queueName) => {
+      await ipcRenderer.invoke('queue:clearQueue', assertQueueName(queueName));
+    },
+    searchRecords: (projectId, tagFilter) =>
+      invoke('queue:searchRecords', assertRecordSummaries, assertProjectId(projectId), assertTagFilter(tagFilter)),
+    enqueueMessage: async (queueName, message) => {
+      await ipcRenderer.invoke('queue:enqueueMessage', assertQueueName(queueName), assertQueueMessage(message));
+    },
+    dequeueMessage: (queueName) => invoke('queue:dequeueMessage', assertDequeueResult, assertQueueName(queueName))
+  },
   getFeedbackConfig: (projectId) => invoke('feedback:getConfig', assertFeedbackConfig, assertProjectId(projectId)),
   saveFeedbackConfig: (projectId, config) => invoke('feedback:saveConfig', assertFeedbackConfig, assertProjectId(projectId), assertFeedbackConfig(config)),
   getThemeState: () => invoke('theme:getState', assertThemeState),

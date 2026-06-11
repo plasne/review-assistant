@@ -1,10 +1,12 @@
 import { BlobServiceClient } from '@azure/storage-blob';
+import { QueueServiceClient } from '@azure/storage-queue';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RecordDraftStore } from '../../src/main/drafts';
 import { AzureBlobStorageAdapter, RECORD_DRAFT_CONFLICT_MESSAGE } from '../../src/main/storage';
 
 const connectionString = 'UseDevelopmentStorage=true';
 const client = BlobServiceClient.fromConnectionString(connectionString);
+const queueServiceClient = QueueServiceClient.fromConnectionString(connectionString);
 
 describe('azure blob storage adapter with Azurite', () => {
   let containerName: string;
@@ -17,7 +19,8 @@ describe('azure blob storage adapter with Azurite', () => {
       appEnvPath: '/unused/config/.env',
       values: {
         AZURE_STORAGE_ACCOUNT_CONNSTRING: connectionString,
-        AZURE_STORAGE_CONTAINER: containerName
+        AZURE_STORAGE_CONTAINER: containerName,
+        USERNAME: 'sme@example.com'
       }
     });
     await client.getContainerClient(containerName).create();
@@ -101,6 +104,45 @@ describe('azure blob storage adapter with Azurite', () => {
     expect(updated.feedbackHistory?.['/answer'].comments[0]).toMatchObject({ value: 'Clear', username: 'project@example.com' });
   });
 
+  it('creates queues, searches tagged records, and completes dequeued messages', async () => {
+    await adapter.createProject('queue-project');
+    await uploadText(
+      'queue-project/config/config.json',
+      JSON.stringify({
+        properties: {
+          '/tags': {
+            path: '/tags',
+            target: 'Tags',
+            tab: 'Main',
+            feedback: 'none',
+            comments: false,
+            mapping: 'tags',
+            presentation: 'tags'
+          }
+        }
+      })
+    );
+    await uploadText('queue-project/record-1.json', '{"answer":"One","tags":["needs-review","complex-query"]}\n');
+    await uploadText('queue-project/record-2.json', '{"answer":"Two","tags":["approved","multi-turn"]}\n');
+    const queueName = `raqueue${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+
+    await expect(adapter.createQueue(queueName)).resolves.toMatchObject({ name: queueName, messageCount: 0 });
+    await expect(adapter.listProjectTags('queue-project')).resolves.toEqual(['approved', 'complex-query', 'multi-turn', 'needs-review']);
+    await expect(adapter.searchRecords('queue-project', { included: ['needs-review'], excluded: [] })).resolves.toEqual([
+      { id: 'record-1', displayName: 'record-1' }
+    ]);
+    await adapter.enqueueMessage(queueName, { project: 'queue-project', filename: 'record-1', instructions: 'Check evidence.' });
+
+    const dequeued = await adapter.dequeueMessage(queueName);
+    expect(dequeued).toMatchObject({
+      message: { project: 'queue-project', filename: 'record-1', instructions: 'Check evidence.' }
+    });
+    expect(dequeued?.popReceipt).toEqual(expect.any(String));
+    await adapter.completeMessage(queueName, dequeued?.popReceipt ?? '');
+    await expect(adapter.dequeueMessage(queueName)).resolves.toBeNull();
+    await queueServiceClient.getQueueClient(queueName).deleteIfExists();
+  });
+
   it('uses blob conditions for new draft creates and rotates schema backups', async () => {
     await adapter.createProject('draft-project');
     await expect(adapter.createProject('draft-project')).rejects.toThrow('Project already exists: draft-project');
@@ -141,11 +183,59 @@ describe('azure blob storage adapter with Azurite', () => {
     await expect(drafts.getRecord('etag-project', 'record-1')).resolves.toMatchObject({
       data: { answer: 'Loaded' }
     });
+    await adapter.releaseExclusiveLease('etag-project', 'record-1');
     await uploadText('etag-project/record-1.json', '{"answer":"Blob edit"}\n');
     await drafts.updateRecord('etag-project', 'record-1', { answer: 'Local edit' });
 
     await expect(drafts.saveDraft('etag-project', 'record-1')).rejects.toThrow(RECORD_DRAFT_CONFLICT_MESSAGE);
     await expect(downloadJson('etag-project/record-1.json')).resolves.toEqual({ answer: 'Blob edit' });
+  });
+
+  it('obtains an Azure blob lease, blocks competing leases, and releases it', async () => {
+    await adapter.createProject('lease-project');
+    await uploadText('lease-project/record-1.json', '{"answer":"Unlocked"}\n');
+    const competingAdapter = new AzureBlobStorageAdapter({
+      backendKind: 'azure-connection-string',
+      appEnvPath: '/unused/config/.env',
+      values: {
+        AZURE_STORAGE_ACCOUNT_CONNSTRING: connectionString,
+        AZURE_STORAGE_CONTAINER: containerName
+      }
+    });
+
+    await expect(adapter.obtainExclusiveLease('lease-project', 'record-1')).resolves.toEqual({ status: 'SUCCESS' });
+    await expect(competingAdapter.obtainExclusiveLease('lease-project', 'record-1')).resolves.toEqual({ status: 'FAILURE' });
+    await expect(adapter.writeRecordData('lease-project', 'record-1', { answer: 'Holder update' })).resolves.toMatchObject({
+      data: { answer: 'Holder update' }
+    });
+
+    await adapter.releaseExclusiveLease('lease-project', 'record-1');
+
+    await expect(competingAdapter.obtainExclusiveLease('lease-project', 'record-1')).resolves.toEqual({ status: 'SUCCESS' });
+    await competingAdapter.releaseExclusiveLease('lease-project', 'record-1');
+  });
+
+  it('releases the current Azure blob lease when the draft store opens another record', async () => {
+    await adapter.createProject('lease-switch-project');
+    await uploadText('lease-switch-project/record-1.json', '{"answer":"One"}\n');
+    await uploadText('lease-switch-project/record-2.json', '{"answer":"Two"}\n');
+    const drafts = new RecordDraftStore(() => adapter);
+    const competingAdapter = new AzureBlobStorageAdapter({
+      backendKind: 'azure-connection-string',
+      appEnvPath: '/unused/config/.env',
+      values: {
+        AZURE_STORAGE_ACCOUNT_CONNSTRING: connectionString,
+        AZURE_STORAGE_CONTAINER: containerName
+      }
+    });
+
+    await drafts.getRecord('lease-switch-project', 'record-1');
+    await expect(competingAdapter.obtainExclusiveLease('lease-switch-project', 'record-1')).resolves.toEqual({ status: 'FAILURE' });
+    await drafts.getRecord('lease-switch-project', 'record-2');
+
+    await expect(competingAdapter.obtainExclusiveLease('lease-switch-project', 'record-1')).resolves.toEqual({ status: 'SUCCESS' });
+    await competingAdapter.releaseExclusiveLease('lease-switch-project', 'record-1');
+    await drafts.releaseAll();
   });
 
   it('rejects a stale draft when a blob changes and later returns to the loaded content', async () => {
@@ -156,6 +246,7 @@ describe('azure blob storage adapter with Azurite', () => {
     await expect(drafts.getRecord('etag-roundtrip-project', 'record-1')).resolves.toMatchObject({
       data: { answer: 'Loaded' }
     });
+    await adapter.releaseExclusiveLease('etag-roundtrip-project', 'record-1');
     await uploadText('etag-roundtrip-project/record-1.json', '{"answer":"Blob edit"}\n');
     await uploadText('etag-roundtrip-project/record-1.json', '{"answer":"Loaded"}\n');
     await drafts.updateRecord('etag-roundtrip-project', 'record-1', { answer: 'Local edit' });

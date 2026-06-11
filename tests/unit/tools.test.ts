@@ -23,13 +23,23 @@ const storage: StorageAdapter = {
   getProjectMcpConfig: async () => undefined,
   getTagDefinitions: async () => [],
   reconcileRecordTags: async (_projectId, data) => ({ data, pluginErrors: [] }),
+  obtainExclusiveLease: async () => ({ status: 'NOT_SUPPORTED' }),
+  releaseExclusiveLease: async () => undefined,
+  listQueues: async () => [],
+  createQueue: async (queueName) => ({ name: queueName, messageCount: 0 }),
+  deleteQueue: async () => undefined,
+  clearQueue: async () => undefined,
+  enqueueMessage: async () => undefined,
+  dequeueMessage: async () => null,
+  completeMessage: async () => undefined,
+  searchRecords: async () => [],
   getRecord: async (projectId, recordId) => ({
     projectId,
     recordId,
     displayName: recordId,
     data: {
       question: 'How do I run the harness?',
-      question_feedback: [{ value: 'good', username: 'sme@example.com', timestamp: '2026-06-01T14:32:15.000Z' }]
+      _feedback_question: [{ value: 'good', username: 'sme@example.com', timestamp: '2026-06-01T14:32:15.000Z' }]
     },
     schema: { type: 'object' },
     validationIssues: [],

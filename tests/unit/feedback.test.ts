@@ -177,7 +177,7 @@ describe('feedback helpers', () => {
     );
 
     expect(record.tags).toEqual(['intent:greetings', 'source:sme']);
-    expect(record.tags_feedback).toMatchObject([{ original: '[]' }, { edit: 'intent:greetings\nsource:sme', username: 'alice@example.com' }]);
+    expect(record._feedback_tags).toMatchObject([{ original: '[]' }, { edit: 'intent:greetings\nsource:sme', username: 'alice@example.com' }]);
   });
 
   it('validates USERNAME and creates attributed timestamped entries', () => {
@@ -194,7 +194,7 @@ describe('feedback helpers', () => {
     const record: Record<string, unknown> = {
       question: 'What?',
       answer: 'Answer',
-      nested: { answer_feedback: [{ feedback: 'bad', username: 'sme@example.com', timestamp: '2026-06-01T14:32:15.000Z' }] }
+      nested: { _feedback_answer: [{ feedback: 'bad', username: 'sme@example.com', timestamp: '2026-06-01T14:32:15.000Z' }] }
     };
     mergeFeedbackEntries(
       record,
@@ -203,12 +203,10 @@ describe('feedback helpers', () => {
       new Date('2026-06-01T15:00:00.000Z')
     );
 
-    expect(record.answer_feedback).toMatchObject([
+    expect(record._feedback_answer).toMatchObject([
       { original: 'Answer' },
       { feedback: 'good', comment: 'Useful', edit: 'Better answer', username: 'alice@example.com' }
     ]);
-    expect(record.answer_comments).toBeUndefined();
-    expect(record.answer_edits).toBeUndefined();
     expect(stripFeedbackProperties(record)).toEqual({ question: 'What?', answer: 'Better answer', nested: {} });
     const history = extractFeedbackHistory(record, [{ path: '/answer', target: 'Answer', tab: 'Main', editMode: 'none' }]);
     expect(history['/answer'].original).toBe('Answer');
@@ -223,7 +221,7 @@ describe('feedback helpers', () => {
       new Date('2026-06-01T16:00:00.000Z')
     );
     expect(record.answer).toBe('Best answer');
-    expect(record.answer_feedback).toMatchObject([
+    expect(record._feedback_answer).toMatchObject([
       { original: 'Answer' },
       { feedback: 'good', comment: 'Useful', edit: 'Better answer', username: 'alice@example.com' },
       { edit: 'Best answer', username: 'bob@example.com' }
@@ -233,8 +231,8 @@ describe('feedback helpers', () => {
   it('extracts feedback history for concrete array item paths from wildcard targets', () => {
     const record: Record<string, unknown> = {
       evidence: [{ id: 'doc-1' }],
-      evidence__0_feedback: [{ feedback: 'fair', comment: 'Partially relevant', username: 'alice@example.com', timestamp: '2026-06-01T14:00:00.000Z' }],
-      evidence__0__id_feedback: [{ feedback: 'good', comment: 'Relevant', username: 'alice@example.com', timestamp: '2026-06-01T15:00:00.000Z' }]
+      _feedback_evidence__0: [{ feedback: 'fair', comment: 'Partially relevant', username: 'alice@example.com', timestamp: '2026-06-01T14:00:00.000Z' }],
+      _feedback_evidence__0__id: [{ feedback: 'good', comment: 'Relevant', username: 'alice@example.com', timestamp: '2026-06-01T15:00:00.000Z' }]
     };
 
     const history = extractFeedbackHistory(record, [
@@ -247,11 +245,13 @@ describe('feedback helpers', () => {
     expect(history['/evidence/0/id'].comments[0]).toMatchObject({ value: 'Relevant', username: 'alice@example.com' });
   });
 
-  it('reads legacy split feedback properties', () => {
+  it('reads consolidated feedback property with mixed entry types', () => {
     const record: Record<string, unknown> = {
-      answer_feedback: [{ value: 'good', username: 'alice@example.com', timestamp: '2026-06-01T15:00:00.000Z' }],
-      answer_comments: [{ value: 'Useful', username: 'alice@example.com', timestamp: '2026-06-01T15:01:00.000Z' }],
-      answer_edits: [{ value: 'Better answer', username: 'alice@example.com', timestamp: '2026-06-01T15:02:00.000Z' }]
+      _feedback_answer: [
+        { feedback: 'good', username: 'alice@example.com', timestamp: '2026-06-01T15:00:00.000Z' },
+        { comment: 'Useful', username: 'alice@example.com', timestamp: '2026-06-01T15:01:00.000Z' },
+        { edit: 'Better answer', username: 'alice@example.com', timestamp: '2026-06-01T15:02:00.000Z' }
+      ]
     };
 
     const history = extractFeedbackHistory(record, [{ path: '/answer', target: 'Answer', tab: 'Main', editMode: 'none' }]);

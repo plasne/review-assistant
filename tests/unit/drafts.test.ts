@@ -21,7 +21,11 @@ describe('record draft store', () => {
 
     await drafts.saveDraft('sample-project', 'record-1');
 
-    expect(stored).toEqual({ answer: 'Draft', evidence: [{ id: 'doc-1' }, { id: 'doc-2' }] });
+    expect(stored).toMatchObject({
+      answer: 'Draft',
+      evidence: [{ id: 'doc-1' }, { id: 'doc-2' }],
+      _history: [expect.objectContaining({ username: 'sme@example.com', action: 'saved' })]
+    });
     expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: false });
   });
 
@@ -46,7 +50,7 @@ describe('record draft store', () => {
 
     expect(stored).toMatchObject({
       answer: 'Updated',
-      answer_feedback: expect.arrayContaining([expect.objectContaining({ feedback: 'good', edit: 'Updated', username: 'sme@example.com' })])
+      _feedback_answer: expect.arrayContaining([expect.objectContaining({ feedback: 'good', edit: 'Updated', username: 'sme@example.com' })])
     });
   });
 
@@ -65,7 +69,7 @@ describe('record draft store', () => {
 
     await drafts.saveDraft('sample-project', 'new-record');
 
-    expect(stored).toEqual({});
+    expect(stored).toMatchObject({ _history: [expect.objectContaining({ username: 'sme@example.com', action: 'saved' })] });
     expect(drafts.getStatus('sample-project', 'new-record')).toEqual({ hasUnsavedChanges: false });
   });
 
@@ -83,7 +87,10 @@ describe('record draft store', () => {
     await drafts.updateRecord('sample-project', 'record-1', { tags: ['manual'] });
     const result = await drafts.saveDraft('sample-project', 'record-1');
 
-    expect(stored).toEqual({ tags: ['manual', 'computed'] });
+    expect(stored).toMatchObject({
+      tags: ['manual', 'computed'],
+      _history: [expect.objectContaining({ username: 'sme@example.com', action: 'saved' })]
+    });
     expect(result.record.data).toEqual({ tags: ['manual', 'computed'] });
     expect(result.tagPluginWarning).toContain('Save succeeded, but 1 tag plugin failed.');
   });
@@ -93,6 +100,7 @@ describe('record draft store', () => {
     const storage = createStorage(() => stored, (next) => {
       stored = next;
     });
+
     storage.reconcileRecordTags = async (_projectId, data) => {
       (data as { tags: string[] }).tags.push('computed');
       return { data, pluginErrors: ['broken: boom'] };
@@ -105,6 +113,26 @@ describe('record draft store', () => {
     expect(result.record.data).toEqual({ tags: ['manual', 'computed'] });
     expect(result.tagPluginWarning).toContain('Tags computed, but 1 tag plugin failed.');
     expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: true });
+  });
+
+  it('appends reviewed history for queue-sourced saves without rendering history as record data', async () => {
+    let stored: unknown = { answer: 'Original', _history: [{ username: 'first@example.com', timestamp: '2026-06-01T00:00:00.000Z', action: 'saved' }] };
+    const storage = createStorage(() => stored, (next) => {
+      stored = next;
+    });
+    const drafts = new RecordDraftStore(() => storage);
+
+    await drafts.updateRecord('sample-project', 'record-1', { answer: 'Reviewed' });
+    const result = await drafts.saveDraft('sample-project', 'record-1', 'reviewed');
+
+    expect(stored).toMatchObject({
+      answer: 'Reviewed',
+      _history: [
+        { username: 'first@example.com', timestamp: '2026-06-01T00:00:00.000Z', action: 'saved' },
+        expect.objectContaining({ username: 'sme@example.com', action: 'reviewed' })
+      ]
+    });
+    expect(result.record.data).toEqual({ answer: 'Reviewed' });
   });
 
   it('rejects saving a draft when the persisted record changed after staging', async () => {
@@ -121,14 +149,14 @@ describe('record draft store', () => {
     });
     stored = {
       answer: 'Original',
-      answer_feedback: [{ feedback: 'fair', username: 'other@example.com', timestamp: '2026-06-02T20:00:00.000Z' }]
+      _feedback_answer: [{ feedback: 'fair', username: 'other@example.com', timestamp: '2026-06-02T20:00:00.000Z' }]
     };
 
     await expect(drafts.saveDraft('sample-project', 'record-1')).rejects.toThrow('Record changed after this draft was staged');
 
     expect(stored).toEqual({
       answer: 'Original',
-      answer_feedback: [{ feedback: 'fair', username: 'other@example.com', timestamp: '2026-06-02T20:00:00.000Z' }]
+      _feedback_answer: [{ feedback: 'fair', username: 'other@example.com', timestamp: '2026-06-02T20:00:00.000Z' }]
     });
     expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: true });
   });
@@ -174,6 +202,39 @@ describe('record draft store', () => {
     });
     expect(savedSchema).toEqual(schema);
     expect(drafts.getStatus('sample-project', 'record-1')).toEqual({ hasUnsavedChanges: false });
+  });
+
+  it('releases the active exclusive lease before opening a different record', async () => {
+    const leaseEvents: string[] = [];
+    const storage = createStorage(
+      () => ({ answer: 'Original' }),
+      () => undefined
+    );
+    storage.obtainExclusiveLease = async (_projectId, recordId) => {
+      leaseEvents.push(`obtain:${recordId}`);
+      return { status: 'SUCCESS' };
+    };
+    storage.releaseExclusiveLease = async (_projectId, recordId) => {
+      leaseEvents.push(`release:${recordId}`);
+    };
+    const drafts = new RecordDraftStore(() => storage);
+
+    await drafts.getRecord('sample-project', 'record-1');
+    await drafts.getRecord('sample-project', 'record-2');
+    await drafts.releaseAll();
+
+    expect(leaseEvents).toEqual(['obtain:record-1', 'release:record-1', 'obtain:record-2', 'release:record-2']);
+  });
+
+  it('rejects opening a record when the backend reports an exclusive lease failure', async () => {
+    const storage = createStorage(
+      () => ({ answer: 'Original' }),
+      () => undefined
+    );
+    storage.obtainExclusiveLease = async () => ({ status: 'FAILURE' });
+    const drafts = new RecordDraftStore(() => storage);
+
+    await expect(drafts.getRecord('sample-project', 'record-1')).rejects.toThrow('Record is already open in another session: record-1');
   });
 });
 
@@ -235,17 +296,33 @@ const createStorage = (read: () => unknown, write: (value: unknown) => void): St
   getProjectConfig: async () => ({}),
   getProjectMcpConfig: async () => undefined,
   getTagDefinitions: async () => [],
-  reconcileRecordTags: async (_projectId, data) => ({ data, pluginErrors: [] })
+  reconcileRecordTags: async (_projectId, data) => ({ data, pluginErrors: [] }),
+  obtainExclusiveLease: async () => ({ status: 'NOT_SUPPORTED' }),
+  releaseExclusiveLease: async () => undefined,
+  listQueues: async () => [],
+  createQueue: async (queueName) => ({ name: queueName, messageCount: 0 }),
+  deleteQueue: async () => undefined,
+  clearQueue: async () => undefined,
+  enqueueMessage: async () => undefined,
+  dequeueMessage: async () => null,
+  completeMessage: async () => undefined,
+  searchRecords: async () => []
 });
 
-const createRecordDetail = (projectId: string, recordId: string, data: unknown) => ({
-  projectId,
-  recordId,
-  displayName: recordId,
-  data: stripFeedbackProperties(clone(data)),
-  schema: {},
-  validationIssues: [],
-  renderTree: { kind: 'object' as const, label: 'record', children: [], validationIssues: [] }
-});
+const createRecordDetail = (projectId: string, recordId: string, data: unknown) => {
+  const stripped = stripFeedbackProperties(clone(data));
+  if (stripped && typeof stripped === 'object' && !Array.isArray(stripped)) {
+    delete (stripped as Record<string, unknown>)._history;
+  }
+  return {
+    projectId,
+    recordId,
+    displayName: recordId,
+    data: stripped,
+    schema: {},
+    validationIssues: [],
+    renderTree: { kind: 'object' as const, label: 'record', children: [], validationIssues: [] }
+  };
+};
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;

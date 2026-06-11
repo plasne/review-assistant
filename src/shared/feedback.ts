@@ -18,7 +18,7 @@ export const FIELD_PRESENTATIONS: FieldPresentation[] = ['chat-request', 'chat-r
 export const CANONICAL_MAPPINGS: CanonicalMapping[] = ['turns', 'request', 'response', 'evidence', 'facts', 'tags'];
 export const USERNAME_VALIDATION_MESSAGE = 'USERNAME environment variable not configured. Please set USERNAME in your config/.env file.';
 
-const FEEDBACK_SUFFIXES = ['_feedback', '_edits', '_comments'];
+const FEEDBACK_SUFFIXES = ['_feedback'];
 const USERNAME_PATTERN = /^[a-zA-Z0-9._@-]{1,254}$/;
 const ARRAY_ITEM_PATH_SEGMENT = '*';
 
@@ -154,13 +154,13 @@ export const feedbackPropertyBase = (propertyPath: string): string => {
 export const feedbackPropertyNames = (propertyPath: string): { feedback: string; edits: string; comments: string } => {
   const base = feedbackPropertyBase(propertyPath);
   return {
-    feedback: `${base}_feedback`,
-    edits: `${base}_edits`,
-    comments: `${base}_comments`
+    feedback: `_feedback_${base}`,
+    edits: `_feedback_${base}`,
+    comments: `_feedback_${base}`
   };
 };
 
-export const feedbackPropertyName = (propertyPath: string): string => `${feedbackPropertyBase(propertyPath)}_feedback`;
+export const feedbackPropertyName = (propertyPath: string): string => `_feedback_${feedbackPropertyBase(propertyPath)}`;
 
 export const stripFeedbackProperties = (value: unknown): unknown => {
   if (Array.isArray(value)) {
@@ -221,8 +221,6 @@ export const mergeFeedbackEntries = (
   if (edit) {
     writePropertyValue(record, input.propertyPath, coerceStoredEditValue(currentValue, edit));
   }
-  delete record[names.comments];
-  delete record[names.edits];
   return [
     ...(feedback ? [{ value: feedback, username: validUsername, timestamp }] : []),
     ...(comment ? [{ value: comment, username: validUsername, timestamp }] : []),
@@ -230,7 +228,7 @@ export const mergeFeedbackEntries = (
   ];
 };
 
-export const isFeedbackPropertyName = (key: string): boolean => FEEDBACK_SUFFIXES.some((suffix) => key.endsWith(suffix));
+export const isFeedbackPropertyName = (key: string): boolean => key.startsWith('_feedback_');
 
 const collectTarget = (label: string, schema: JsonSchema, segments: string[], targets: FeedbackTarget[], tab: string): void => {
   const path = feedbackTargetPath(segments);
@@ -297,25 +295,18 @@ const collectWildcardFeedbackHistory = (record: Record<string, unknown>, targetP
   const basePattern = targetSegments
     .map((segment) => (segment === ARRAY_ITEM_PATH_SEGMENT ? '(\\d+)' : escapeRegExp(sanitizeFeedbackSegment(unescapePointer(segment)))))
     .join('__');
-  const keyPattern = new RegExp(`^${basePattern}_(feedback|edits|comments)$`);
-  for (const [key, value] of Object.entries(record)) {
+  const keyPattern = new RegExp(`^_feedback_${basePattern}$`);
+  for (const [key] of Object.entries(record)) {
     const match = keyPattern.exec(key);
     if (!match) {
       continue;
     }
-    const wildcardValues = match.slice(1, -1);
+    const wildcardValues = match.slice(1);
     let wildcardIndex = 0;
     const propertyPath = `/${targetSegments
       .map((segment) => (segment === ARRAY_ITEM_PATH_SEGMENT ? wildcardValues[wildcardIndex++] : segment))
       .join('/')}`;
-    const kind = match[match.length - 1] as 'feedback' | 'edits' | 'comments';
-    if (kind === 'feedback') {
-      history[propertyPath] = readFeedbackHistory(record, propertyPath);
-    } else if (!history[propertyPath]) {
-      history[propertyPath] = readFeedbackHistory(record, propertyPath);
-    } else {
-      history[propertyPath][kind] = readFeedbackEntries(value);
-    }
+    history[propertyPath] = readFeedbackHistory(record, propertyPath);
   }
 };
 
@@ -323,9 +314,9 @@ const readFeedbackHistory = (record: Record<string, unknown>, propertyPath: stri
   const names = feedbackPropertyNames(propertyPath);
   const unified = readFeedbackHistoryNode(record[names.feedback]);
   return {
-    feedback: unified.feedback.length > 0 ? unified.feedback : readFeedbackEntries(record[names.feedback]),
-    comments: unified.comments.length > 0 ? unified.comments : readFeedbackEntries(record[names.comments]),
-    edits: unified.edits.length > 0 ? unified.edits : readFeedbackEntries(record[names.edits]),
+    feedback: unified.feedback,
+    comments: unified.comments,
+    edits: unified.edits,
     ...(unified.original !== undefined ? { original: unified.original } : {})
   };
 };
