@@ -11,3 +11,4 @@ _data/
 !test-fixtures/data/config/
 !test-fixtures/.env
 .copilot-tracking/
+experiments/
