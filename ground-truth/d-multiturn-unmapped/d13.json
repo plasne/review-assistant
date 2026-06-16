@@ -1,0 +1,202 @@
+{
+  "ref": "d13",
+  "description": "A feedback-aware multi-turn revision flow where persisted SME star ratings (4-5 stars trusted, 1-2 stars untrusted) weight the existing evidence when regenerating the answer; all evidence and ratings are preserved.",
+  "input": {
+    "id": "",
+    "turns": [
+      {
+        "question": "How should hunters approach combat with Dracula in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-combat-overview",
+            "title": "Combat overview and combat rounds",
+            "url": "fury-of-dracula-4e://rules/combat-overview",
+            "excerpt": "Combat occurs when a hunter confronts Dracula or certain encounters and enemies. Combat is resolved in rounds. Each side selects a legal combat card or item option, reveals choices, compares icons and text, and resolves the matching effects. Hunter combat options come from basic combat cards, item weapons, event effects, character abilities, and status limits. Dracula combat options depend on whether it is day or night, his combat cards, current form, status, and card effects. Damage, bites, escapes, item loss, prevention, and special effects are applied as instructed. Combat continues until an effect ends it, a participant escapes, an enemy is defeated, Dracula is no longer present, or the rules specify the combat stops. Because combat choices are simultaneous and icon-based, players should verify legal cards, timing, and cancellation before assigning damage.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-combat-dracula",
+            "title": "Combat against Dracula",
+            "url": "fury-of-dracula-4e://rules/combat-against-dracula",
+            "excerpt": "When a hunter encounters Dracula, Dracula is revealed and a Dracula combat begins. The time of day is critical because Dracula is much more dangerous at night and has different legal combat options. Hunters try to deal damage, prevent Dracula escape, and survive bite or defeat effects. Dracula tries to damage hunters, bite them, force despair, escape, or stall until a better time. Multiple hunters in the same location can participate according to the group combat rules, improving hunter odds but still requiring legal card choices from the active combatants. If Dracula takes enough damage to reach his defeat threshold, the hunters win immediately unless an effect prevents that result. If Dracula escapes or the combat ends without his defeat, update revealed status, location information, damage, bites, and any aftermath effects before play continues.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-damage-health-defeat",
+            "title": "Damage, health, hunter defeat, and Dracula defeat",
+            "url": "fury-of-dracula-4e://rules/damage-health-defeat",
+            "excerpt": "Damage tracks how close a character is to defeat. Hunters suffer damage from combat, sea travel, events, encounters, and Dracula effects. Hunters recover damage through rest, hospitals, items, events, character abilities, and other healing effects. When a hunter is defeated, resolve the defeat procedure: Dracula gains the appropriate benefit, the hunter is removed or delayed as instructed, then returns under the game rules rather than being permanently eliminated in ordinary play. Dracula suffers damage from hunter attacks, sea travel, some powers, events, and special effects. Dracula recovers through Castle Dracula, Feed, cards, and other listed effects. If Dracula reaches his defeat threshold, the hunter side wins. Always apply prevention, resistance, timing, and card text before checking final defeat results.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-hunter-movement",
+            "title": "Hunter movement by road, rail, and sea",
+            "url": "fury-of-dracula-4e://rules/hunter-movement",
+            "excerpt": "A hunter move action changes the hunter location by road, rail, or sea. Road movement moves along one connected road route to an adjacent city. Rail movement requires spending a train ticket and following the ticket result to determine how far the hunter may travel along connected rail routes; rail is useful for long repositioning but depends on tickets and legal rail connections. A hunter can reserve a ticket as a separate action by drawing ticket options and keeping a legal ticket according to the rules. Sea movement lets a hunter move between a port and an adjacent sea zone, or between connected sea zones, and usually causes damage or risk because hunters are vulnerable while traveling by sea. Hunters at sea have limited action options and often must keep moving until they return to land. Movement can trigger encounters, reveal information, or force combat if the hunter enters Dracula location or a space containing an encounter token.",
+            "score": 0
+          }
+        ],
+        "answer": "Hunters should prepare item cards, coordinate group attacks, watch for hospital recovery placement after defeats, and use rail movement to reach Dracula."
+      }
+    ],
+    "_feedback_turns__0__evidence__0": [
+      {
+        "feedback": "5",
+        "comment": "Excellent reference for how item cards change the combat matchup.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-12T17:00:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__evidence__1": [
+      {
+        "feedback": "4",
+        "comment": "Strong support for coordinating multiple hunters before initiating combat.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-12T17:01:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__evidence__2": [
+      {
+        "feedback": "2",
+        "comment": "Hospital recovery is about defeat handling, not combat strategy; drop it.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-12T17:02:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__evidence__3": [
+      {
+        "feedback": "1",
+        "comment": "Rail movement is positioning, not combat; not relevant here.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-12T17:03:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__answer": [
+      {
+        "feedback": "2",
+        "comment": "Answer mixes in unrelated topics; redo it.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-12T17:04:00.000Z"
+      }
+    ]
+  },
+  "prompts": [
+    "I rated the evidence and the answer. Regenerate."
+  ],
+  "output": {
+    "id": "",
+    "turns": [
+      {
+        "question": "How should hunters approach combat with Dracula in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-combat-overview",
+            "title": "Combat overview and combat rounds",
+            "url": "fury-of-dracula-4e://rules/combat-overview",
+            "excerpt": "Combat occurs when a hunter confronts Dracula or certain encounters and enemies. Combat is resolved in rounds. Each side selects a legal combat card or item option, reveals choices, compares icons and text, and resolves the matching effects. Hunter combat options come from basic combat cards, item weapons, event effects, character abilities, and status limits. Dracula combat options depend on whether it is day or night, his combat cards, current form, status, and card effects. Damage, bites, escapes, item loss, prevention, and special effects are applied as instructed. Combat continues until an effect ends it, a participant escapes, an enemy is defeated, Dracula is no longer present, or the rules specify the combat stops. Because combat choices are simultaneous and icon-based, players should verify legal cards, timing, and cancellation before assigning damage.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-combat-dracula",
+            "title": "Combat against Dracula",
+            "url": "fury-of-dracula-4e://rules/combat-against-dracula",
+            "excerpt": "When a hunter encounters Dracula, Dracula is revealed and a Dracula combat begins. The time of day is critical because Dracula is much more dangerous at night and has different legal combat options. Hunters try to deal damage, prevent Dracula escape, and survive bite or defeat effects. Dracula tries to damage hunters, bite them, force despair, escape, or stall until a better time. Multiple hunters in the same location can participate according to the group combat rules, improving hunter odds but still requiring legal card choices from the active combatants. If Dracula takes enough damage to reach his defeat threshold, the hunters win immediately unless an effect prevents that result. If Dracula escapes or the combat ends without his defeat, update revealed status, location information, damage, bites, and any aftermath effects before play continues.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-damage-health-defeat",
+            "title": "Damage, health, hunter defeat, and Dracula defeat",
+            "url": "fury-of-dracula-4e://rules/damage-health-defeat",
+            "excerpt": "Damage tracks how close a character is to defeat. Hunters suffer damage from combat, sea travel, events, encounters, and Dracula effects. Hunters recover damage through rest, hospitals, items, events, character abilities, and other healing effects. When a hunter is defeated, resolve the defeat procedure: Dracula gains the appropriate benefit, the hunter is removed or delayed as instructed, then returns under the game rules rather than being permanently eliminated in ordinary play. Dracula suffers damage from hunter attacks, sea travel, some powers, events, and special effects. Dracula recovers through Castle Dracula, Feed, cards, and other listed effects. If Dracula reaches his defeat threshold, the hunter side wins. Always apply prevention, resistance, timing, and card text before checking final defeat results.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-hunter-movement",
+            "title": "Hunter movement by road, rail, and sea",
+            "url": "fury-of-dracula-4e://rules/hunter-movement",
+            "excerpt": "A hunter move action changes the hunter location by road, rail, or sea. Road movement moves along one connected road route to an adjacent city. Rail movement requires spending a train ticket and following the ticket result to determine how far the hunter may travel along connected rail routes; rail is useful for long repositioning but depends on tickets and legal rail connections. A hunter can reserve a ticket as a separate action by drawing ticket options and keeping a legal ticket according to the rules. Sea movement lets a hunter move between a port and an adjacent sea zone, or between connected sea zones, and usually causes damage or risk because hunters are vulnerable while traveling by sea. Hunters at sea have limited action options and often must keep moving until they return to land. Movement can trigger encounters, reveal information, or force combat if the hunter enters Dracula location or a space containing an encounter token.",
+            "score": 0
+          }
+        ],
+        "answer": "Hunters should approach combat with Dracula by preparing legal combat cards and item weapon options before they confront him, then coordinating multiple hunters into the same location when possible. Combat is resolved in rounds with simultaneous legal card choices, icons, text, damage, escapes, and defeat checks; multiple hunters can participate in Dracula combat and improve the hunters' odds, but they still need legal card choices and must account for day, night, status, and aftermath effects."
+      }
+    ],
+    "_feedback_turns__0__evidence__0": [
+      {
+        "feedback": "5",
+        "comment": "Excellent reference for how item cards change the combat matchup.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-12T17:00:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__evidence__1": [
+      {
+        "feedback": "4",
+        "comment": "Strong support for coordinating multiple hunters before initiating combat.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-12T17:01:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__evidence__2": [
+      {
+        "feedback": "2",
+        "comment": "Hospital recovery is about defeat handling, not combat strategy; drop it.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-12T17:02:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__evidence__3": [
+      {
+        "feedback": "1",
+        "comment": "Rail movement is positioning, not combat; not relevant here.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-12T17:03:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__answer": [
+      {
+        "feedback": "2",
+        "comment": "Answer mixes in unrelated topics; redo it.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-12T17:04:00.000Z"
+      }
+    ]
+  },
+  "evaluation": {
+    "evidence_path": "/turns/0/evidence",
+    "answer_path": "/turns/0/answer",
+    "evidence_key": "url",
+    "ignored_output_structure_issues": [
+      {
+        "path": "/_feedback_turns__0__answer",
+        "keyword": "additionalProperties",
+        "message": "Unexpected property: _feedback_turns__0__answer."
+      },
+      {
+        "path": "/_feedback_turns__0__evidence__0",
+        "keyword": "additionalProperties",
+        "message": "Unexpected property: _feedback_turns__0__evidence__0."
+      },
+      {
+        "path": "/_feedback_turns__0__evidence__1",
+        "keyword": "additionalProperties",
+        "message": "Unexpected property: _feedback_turns__0__evidence__1."
+      },
+      {
+        "path": "/_feedback_turns__0__evidence__2",
+        "keyword": "additionalProperties",
+        "message": "Unexpected property: _feedback_turns__0__evidence__2."
+      },
+      {
+        "path": "/_feedback_turns__0__evidence__3",
+        "keyword": "additionalProperties",
+        "message": "Unexpected property: _feedback_turns__0__evidence__3."
+      }
+    ]
+  },
+  "tags": [
+    "turns:multi",
+    "mapped:false",
+    "state:feedback-aware-revision"
+  ]
+}

@@ -421,6 +421,7 @@ export const logProviderUsage = (request: ProviderStartRequest, event: Assistant
     reasoningTokens: event.data.reasoningTokens,
     cacheReadTokens: event.data.cacheReadTokens,
     cacheWriteTokens: event.data.cacheWriteTokens,
+    cost: event.data.cost,
     timeToFirstTokenMs: event.data.timeToFirstTokenMs,
     interTokenLatencyMs: event.data.interTokenLatencyMs,
     elapsedMs: event.data.duration

@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -47,6 +48,8 @@ JUDGE_LABEL_SCORES = {
     "contradicted": 0.0,
 }
 DEFAULT_JUDGE_TIMEOUT_SECONDS = 120
+GITHUB_AI_CREDIT_USD_ENV = "GITHUB_AI_CREDIT_USD"
+DEFAULT_GITHUB_AI_CREDIT_USD = Decimal("0.01")
 EXPERIMENT_CATALOG_HTTP_TIMEOUT_SECONDS = 30
 EXPERIMENT_CATALOG_RETRY_ATTEMPTS = 3
 EXPERIMENT_CATALOG_RETRY_DELAY_SECONDS = 1
@@ -339,6 +342,7 @@ def evaluate_artifact(artifact: JsonValue, *, fact_judge: FactJudge, source_blob
         actual_record = actual_output
         generation_scores = generation_metrics(expected_output, actual_output, paths.answer_path, fact_judge=fact_judge)
         inference_timing = inference_timing_metrics(inference)
+        cost_metrics = evaluation_cost_metrics(inference_timing, fact_judge)
         retrieval_metrics = retrieval_recall_metrics(expected_output, actual_output, paths)
         judge = evaluation_judge_metadata(fact_judge)
 
@@ -358,6 +362,7 @@ def evaluate_artifact(artifact: JsonValue, *, fact_judge: FactJudge, source_blob
                     paths.ignored_output_structure_issues,
                 ),
                 **inference_timing,
+                **cost_metrics,
             },
         }
     except Exception as error:
@@ -561,26 +566,24 @@ def resolve_answer_texts(value: JsonValue, pointer: str) -> list[str]:
     return [as_text(item) for item in resolve_json_pointer_many(value, pointer)]
 
 
-def inference_timing_metrics(inference: dict[str, JsonValue]) -> dict[str, int]:
+def inference_timing_metrics(inference: dict[str, JsonValue]) -> dict[str, int | float]:
     total_elapsed_ms = as_non_negative_int(inference.get("elapsed_ms"), "inference.elapsed_ms")
-    assistant_request_elapsed_ms = transcript_metadata_elapsed_ms(
+    model_elapsed_ms = transcript_metadata_elapsed_ms(
         inference,
         "assistant-response",
         "assistantRequestElapsedMs",
     )
     tool_elapsed_ms = transcript_elapsed_ms(inference, "tool-call")
-    return {
+    cost = transcript_metadata_optional_number(inference, "assistant-response", "cost")
+    metrics: dict[str, int | float] = {
         "meta_total_elapsed_ms": total_elapsed_ms,
-        "meta_assistant_request_elapsed_ms": assistant_request_elapsed_ms,
-        "meta_first_token_latency_ms": transcript_metadata_elapsed_ms(
-            inference,
-            "assistant-response",
-            "firstTokenLatencyMs",
-        ),
-        "meta_stream_elapsed_ms": transcript_metadata_elapsed_ms(inference, "assistant-response", "streamElapsedMs"),
+        "meta_model_elapsed_ms": model_elapsed_ms,
         "meta_tool_elapsed_ms": tool_elapsed_ms,
-        "meta_unattributed_elapsed_ms": max(total_elapsed_ms - assistant_request_elapsed_ms, 0),
+        "meta_tool_call_count": transcript_count(inference, "tool-call"),
     }
+    if cost is not None:
+        metrics["meta_inference_cost"] = github_ai_credits_to_usd(cost)
+    return metrics
 
 
 def transcript_elapsed_ms(inference: dict[str, JsonValue], entry_type: str) -> int:
@@ -593,6 +596,19 @@ def transcript_elapsed_ms(inference: dict[str, JsonValue], entry_type: str) -> i
             raise ValueError(f"inference.transcript[{index}] must be an object.")
         if entry.get("type") == entry_type:
             total += as_non_negative_int(entry.get("elapsed_ms"), f"inference.transcript[{index}].elapsed_ms")
+    return total
+
+
+def transcript_count(inference: dict[str, JsonValue], entry_type: str) -> int:
+    transcript = inference.get("transcript", [])
+    if not isinstance(transcript, list):
+        raise ValueError("inference.transcript must be a list.")
+    total = 0
+    for index, entry in enumerate(transcript):
+        if not isinstance(entry, dict):
+            raise ValueError(f"inference.transcript[{index}] must be an object.")
+        if entry.get("type") == entry_type:
+            total += 1
     return total
 
 
@@ -616,10 +632,38 @@ def transcript_metadata_elapsed_ms(inference: dict[str, JsonValue], entry_type: 
     return total
 
 
+def transcript_metadata_optional_number(inference: dict[str, JsonValue], entry_type: str, metadata_key: str) -> float | None:
+    transcript = inference.get("transcript", [])
+    if not isinstance(transcript, list):
+        raise ValueError("inference.transcript must be a list.")
+    total = 0.0
+    found = False
+    for index, entry in enumerate(transcript):
+        if not isinstance(entry, dict):
+            raise ValueError(f"inference.transcript[{index}] must be an object.")
+        if entry.get("type") != entry_type:
+            continue
+        metadata = entry.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError(f"inference.transcript[{index}].metadata must be an object.")
+        value = metadata.get(metadata_key)
+        if value is None:
+            continue
+        total += as_non_negative_number(value, f"inference.transcript[{index}].metadata.{metadata_key}")
+        found = True
+    return total if found else None
+
+
 def as_non_negative_int(value: JsonValue, path: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{path} must be a non-negative integer.")
     return value
+
+
+def as_non_negative_number(value: JsonValue, path: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+        raise ValueError(f"{path} must be a non-negative number.")
+    return float(value)
 
 
 def retrieval_recall_metrics(expected_output: JsonValue, actual_output: JsonValue | None, paths: EvaluationPaths) -> dict[str, JsonValue]:
@@ -736,6 +780,7 @@ class CopilotSdkFactJudge:
         self.timeout_seconds = timeout_seconds or int(os.environ.get("EVALUATION_JUDGE_TIMEOUT_SECONDS", str(DEFAULT_JUDGE_TIMEOUT_SECONDS)))
         self.model = require_env("AGENT_MODEL")
         self.used_models: set[str] = set()
+        self.cost = 0.0
 
     def __call__(self, expected_answer: str, actual_answer: str) -> dict[str, JsonValue]:
         return asyncio.run(self.evaluate(expected_answer, actual_answer))
@@ -767,7 +812,7 @@ class CopilotSdkFactJudge:
     ) -> dict[str, JsonValue]:
         from copilot import CopilotClient
         from copilot.session import PermissionHandler
-        from copilot.session_events import AssistantMessageData, AssistantMessageDeltaData, SessionIdleData
+        from copilot.session_events import AssistantMessageData, AssistantMessageDeltaData, AssistantUsageData, SessionIdleData
 
         judge_request = build_judge_request(expected_answer, actual_answer, retry_feedback=retry_feedback)
         done = asyncio.Event()
@@ -782,6 +827,9 @@ class CopilotSdkFactJudge:
                     chunks.append(data.content or "")
             elif isinstance(data, SessionIdleData):
                 done.set()
+            elif isinstance(data, AssistantUsageData):
+                if data.cost is not None:
+                    self.cost += data.cost
             model = getattr(data, "model", None)
             if isinstance(model, str) and model.strip():
                 self.used_models.add(model.strip())
@@ -851,6 +899,34 @@ def evaluation_judge_metadata(fact_judge: FactJudge) -> dict[str, JsonValue]:
             f"Evaluation judge used unexpected model(s): {', '.join(unexpected_models)}. Expected AGENT_MODEL={model}."
         )
     return {"model": model}
+
+
+def evaluation_cost_metrics(inference_metrics: dict[str, int | float], fact_judge: FactJudge) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    inference_cost = inference_metrics.get("meta_inference_cost")
+    if isinstance(inference_cost, int | float) and not isinstance(inference_cost, bool):
+        metrics["meta_inference_cost"] = float(inference_cost)
+    judge_cost = getattr(fact_judge, "cost", None)
+    if isinstance(judge_cost, int | float) and not isinstance(judge_cost, bool):
+        metrics["meta_evaluation_cost"] = github_ai_credits_to_usd(float(judge_cost))
+    return metrics
+
+
+def github_ai_credits_to_usd(credits: float) -> float:
+    return float(Decimal(str(credits)) * github_ai_credit_usd_rate())
+
+
+def github_ai_credit_usd_rate() -> Decimal:
+    raw_rate = os.environ.get(GITHUB_AI_CREDIT_USD_ENV)
+    if raw_rate is None or not raw_rate.strip():
+        return DEFAULT_GITHUB_AI_CREDIT_USD
+    try:
+        rate = Decimal(raw_rate.strip())
+    except InvalidOperation as error:
+        raise ValueError(f"{GITHUB_AI_CREDIT_USD_ENV} must be a positive decimal number.") from error
+    if not rate.is_finite() or rate <= 0:
+        raise ValueError(f"{GITHUB_AI_CREDIT_USD_ENV} must be a positive decimal number.")
+    return rate
 
 
 def parse_judge_response_content(content: str) -> dict[str, JsonValue]:

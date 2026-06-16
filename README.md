@@ -144,15 +144,15 @@ Ground truth records can declare evaluation settings under `evaluation`. `answer
 ```json
 {
   "meta_total_elapsed_ms": 12450,
-  "meta_assistant_request_elapsed_ms": 9800,
-  "meta_first_token_latency_ms": 1700,
-  "meta_stream_elapsed_ms": 8100,
+  "meta_model_elapsed_ms": 9800,
   "meta_tool_elapsed_ms": 2100,
-  "meta_unattributed_elapsed_ms": 2650
+  "meta_tool_call_count": 7,
+  "meta_inference_cost": 0.035,
+  "meta_evaluation_cost": 0.0125
 }
 ```
 
-`meta_assistant_request_elapsed_ms` measures the full agent request, `meta_first_token_latency_ms` measures request start to first streamed response chunk, `meta_stream_elapsed_ms` measures first chunk to completion, and `meta_unattributed_elapsed_ms` measures case time outside assistant requests. Tool time is reported separately and can overlap the assistant request window.
+`meta_model_elapsed_ms` measures the full model-backed assistant request. Tool time is reported separately and can overlap the model request window. `meta_tool_call_count` counts local tool invocations; model calls are inferred from the prompt/turn shape rather than published as a separate metric. Cost metrics come only from Copilot SDK usage events, which report GitHub AI Credits; the evaluator converts those credits to USD using `GITHUB_AI_CREDIT_USD`, defaulting to GitHub's current rate of `0.01`. Set `GITHUB_AI_CREDIT_USD` to a positive decimal value, such as `0.0005`, if the per-credit USD rate changes or needs fractional-penny precision. The evaluator does not use provider-generic pricing tables or publish token counters.
 
 The evaluator reads catalog settings from `ground-truth/config/.env` or the shell. Set all three to enable unauthenticated metric publishing:
 

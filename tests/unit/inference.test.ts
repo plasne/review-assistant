@@ -249,7 +249,8 @@ describe('inference run artifacts', () => {
         metadata: {
           assistantRequestElapsedMs: expect.any(Number),
           firstTokenLatencyMs: expect.any(Number),
-          streamElapsedMs: expect.any(Number)
+          streamElapsedMs: expect.any(Number),
+          cost: 1.5
         }
       })
     );
@@ -649,7 +650,17 @@ class FixtureSavingAgent implements InferenceAgent {
         handlers.log?.({
           level: 'info',
           event: 'review-assistant.agent-provider-usage',
-          fields: { requestId: 'request-1', model: 'gpt-5.4-mini', reasoningEffort: 'medium' }
+          fields: {
+            requestId: 'request-1',
+            model: 'gpt-5.4-mini',
+            reasoningEffort: 'medium',
+            inputTokens: 1200,
+            outputTokens: 300,
+            reasoningTokens: 40,
+            cacheReadTokens: 75,
+            cacheWriteTokens: 25,
+            cost: 1.5
+          }
         });
         handlers.complete({ requestId: 'request-1', messageId: 'message-1' });
       } catch (error) {
