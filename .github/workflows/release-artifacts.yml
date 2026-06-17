@@ -25,9 +25,6 @@ jobs:
           - artifact: windows-x64
             os: windows-latest
             command: npm run package:win -- --x64
-          - artifact: macos-x64
-            os: macos-13
-            command: npm run package:mac -- --x64
           - artifact: macos-arm64
             os: macos-14
             command: npm run package:mac -- --arm64

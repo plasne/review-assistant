@@ -90,7 +90,7 @@ The underlying deterministic npm gates are `lint`, `typecheck`, `test:unit`, `te
 
 ## Release artifacts
 
-Creating a version tag that starts with `v`, such as `v0.1.0`, runs the Release Artifacts workflow. The workflow packages unsigned Windows x64, macOS x64, and macOS arm64 builds, creates a GitHub Release for the tag, and uploads the packaged apps as release assets.
+Creating a version tag that starts with `v`, such as `v0.1.0`, runs the Release Artifacts workflow. The workflow packages unsigned Windows x64 and macOS arm64 builds, creates a GitHub Release for the tag, and uploads the packaged apps as release assets.
 
 Local packaging commands are available for platform-specific checks:
 
