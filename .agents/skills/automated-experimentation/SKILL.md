@@ -33,7 +33,8 @@ continues until the user-defined goal is met or the failure policy stops it.
     detection, and stop/failure policy.
   - `GOAL.md` owns the durable operating contract: goal, success criteria,
     baseline isolation, catalog/evaluation procedure, validation gates,
-    artifact-parameter verification requirements, learning loop, and policies.
+    hypothesis implementation/proof requirements, artifact-parameter
+    verification requirements, learning loop, and policies.
   - `BACKLOG.md` owns all experiment-specific hypotheses, runtime parameters,
     code/config changes, set names, permutation definitions, verification
     details, evidence, results, and follow-up candidates.
@@ -178,14 +179,19 @@ candidate-specific code changes. Put those in `BACKLOG.md`. Include:
 - primary metric, guardrail metrics, interim success, and final stop condition;
 - exact validation, inference, evaluation, upload, annotation, and comparison
   commands or AML Evaluation Runner modules;
+- a hypothesis implementation/proof policy: workers must identify the effective
+  code/config/control surface consumed by the route, make the minimal change
+  needed to exercise the selected hypothesis, and prove the hypothesis is active
+  before expensive evaluation;
 - resource constraints and known hazards;
 - resettable tracked or gitignored config files and what each one controls, matching
   `loop.config.json`;
 - one-experiment procedure;
 - continuous learning requirements.
 - a rule that workers must read the selected `BACKLOG.md` candidate for exact
-  runtime parameters, command-scoped environment variables, set names, code
-  changes, artifact-parameter verification, and rollback instructions.
+  runtime parameters, the effective config source or command-scoped environment
+  variables consumed by the evaluation route, set names, code changes,
+  artifact-parameter verification, and rollback instructions.
 
 Critical rules to include:
 
@@ -232,10 +238,18 @@ impact, isolation boundary, quality risk, metrics to watch, suggested set names,
 evidence, rollback plan, and status.
 
 Each candidate should also include candidate-specific runtime/configuration
-parameters, exact inference/evaluation command environment variables where
-applicable, and any artifact checks needed to prove the run used the intended
-configuration. These details belong in `BACKLOG.md`, not `GOAL.md` or the loop
-prompt.
+parameters, the exact config source or command environment variables that the
+inference/evaluation route actually consumes, and any artifact checks needed to
+prove the run used the intended configuration. If command-scoped environment
+variables do not override the route's config files, the candidate must instruct
+the worker to edit the effective config file instead. These details belong in
+`BACKLOG.md`, not `GOAL.md` or the loop prompt.
+
+Workers are still responsible for validating candidate instructions against the
+actual code path before running expensive evaluation. If the backlog names the
+wrong control surface, the worker must correct the implementation, document the
+learning in `BACKLOG.md`, mark any already-started attempt non-comparable, and
+restart from a fresh branch rather than uploading misleading results.
 
 When an experiment completes, update the candidate with the result, evaluated set
 name, speed/quality summary, observed failure modes, and whether the idea should

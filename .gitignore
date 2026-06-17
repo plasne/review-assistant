@@ -3,6 +3,8 @@ dist/
 coverage/
 test-results/
 playwright-report/
+__pycache__/
+*.py[cod]
 **/.env
 !ground-truth/config/.env
 data/
