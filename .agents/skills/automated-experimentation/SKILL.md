@@ -16,7 +16,7 @@ continues until the user-defined goal is met or the failure policy stops it.
 1. Interview the user and inspect the repository.
 2. Create or update a gitignored experiment workspace, usually `experiments/`.
 3. Create `GOAL.md`, `BACKLOG.md`, `RESULTS.md`, `loop.config.json`,
-   `run-state.json`, and copy `scripts/experiment-loop.py`.
+   `run-state.json`, and copy `scripts/experiment-loop.py` in the workspace.
 4. The user starts `python3 experiments/experiment-loop.py` in a terminal window.
 5. The script creates a new experiment branch and launches `copilot -p`.
 6. The worker completes one experiment, updates the catalog and local notes,
@@ -34,21 +34,22 @@ experiment workspace; do not generate a bespoke loop script from scratch unless
 the user asks for custom implementation. The copied script infers its workspace
 from its own directory, so `loop.config.json` does not need a `workspace` field.
 
-Each worker's goal is exactly one clean experiment iteration. The user-defined
-speed/quality rule classifies that completed experiment as
-success/neutral/regression/inconclusive; it is not the worker's completion goal.
-A `goal-met` classification is the signal for the supervisor to stop the
-overall loop.
+Each worker's goal is exactly one clean experiment iteration. User-defined
+result criteria classify that completed experiment as
+success/neutral/regression/inconclusive; those criteria are not the worker's
+completion goal. A separate user-defined loop stop condition determines when a
+completed experiment should be labeled `goal-met` and signals the supervisor to
+stop the overall loop.
 
 ## Separation of Concerns
 
 - `experiment-loop.py` owns only supervision mechanics: branch creation, config
   restore, worker launch, logging, final safety commit, result-label detection,
   and stop/failure policy.
-- `GOAL.md` owns the durable operating contract: goal, success criteria,
-  baseline isolation, catalog/evaluation procedure, validation gates, hypothesis
-  implementation/proof requirements, artifact-parameter verification
-  requirements, learning loop, and policies.
+- `GOAL.md` owns the durable operating contract: goal (run a clean experiment
+  successfully), success criteria for that experiment, baseline isolation,
+  catalog/evaluation procedure, validation gates, hypothesis implementation/proof requirements, artifact-parameter verification requirements, learning loop, and
+  policies.
 - `BACKLOG.md` owns all experiment-specific hypotheses, runtime parameters,
   code/config changes, set names, permutation definitions, verification details,
   evidence, results, and follow-up candidates.
@@ -69,8 +70,9 @@ and propose a default.
 | Experiment Catalog URI          | API base URI, usually ending in `/api`.                                                                                                                                                                            |
 | Experiment Catalog project name | Existing or to-be-created catalog project.                                                                                                                                                                         |
 | Baseline                        | Catalog baseline experiment/set or project baseline rule.                                                                                                                                                          |
-| Goal and stop condition         | The final condition that ends the loop.                                                                                                                                                                            |
-| Interim success rule            | How to label useful non-final wins.                                                                                                                                                                                |
+| Per-experiment result criteria  | How to classify a completed experiment as success, neutral, regression, or inconclusive.                                                                                                                           |
+| Loop stop condition             | The final condition that labels a completed experiment `goal-met` and ends the overall loop.                                                                                                                       |
+| Interim success rule            | How to label useful non-final wins when they do not meet the loop stop condition.                                                                                                                                  |
 | Primary metric                  | Main optimization target.                                                                                                                                                                                          |
 | Guardrail metrics               | Metrics that must not regress beyond user-defined thresholds.                                                                                                                                                      |
 | Inference/evaluation route      | Local commands, AML Evaluation Runner modules, or another deterministic route.                                                                                                                                     |
@@ -244,7 +246,7 @@ exit so the supervisor can restart from a fresh branch rather than uploading
 misleading results.
 
 When an experiment completes, update the candidate with the result, evaluated set
-name, speed/quality summary, observed failure modes, and whether the idea should
+name, metric/result summary, observed failure modes, and whether the idea should
 be retried, combined, narrowed, or abandoned.
 
 ### `RESULTS.md`
