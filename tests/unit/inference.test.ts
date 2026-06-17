@@ -12,6 +12,7 @@ import {
   INFERENCE_PROMPT_TIMEOUT_MS,
   loadGroundTruthCases,
   manifestBlobPath,
+  parseInferenceRescueStrategy,
   runInference,
   type GroundTruthCase,
   type InferenceAgent,
@@ -91,6 +92,18 @@ describe('inference CLI config', () => {
     });
   });
 
+  it('lets command-scoped rescue strategy override the inference config file', async () => {
+    const repoRoot = await createTempRepo();
+    await fs.writeFile(
+      path.join(repoRoot, 'ground-truth', 'config', '.env'),
+      ['AZURE_STORAGE_ACCOUNT_NAME=account', 'INFERENCE_CONTAINER=inference-output', 'INFERENCE_RESCUE_STRATEGY=none'].join('\n')
+    );
+
+    const config = resolveInferenceCliConfig(repoRoot, { INFERENCE_RESCUE_STRATEGY: 'e22-rescue' });
+
+    expect(config.values.INFERENCE_RESCUE_STRATEGY).toBe('e22-rescue');
+  });
+
   it('passes inference config values into the default agent environment and agent settings', () => {
     const agent = createInferenceAgent({
       AGENT_MODEL: 'gpt-5.4-mini',
@@ -119,6 +132,12 @@ describe('inference CLI config', () => {
 
   it('rejects invalid configured iteration counts', () => {
     expect(() => resolveInferenceIterations({ ITERATIONS: '0' }, {})).toThrow('ITERATIONS must be a positive integer.');
+  });
+
+  it('rejects invalid inference rescue strategies', () => {
+    expect(() => parseInferenceRescueStrategy({ INFERENCE_RESCUE_STRATEGY: 'unknown' })).toThrow(
+      'INFERENCE_RESCUE_STRATEGY must be one of: none, e22-rescue, newturn-evidence-rescue.'
+    );
   });
 });
 
@@ -221,6 +240,7 @@ describe('inference run artifacts', () => {
           ])
         },
         transcript: [
+          expect.objectContaining({ type: 'event', success: true, metadata: { event: 'rescue-strategy', strategy: 'none' } }),
           expect.objectContaining({ type: 'user-prompt', elapsed_ms: 0, success: true, content: 'Find supporting evidence.' }),
           expect.objectContaining({ type: 'tool-call', success: true, tool: DETERMINISTIC_SEARCH_TOOL }),
           expect.objectContaining({ type: 'tool-call', success: true, tool: 'saveSearchResults' }),
@@ -276,6 +296,84 @@ describe('inference run artifacts', () => {
       input: { question: 'What is supported?', evidence: [] },
       prompts: ['Find supporting evidence.']
     });
+  });
+
+  it('adds E22 targeted rescue policy only through the configured inference strategy', async () => {
+    const repoRoot = await createTempRepo();
+    await fs.writeFile(
+      path.join(repoRoot, 'ground-truth', '00', 'case-a.json'),
+      `${JSON.stringify(createCase({ tags: ['state:no-results', 'state:new-turn'] }), null, 2)}\n`
+    );
+    const writer = new MemoryArtifactWriter();
+    const agent = new FixtureSavingAgent();
+
+    const result = await runInference({
+      repoRoot,
+      runFolder: '1700000000000',
+      iterations: 1,
+      appConfigValues: { INFERENCE_RESCUE_STRATEGY: 'e22-rescue' },
+      artifactWriter: writer,
+      agent
+    });
+
+    expect(agent.contexts[0].systemPrompt).toContain('Targeted inference policy for state:no-results');
+    expect(agent.contexts[0].systemPrompt).toContain('Targeted inference policy for state:new-turn');
+    expect(result.cases[0].transcript).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'event',
+          metadata: { event: 'rescue-strategy', strategy: 'e22-rescue' }
+        })
+      ])
+    );
+  });
+
+  it('applies deterministic new-turn rescue when configured', async () => {
+    const repoRoot = await createTempRepo();
+    await fs.writeFile(path.join(repoRoot, 'ground-truth', '00', 'config', 'schema.json'), `${JSON.stringify(turnSchema, null, 2)}\n`);
+    await fs.writeFile(
+      path.join(repoRoot, 'ground-truth', '00', 'case-a.json'),
+      `${JSON.stringify(
+        createCase({
+          input: { id: '', turns: [] },
+          output: { id: '', turns: [] },
+          prompts: ['Add a new turn for this follow-up question: What evidence is supported?'],
+          tags: ['state:new-turn']
+        }),
+        null,
+        2
+      )}\n`
+    );
+    const writer = new MemoryArtifactWriter();
+
+    const result = await runInference({
+      repoRoot,
+      runFolder: '1700000000000',
+      iterations: 1,
+      appConfigValues: { INFERENCE_RESCUE_STRATEGY: 'newturn-evidence-rescue' },
+      artifactWriter: writer,
+      agent: new PassiveAgent()
+    });
+
+    expect(result.cases[0].output).toEqual({
+      id: '',
+      turns: [
+        {
+          question: 'What evidence is supported?',
+          evidence: expect.arrayContaining([expect.objectContaining({ title: 'Evidence workflow', url: 'https://example.com/review-assistant/evidence' })]),
+          answer: 'Evidence workflow'
+        }
+      ]
+    });
+    expect(result.cases[0].transcript).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'tool-call', tool: DETERMINISTIC_SEARCH_TOOL, success: true }),
+        expect.objectContaining({
+          type: 'event',
+          metadata: { event: 'deterministic-rescue', strategy: 'newturn-evidence-rescue', mode: 'new-turn', changed: true }
+        })
+      ])
+    );
   });
 
   it('does not fail a completed case when the agent inspects the root schema as slash after updating output', async () => {
@@ -615,6 +713,28 @@ const testSchema = {
   additionalProperties: false
 };
 
+const turnSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    turns: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          question: { type: 'string' },
+          evidence: testSchema.properties.evidence,
+          answer: { type: 'string' }
+        },
+        required: ['question', 'evidence', 'answer'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['turns'],
+  additionalProperties: false
+};
+
 class MemoryArtifactWriter implements InferenceArtifactWriter {
   readonly uploads: Array<{ path: string; value: unknown }> = [];
 
@@ -823,6 +943,25 @@ class CorruptingAgent implements InferenceAgent {
           }
         });
       }
+    });
+    return { requestId: 'request-1', messageId: 'message-1' };
+  }
+
+  cancel(): boolean {
+    return true;
+  }
+}
+
+class PassiveAgent implements InferenceAgent {
+  async start(_context: ChatContext, handlers: ChatStreamHandlers): Promise<ChatStreamStartResult> {
+    queueMicrotask(() => {
+      handlers.chunk({ requestId: 'request-1', messageId: 'message-1', content: 'Done.' });
+      handlers.log?.({
+        level: 'info',
+        event: 'review-assistant.agent-provider-usage',
+        fields: { requestId: 'request-1', model: 'gpt-5.4-mini', reasoningEffort: 'low' }
+      });
+      handlers.complete({ requestId: 'request-1', messageId: 'message-1' });
     });
     return { requestId: 'request-1', messageId: 'message-1' };
   }

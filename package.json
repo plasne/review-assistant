@@ -19,9 +19,45 @@
     "test:ui": "vitest run --config vitest.config.ts tests/ui",
     "test:e2e": "npm run build && playwright test",
     "smoke": "npm run build && node scripts/smoke.mjs",
+    "package": "npm run build && electron-builder --publish never",
+    "package:mac": "npm run build && electron-builder --mac --publish never",
+    "package:win": "npm run build && electron-builder --win --publish never",
     "inference": "npm run build:main && node dist/main/inference-cli.js",
     "evaluation": "python3 eval/evaluate.py --latest",
     "check": "npm run lint && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:ui && npm run test:e2e && npm run smoke"
+  },
+  "build": {
+    "appId": "com.reviewassistant.app",
+    "productName": "Review Assistant",
+    "artifactName": "Review-Assistant-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/@github/copilot*/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "dependencies": {
     "@azure/identity": "^4.5.0",
@@ -44,6 +80,7 @@
     "@types/react-dom": "^19.0.2",
     "azurite": "^3.35.0",
     "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "esbuild": "^0.24.2",
     "jsdom": "^25.0.1",

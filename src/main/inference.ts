@@ -20,6 +20,9 @@ import { createLocalToolRuntime, discoverLocalToolPlugins, type LocalToolPlugin,
 
 export const INFERENCE_PROMPT_TIMEOUT_MS = 2 * 60 * 1000;
 export const DETERMINISTIC_SEARCH_TOOL = 'searchKnowledgeBase';
+export const INFERENCE_RESCUE_STRATEGIES = ['none', 'e22-rescue', 'newturn-evidence-rescue'] as const;
+
+export type InferenceRescueStrategy = (typeof INFERENCE_RESCUE_STRATEGIES)[number];
 
 export type GroundTruthCase = {
   projectId: string;
@@ -176,6 +179,14 @@ export type RunInferenceOptions = {
   artifactWriter: InferenceArtifactWriter;
 };
 
+export const parseInferenceRescueStrategy = (values: Record<string, string> | undefined): InferenceRescueStrategy => {
+  const value = values?.INFERENCE_RESCUE_STRATEGY?.trim() || 'none';
+  if (isInferenceRescueStrategy(value)) {
+    return value;
+  }
+  throw new Error(`INFERENCE_RESCUE_STRATEGY must be one of: ${INFERENCE_RESCUE_STRATEGIES.join(', ')}.`);
+};
+
 type ToolCallRecorder = {
   calls: InferenceToolCall[];
   transcript: InferenceTranscriptEntry[];
@@ -252,6 +263,7 @@ export const runInference = async (options: RunInferenceOptions): Promise<Infere
   const startedAt = Date.now();
   const groundTruthRoot = path.join(options.repoRoot, 'ground-truth');
   const promptTimeoutMs = options.promptTimeoutMs ?? INFERENCE_PROMPT_TIMEOUT_MS;
+  const rescueStrategy = parseInferenceRescueStrategy(options.appConfigValues);
   const { cases, loadErrors } = await loadGroundTruthCases(options.repoRoot);
   assertUniqueCaseRefs(cases);
   const localToolPlugins = await loadGroundTruthLocalToolPlugins(options.repoRoot);
@@ -262,6 +274,7 @@ export const runInference = async (options: RunInferenceOptions): Promise<Infere
   logInfo('review-assistant.inference-run-started', {
     runFolder: options.runFolder,
     iterations: options.iterations,
+    rescueStrategy,
     caseCount: cases.length,
     loadErrorCount: loadErrors.length,
     promptTimeoutMs
@@ -277,7 +290,7 @@ export const runInference = async (options: RunInferenceOptions): Promise<Infere
       artifactBlobPaths.push(blobPath);
     }
     for (const groundTruthCase of cases) {
-      const artifact = await runCase(options, agent, localToolPlugins, groundTruthCase, iteration, promptTimeoutMs);
+      const artifact = await runCase(options, agent, localToolPlugins, groundTruthCase, iteration, promptTimeoutMs, rescueStrategy);
       const blobPath = caseArtifactPath(options.runFolder, artifact.ref, artifact.iteration);
       await options.artifactWriter.uploadJson(blobPath, toWrittenInferenceJson(artifact));
       artifacts.push(artifact);
@@ -351,7 +364,8 @@ const runCase = async (
   localToolPlugins: LocalToolPlugin[],
   groundTruthCase: GroundTruthCase,
   iteration: string,
-  promptTimeoutMs: number
+  promptTimeoutMs: number,
+  rescueStrategy: InferenceRescueStrategy
 ): Promise<InferenceCaseArtifact> => {
   const started = Date.now();
   const startedAt = new Date(started).toISOString();
@@ -374,6 +388,7 @@ const runCase = async (
     caseId: groundTruthCase.caseId,
     promptCount: groundTruthCase.prompts.length
   });
+  appendRescueStrategyEvent(transcript, rescueStrategy);
 
   try {
     const projectConfig = await staged.storage.getProjectConfig(groundTruthCase.projectId);
@@ -394,7 +409,16 @@ const runCase = async (
         success: true,
         content: prompt
       });
-      const response = await runPrompt(agent, tools, groundTruthCase, prompt, history, projectPrompt, mcpServers, promptTimeoutMs);
+      const response = await runPrompt(
+        agent,
+        tools,
+        groundTruthCase,
+        prompt,
+        history,
+        buildInferenceSystemPrompt(projectPrompt, groundTruthCase, rescueStrategy),
+        mcpServers,
+        promptTimeoutMs
+      );
       model = response.model ?? model;
       transcript.push({
         type: 'assistant-response',
@@ -413,6 +437,9 @@ const runCase = async (
       const now = new Date().toISOString();
       history.push({ id: randomUUID(), role: 'user', content: prompt, createdAt: now });
       history.push({ id: randomUUID(), role: 'assistant', content: response.content || '[no streamed response]', createdAt: now });
+    }
+    if (tools && rescueStrategy === 'newturn-evidence-rescue') {
+      await applyNewTurnEvidenceRescue(staged.storage, tools, groundTruthCase, transcript);
     }
   } catch (caseError) {
     ({ status, error } = recordCaseError(caseError, transcript, 'INFERENCE_CASE_FAILED'));
@@ -471,6 +498,180 @@ const runCase = async (
   await staged.cleanup();
   return artifact;
 };
+
+const appendRescueStrategyEvent = (transcript: InferenceTranscriptEntry[], rescueStrategy: InferenceRescueStrategy): void => {
+  const eventAt = new Date().toISOString();
+  transcript.push({
+    type: 'event',
+    startedAt: eventAt,
+    finishedAt: eventAt,
+    elapsedMs: 0,
+    success: true,
+    metadata: { event: 'rescue-strategy', strategy: rescueStrategy }
+  });
+};
+
+const buildInferenceSystemPrompt = (
+  projectPrompt: string | undefined,
+  groundTruthCase: GroundTruthCase,
+  rescueStrategy: InferenceRescueStrategy
+): string | undefined => {
+  const policies: string[] = [];
+  if (rescueStrategy === 'e22-rescue') {
+    if (hasTag(groundTruthCase, 'state:no-results')) {
+      policies.push(
+        'Targeted inference policy for state:no-results: search only the available sources. If no relevant results are found, save a complete answer explaining that no supporting evidence was found and leave evidence empty. Do not fabricate evidence.'
+      );
+    }
+    if (hasTag(groundTruthCase, 'state:new-turn')) {
+      policies.push(
+        'Targeted inference policy for state:new-turn: preserve existing turns and add exactly one schema-appropriate new turn for the follow-up question, including the user inquiry, assistant answer, and turn-scoped evidence.'
+      );
+    }
+  }
+  return [projectPrompt, ...policies].filter((part): part is string => Boolean(part?.trim())).join('\n\n') || undefined;
+};
+
+const applyNewTurnEvidenceRescue = async (
+  storage: LocalStorageAdapter,
+  tools: LocalToolRuntime,
+  groundTruthCase: GroundTruthCase,
+  transcript: InferenceTranscriptEntry[]
+): Promise<void> => {
+  if (!hasTag(groundTruthCase, 'state:new-turn') && !hasTag(groundTruthCase, 'state:evidence-replace')) {
+    return;
+  }
+  const data = await storage.readRecordData(groundTruthCase.projectId, groundTruthCase.caseId);
+  if (!isRecord(data)) {
+    appendDeterministicRescueEvent(transcript, 'unsupported-record', false);
+    return;
+  }
+  const nextData = cloneJson(data);
+  let changed = false;
+  if (hasTag(groundTruthCase, 'state:new-turn')) {
+    changed = (await rescueNewTurn(nextData, tools, groundTruthCase)) || changed;
+  }
+  if (hasTag(groundTruthCase, 'state:evidence-replace')) {
+    changed = (await rescueEvidenceReplace(nextData, tools, groundTruthCase)) || changed;
+  }
+  if (changed) {
+    await storage.writeRecordData(groundTruthCase.projectId, groundTruthCase.caseId, nextData);
+  }
+  appendDeterministicRescueEvent(transcript, rescueMode(groundTruthCase), changed);
+};
+
+const rescueNewTurn = async (data: Record<string, unknown>, tools: LocalToolRuntime, groundTruthCase: GroundTruthCase): Promise<boolean> => {
+  if (!Array.isArray(data.turns)) {
+    return false;
+  }
+  const prompt = groundTruthCase.prompts.at(-1) ?? '';
+  const question = extractFollowUpQuestion(prompt);
+  if (!question) {
+    return false;
+  }
+  const turns = data.turns.filter(isRecord);
+  const existing = turns.find((turn) => stringValue(turn.question) === question);
+  const evidence = await deterministicSearch(tools, question, 2);
+  const answer = answerFromEvidence(question, evidence);
+  if (existing) {
+    let changed = false;
+    if (!Array.isArray(existing.evidence) || existing.evidence.length === 0) {
+      existing.evidence = evidence;
+      changed = true;
+    }
+    if (!stringValue(existing.answer)) {
+      existing.answer = answer;
+      changed = true;
+    }
+    return changed;
+  }
+  data.turns = [...turns, { question, evidence, answer }];
+  return true;
+};
+
+const rescueEvidenceReplace = async (data: Record<string, unknown>, tools: LocalToolRuntime, groundTruthCase: GroundTruthCase): Promise<boolean> => {
+  const prompt = groundTruthCase.prompts.at(-1) ?? '';
+  const evidence = await deterministicSearch(tools, prompt, 1);
+  if (evidence.length === 0) {
+    return false;
+  }
+  const answer = answerFromEvidence(stringValue(data.question) ?? prompt, evidence);
+  if (Array.isArray(data.turns)) {
+    const turns = data.turns.filter(isRecord);
+    const turn = turns[0];
+    if (!turn) {
+      return false;
+    }
+    const changed = !jsonEqual(turn.evidence, evidence) || !stringValue(turn.answer);
+    turn.evidence = evidence;
+    if (!stringValue(turn.answer)) {
+      turn.answer = answer;
+    }
+    data.turns = turns;
+    return changed;
+  }
+  const changed = !jsonEqual(data.evidence, evidence) || !stringValue(data.answer);
+  data.evidence = evidence;
+  if (!stringValue(data.answer)) {
+    data.answer = answer;
+  }
+  return changed;
+};
+
+const deterministicSearch = async (tools: LocalToolRuntime, query: string, topK: number): Promise<Array<Record<string, unknown>>> => {
+  const response = await tools.execute({
+    tool: DETERMINISTIC_SEARCH_TOOL,
+    requestId: randomUUID(),
+    arguments: { query, topK }
+  });
+  if (!response.ok) {
+    throw new Error(response.error.message);
+  }
+  if (!isRecord(response.result) || !Array.isArray(response.result.results)) {
+    throw new Error('searchKnowledgeBase returned an invalid deterministic rescue result.');
+  }
+  return response.result.results.filter(isRecord).map((item) => cloneJson(item));
+};
+
+const answerFromEvidence = (question: string, evidence: Array<Record<string, unknown>>): string => {
+  const excerpt = stringValue(evidence[0]?.excerpt) ?? stringValue(evidence[0]?.title);
+  if (!excerpt) {
+    return `No supporting evidence was found for: ${question}`;
+  }
+  return excerpt.length > 360 ? `${excerpt.slice(0, 357).trimEnd()}...` : excerpt;
+};
+
+const appendDeterministicRescueEvent = (transcript: InferenceTranscriptEntry[], mode: string, changed: boolean): void => {
+  const eventAt = new Date().toISOString();
+  transcript.push({
+    type: 'event',
+    startedAt: eventAt,
+    finishedAt: eventAt,
+    elapsedMs: 0,
+    success: true,
+    metadata: { event: 'deterministic-rescue', strategy: 'newturn-evidence-rescue', mode, changed }
+  });
+};
+
+const rescueMode = (groundTruthCase: GroundTruthCase): string =>
+  [hasTag(groundTruthCase, 'state:new-turn') ? 'new-turn' : undefined, hasTag(groundTruthCase, 'state:evidence-replace') ? 'evidence-replace' : undefined]
+    .filter((value): value is string => Boolean(value))
+    .join('+');
+
+const extractFollowUpQuestion = (prompt: string): string | undefined => {
+  const explicit = /follow-up question:\s*(.+)$/i.exec(prompt.trim())?.[1]?.trim();
+  const value = explicit || prompt.trim();
+  return value ? value.replace(/\s+/g, ' ') : undefined;
+};
+
+const hasTag = (groundTruthCase: GroundTruthCase, tag: string): boolean => groundTruthCase.tags?.includes(tag) ?? false;
+
+const isInferenceRescueStrategy = (value: string): value is InferenceRescueStrategy =>
+  INFERENCE_RESCUE_STRATEGIES.includes(value as InferenceRescueStrategy);
+
+const stringValue = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
+
+const jsonEqual = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
 
 const recordCaseError = (
   caseError: unknown,
