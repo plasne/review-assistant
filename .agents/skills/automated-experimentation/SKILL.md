@@ -27,6 +27,10 @@ continues until the user-defined goal is met or the failure policy stops it.
 - The script supervises process mechanics; the Copilot worker agent owns
   experiment-specific planning, implementation, evaluation, analysis, and
   documentation.
+- Each worker's goal is exactly one clean experiment iteration. The 10% speed /
+  5% quality rule classifies that completed experiment as success/neutral/
+  regression/inconclusive; it is not the worker's completion goal. A `goal-met`
+  classification is the signal for the supervisor to stop the overall loop.
 - Separation of concerns is strict:
   - `experiment-loop.py` owns only supervision mechanics: branch creation,
     config restore, worker launch, logging, final safety commit, result-label
@@ -172,11 +176,17 @@ experiment hypotheses, specific model choices, permutation set names, or
 candidate-specific code changes. Put those in `BACKLOG.md`. Include:
 
 - goal and motivation;
+- a one-experiment worker completion rule: one iteration is complete once the
+  selected backlog candidate has been implemented, verified as exercising the
+  hypothesis, evaluated or explicitly marked non-comparable, documented in
+  `RESULTS.md` and `BACKLOG.md`, and committed if it produced non-ignored
+  changes;
 - commit/workspace policy;
 - Experiment Catalog URI, project, baseline, and naming rules;
 - baseline-isolation policy: each experiment starts from the original baseline
   and changes only the hypothesis variable being tested;
-- primary metric, guardrail metrics, interim success, and final stop condition;
+- primary metric, guardrail metrics, result-classification criteria, interim
+  success criteria, and final supervisor stop condition;
 - exact validation, inference, evaluation, upload, annotation, and comparison
   commands or AML Evaluation Runner modules;
 - a hypothesis implementation/proof policy: workers must identify the effective
@@ -249,7 +259,8 @@ Workers are still responsible for validating candidate instructions against the
 actual code path before running expensive evaluation. If the backlog names the
 wrong control surface, the worker must correct the implementation, document the
 learning in `BACKLOG.md`, mark any already-started attempt non-comparable, and
-restart from a fresh branch rather than uploading misleading results.
+exit so the supervisor can restart from a fresh branch rather than uploading
+misleading results.
 
 When an experiment completes, update the candidate with the result, evaluated set
 name, speed/quality summary, observed failure modes, and whether the idea should
@@ -295,6 +306,12 @@ Allowed result labels:
 
 Treat fast-but-low-quality runs as regressions. A speed win is not a success if
 quality guardrails fail.
+
+Workers should append exactly one row per attempted experiment iteration. The
+row's label tells the supervisor what to do next: `goal-met` stops the loop;
+`success`, `neutral`, and `regression` complete the worker turn but allow the
+supervisor to continue; `inconclusive` counts against the failure policy and
+should include enough failure detail for a fresh retry.
 
 ## Loop Script Behavior
 
