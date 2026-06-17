@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { globSync } from 'node:fs';
 
 const files = globSync('**/*.{ts,tsx,js,mjs,css,md,json,yml,yaml}', {
-  exclude: ['node_modules/**', 'dist/**', 'coverage/**', '.agents/**', 'package-lock.json']
+  exclude: ['node_modules/**', 'dist/**', 'release/**', 'coverage/**', '.agents/**', 'package-lock.json']
 });
 const failures = [];
 

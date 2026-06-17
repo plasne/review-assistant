@@ -1,0 +1,51 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  package:
+    name: Package ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: windows-x64
+            os: windows-latest
+            command: npm run package:win -- --x64
+          - artifact: macos-x64
+            os: macos-13
+            command: npm run package:mac -- --x64
+          - artifact: macos-arm64
+            os: macos-14
+            command: npm run package:mac -- --arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Package application
+        run: ${{ matrix.command }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-assistant-${{ matrix.artifact }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.blockmap
+            release/*.yml
+          if-no-files-found: error

@@ -88,6 +88,17 @@ make ci
 
 The underlying deterministic npm gates are `lint`, `typecheck`, `test:unit`, `test:integration`, `test:ui`, `test:e2e`, and `smoke`. `make audit-harness` verifies that the engineering harness and documentation anchors remain present.
 
+## Release artifacts
+
+Creating a version tag that starts with `v`, such as `v0.1.0`, runs the Release Artifacts workflow. The workflow packages unsigned Windows x64, macOS x64, and macOS arm64 builds and uploads them as GitHub Actions artifacts.
+
+Local packaging commands are available for platform-specific checks:
+
+```bash
+npm run package:win
+npm run package:mac
+```
+
 ## Schema coverage expectations
 
 Customers can bring different schemas, so behavior should not depend on the sample project shape. Tests should cover schema behavior at public boundaries:
