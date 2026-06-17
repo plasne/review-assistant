@@ -16,7 +16,7 @@ import shutil
 import shlex
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -441,7 +441,7 @@ def slugify(value: str) -> str:
 
 
 def utc_now() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def redact_command(command: list[str]) -> list[str]:
