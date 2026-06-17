@@ -57,6 +57,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Set package version from release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: npm version "${RELEASE_TAG#v}" --no-git-tag-version --allow-same-version
+
       - name: Package application
         run: ${{ matrix.command }}
         env:
