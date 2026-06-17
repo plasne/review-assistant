@@ -38,6 +38,7 @@ except ImportError:  # pragma: no cover - exercised only when optional CA bundle
 
 JsonValue = Any
 FactJudge = Callable[[str, str], dict[str, JsonValue]]
+MetricProducer = Callable[[], dict[str, JsonValue]]
 
 JUDGE_SCHEMA_VERSION = "review-assistant.fact-judge.v1"
 JUDGE_RETRY_ATTEMPTS = 3
@@ -340,11 +341,41 @@ def evaluate_artifact(artifact: JsonValue, *, fact_judge: FactJudge, source_blob
             )
 
         actual_record = actual_output
-        generation_scores = generation_metrics(expected_output, actual_output, paths.answer_path, fact_judge=fact_judge)
-        inference_timing = inference_timing_metrics(inference)
-        cost_metrics = evaluation_cost_metrics(inference_timing, fact_judge)
-        retrieval_metrics = retrieval_recall_metrics(expected_output, actual_output, paths)
+        metrics: dict[str, JsonValue] = {}
+        metric_errors: dict[str, dict[str, str]] = {}
+        collect_metrics(
+            metrics,
+            metric_errors,
+            "generation",
+            lambda: generation_metrics(expected_output, actual_output, paths.answer_path, fact_judge=fact_judge),
+        )
+        inference_timing = collect_metrics(metrics, metric_errors, "inference_timing", lambda: inference_timing_metrics(inference))
+        if inference_timing:
+            collect_metrics(metrics, metric_errors, "cost", lambda: evaluation_cost_metrics(inference_timing, fact_judge))
+        collect_metrics(metrics, metric_errors, "retrieval_recall", lambda: retrieval_recall_metrics(expected_output, actual_output, paths))
+        collect_metrics(
+            metrics,
+            metric_errors,
+            "output_structure",
+            lambda: {
+                "output_structure": output_structure(
+                    actual_record,
+                    paths.output_schema,
+                    paths.ignored_output_structure_issues,
+                )
+            },
+        )
         judge = evaluation_judge_metadata(fact_judge)
+        if not metrics:
+            return {
+                "source_blob": source_blob,
+                "evaluated_at": evaluated_at,
+                "status": "failed",
+                "source_status": inference_status,
+                "paths": paths_to_dict(paths),
+                "metric_errors": metric_errors,
+                "error": {"message": "No evaluation metrics could be computed.", "type": "ValueError"},
+            }
 
         return {
             "source_blob": source_blob,
@@ -353,17 +384,8 @@ def evaluate_artifact(artifact: JsonValue, *, fact_judge: FactJudge, source_blob
             "source_status": inference_status,
             **({"judge": judge} if judge else {}),
             "paths": paths_to_dict(paths),
-            "metrics": {
-                **retrieval_metrics,
-                **generation_scores,
-                "output_structure": output_structure(
-                    actual_record,
-                    paths.output_schema,
-                    paths.ignored_output_structure_issues,
-                ),
-                **inference_timing,
-                **cost_metrics,
-            },
+            "metrics": metrics,
+            **({"metric_errors": metric_errors} if metric_errors else {}),
         }
     except Exception as error:
         return {
@@ -372,6 +394,21 @@ def evaluate_artifact(artifact: JsonValue, *, fact_judge: FactJudge, source_blob
             "status": "failed",
             "error": {"message": str(error), "type": error.__class__.__name__},
         }
+
+
+def collect_metrics(
+    metrics: dict[str, JsonValue],
+    metric_errors: dict[str, dict[str, str]],
+    name: str,
+    producer: MetricProducer,
+) -> dict[str, JsonValue]:
+    try:
+        produced = producer()
+    except Exception as error:
+        metric_errors[name] = {"message": str(error), "type": error.__class__.__name__}
+        return {}
+    metrics.update(produced)
+    return produced
 
 
 def evaluate_non_completed_artifact(

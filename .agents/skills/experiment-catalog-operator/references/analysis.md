@@ -94,7 +94,7 @@ Recommended interpretation:
 - `p_value >= 0.05`: inconclusive; mention direction but avoid significance claims.
 - missing p-value: statistics not calculated, not enough iterations, or unsupported metric.
 
-Always consider result counts and iteration counts; low counts reduce confidence.
+Always consider result counts and iteration counts; low counts reduce confidence. Baseline and experiment result counts do not need to exactly match for aggregate comparison. Treat missing or unequal counts as context to report and diagnose, not as automatic proof that a run is inconclusive, unless the missing data materially changes the intended ground truth, metric definitions, or guardrail interpretation.
 
 ## Meaningful Tags
 

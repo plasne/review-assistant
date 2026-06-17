@@ -367,18 +367,18 @@ def build_copilot_command(repo: Path, config: Config, experiment: str, prompt: s
 
 
 def run_worker(command: list[str], log_path: Path, cwd: Path, supervisor_log_path: Path) -> int:
-    with log_path.open("w", encoding="utf-8") as log:
-        log.write(f"{timestamp()} Worker command: {' '.join(redact_command(command))}\n")
-        log.flush()
+    with log_path.open("w", encoding="utf-8") as worker_log:
+        worker_log.write(f"{timestamp()} Worker command: {' '.join(redact_command(command))}\n")
+        worker_log.flush()
         process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         assert process.stdout is not None
         for line in process.stdout:
             print(line, end="", flush=True)
-            log.write(line)
-            log.flush()
+            worker_log.write(line)
+            worker_log.flush()
         exit_code = process.wait()
-        log.write(f"{timestamp()} Worker exited with code {exit_code}.\n")
-        log.flush()
+        worker_log.write(f"{timestamp()} Worker exited with code {exit_code}.\n")
+        worker_log.flush()
     log(supervisor_log_path, f"Finished streaming worker output to {log_path}.")
     return exit_code
 
