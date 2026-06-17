@@ -44,11 +44,11 @@ class ExperimentLoopTests(unittest.TestCase):
         )
         return result.stdout
 
-    def test_config_backups_restore_ignored_files(self) -> None:
+    def test_config_backups_restore_resettable_files(self) -> None:
         config_path = self.repo / ".env.local"
         config_path.write_text("TOKEN=base\n", encoding="utf-8")
 
-        experiment_loop.ensure_reset_config_files_ignored(self.repo, [".env.local"])
+        experiment_loop.ensure_reset_config_files_resettable(self.repo, [".env.local"])
         experiment_loop.ensure_config_backups(self.repo, self.workspace, [".env.local"])
         config_path.write_text("TOKEN=mutated\n", encoding="utf-8")
         experiment_loop.restore_config_files(self.repo, self.workspace, [".env.local"])
@@ -56,6 +56,13 @@ class ExperimentLoopTests(unittest.TestCase):
         self.assertEqual(config_path.read_text(encoding="utf-8"), "TOKEN=base\n")
         backup = self.workspace / "_config-backups" / ".env.local"
         self.assertEqual(backup.read_text(encoding="utf-8"), "TOKEN=base\n")
+
+        tracked_config = self.repo / "tracked.env"
+        tracked_config.write_text("TOKEN=tracked\n", encoding="utf-8")
+        self.git(["add", "tracked.env"])
+        self.git(["commit", "-m", "track config"])
+
+        experiment_loop.ensure_reset_config_files_resettable(self.repo, ["tracked.env"])
 
     def test_finalize_commits_non_ignored_leftovers_without_workspace_files(self) -> None:
         self.git(["checkout", "-b", "experiment/sample"])
@@ -81,7 +88,7 @@ class ExperimentLoopTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             experiment_loop.finalize_experiment_branch(self.repo, self.workspace, "bad-exp")
 
-    def test_worker_prompt_requires_baseline_isolated_single_variable_change(self) -> None:
+    def test_worker_prompt_delegates_experiment_details_to_backlog(self) -> None:
         config = experiment_loop.Config(
             base_branch="main",
             branch_prefix="experiment",
@@ -96,10 +103,12 @@ class ExperimentLoopTests(unittest.TestCase):
         prompt = experiment_loop.build_worker_prompt(self.workspace, "review-exp", "experiment/review-exp", config)
         normalized_prompt = " ".join(prompt.split())
 
-        self.assertIn("single-variable hypothesis test", normalized_prompt)
-        self.assertIn("configured base branch and original baseline", normalized_prompt)
-        self.assertIn("Do not carry forward previous experiment changes", normalized_prompt)
-        self.assertIn("label the result inconclusive", normalized_prompt)
+        self.assertIn("Follow", normalized_prompt)
+        self.assertIn("GOAL.md", normalized_prompt)
+        self.assertIn("BACKLOG.md as the only source", normalized_prompt)
+        self.assertIn("hypothesis, parameters, set names, code/config changes, verification steps, and rollback plan", normalized_prompt)
+        self.assertIn("Update", normalized_prompt)
+        self.assertNotIn("single-variable hypothesis test", normalized_prompt)
 
 
 if __name__ == "__main__":
