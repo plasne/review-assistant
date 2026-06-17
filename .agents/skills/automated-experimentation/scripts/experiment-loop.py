@@ -49,11 +49,19 @@ def main() -> int:
     config = load_config(workspace / "loop.config.json", args)
     repo_root = git_output(["rev-parse", "--show-toplevel"], cwd=workspace).strip()
     repo = Path(repo_root)
+    supervisor_log_path = workspace / "logs" / "experiment-loop.log"
 
+    log(supervisor_log_path, "Starting experiment loop supervisor.")
+    log(supervisor_log_path, f"Workspace: {workspace}")
+    log(supervisor_log_path, f"Repository: {repo}")
     ensure_workspace_files(workspace)
+    log(supervisor_log_path, "Verified required workspace files.")
     ensure_workspace_ignored(repo, workspace)
-    ensure_reset_config_files_ignored(repo, config.reset_config_files)
+    log(supervisor_log_path, "Verified workspace is gitignored.")
+    ensure_reset_config_files_resettable(repo, config.reset_config_files)
+    log(supervisor_log_path, "Verified resettable config files.")
     ensure_config_backups(repo, workspace, config.reset_config_files)
+    log(supervisor_log_path, "Verified config backups.")
 
     if args.dry_run:
         experiment = next_experiment_name(repo, config.project_name)
@@ -70,12 +78,16 @@ def main() -> int:
 
     while args.max_iterations is None or iteration < args.max_iterations:
         if failures >= config.max_consecutive_failures:
-            print(f"Stopping after {failures} consecutive failed/incomplete attempts.")
+            log(supervisor_log_path, f"Stopping after {failures} consecutive failed/incomplete attempts.")
             return 2
 
+        log(supervisor_log_path, "Checking for a clean worktree before starting next iteration.")
         ensure_clean_versioned_worktree(repo)
+        log(supervisor_log_path, f"Checking out base branch {config.base_branch}.")
         git(["checkout", config.base_branch], cwd=repo)
+        log(supervisor_log_path, "Restoring resettable config files.")
         restore_config_files(repo, workspace, config.reset_config_files)
+        log(supervisor_log_path, "Checking for a clean worktree after config restore.")
         ensure_clean_versioned_worktree(repo)
 
         experiment = next_experiment_name(repo, config.project_name)
@@ -83,15 +95,20 @@ def main() -> int:
         experiment_dir = workspace / experiment
         artifacts_dir = experiment_dir / "artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
+        log(supervisor_log_path, f"Prepared artifact directory: {artifacts_dir}")
 
+        log(supervisor_log_path, f"Creating experiment branch {branch}.")
         git(["checkout", "-b", branch], cwd=repo)
 
         prompt = build_worker_prompt(workspace, experiment, branch, config)
         prompt_path = artifacts_dir / "worker-prompt.txt"
         prompt_path.write_text(prompt, encoding="utf-8")
+        log(supervisor_log_path, f"Wrote worker prompt: {prompt_path}")
 
         command = build_copilot_command(repo, config, experiment, prompt)
         log_path = artifacts_dir / "copilot-run.log"
+        log(supervisor_log_path, f"Worker log: {log_path}")
+        log(supervisor_log_path, f"Launching worker: {' '.join(redact_command(command))}")
         update_state(
             state_path,
             {
@@ -104,9 +121,12 @@ def main() -> int:
             },
         )
 
-        exit_code = run_worker(command, log_path, cwd=repo)
+        exit_code = run_worker(command, log_path, cwd=repo, supervisor_log_path=supervisor_log_path)
+        log(supervisor_log_path, f"Worker exited with code {exit_code}.")
+        log(supervisor_log_path, "Finalizing experiment branch.")
         finalize_experiment_branch(repo, workspace, experiment)
         result = latest_result_label(workspace / "RESULTS.md", experiment)
+        log(supervisor_log_path, f"Latest result label for {experiment}: {result or '(missing)'}")
 
         if exit_code == 0 and result == "goal-met":
             update_state(
@@ -119,7 +139,7 @@ def main() -> int:
                     "consecutive_failures": 0,
                 },
             )
-            print(f"Goal met by {experiment}. See {workspace / 'RESULTS.md'}.")
+            log(supervisor_log_path, f"Goal met by {experiment}. See {workspace / 'RESULTS.md'}.")
             return 0
 
         if exit_code == 0 and result in ("success", "neutral", "regression", "inconclusive"):
@@ -150,9 +170,12 @@ def main() -> int:
             )
 
         ensure_clean_versioned_worktree(repo)
+        log(supervisor_log_path, f"Returning to base branch {config.base_branch}.")
         git(["checkout", config.base_branch], cwd=repo, check=False)
+        log(supervisor_log_path, f"Completed iteration {iteration + 1}.")
         iteration += 1
 
+    log(supervisor_log_path, "Reached max iterations for this invocation.")
     return 0
 
 
@@ -217,11 +240,12 @@ def normalize_reset_config_files(raw: Any) -> list[str]:
     return normalized
 
 
-def ensure_reset_config_files_ignored(repo: Path, reset_config_files: list[str]) -> None:
+def ensure_reset_config_files_resettable(repo: Path, reset_config_files: list[str]) -> None:
     for rel_path in reset_config_files:
-        result = subprocess.run(["git", "check-ignore", "-q", "--", rel_path], cwd=repo)
-        if result.returncode != 0:
-            raise SystemExit(f"reset_config_files entry must be gitignored and untracked: {rel_path}")
+        tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "--", rel_path], cwd=repo, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ignored = subprocess.run(["git", "check-ignore", "-q", "--", rel_path], cwd=repo)
+        if tracked.returncode != 0 and ignored.returncode != 0:
+            raise SystemExit(f"reset_config_files entry must be tracked or gitignored: {rel_path}")
 
 
 def ensure_config_backups(repo: Path, workspace: Path, reset_config_files: list[str]) -> None:
@@ -313,30 +337,13 @@ Experiment Catalog URI: {config.catalog_uri}
 Experiment Catalog project: {config.catalog_project_name}
 
 Start by selecting the highest-ranked pending idea from {workspace / 'BACKLOG.md'}.
-Treat the selected idea as a single-variable hypothesis test: start from the
-configured base branch and original baseline, then make only the smallest
-code/configuration change needed to test that hypothesis. Do not carry forward
-previous experiment changes, prior config edits, prompt tweaks, incidental
-refactors, dependency updates, metric changes, or evaluation input changes
-unless they are the explicit variable being tested and are documented as such.
+Use {workspace / 'BACKLOG.md'} as the only source for the selected experiment's
+hypothesis, parameters, set names, code/config changes, verification steps, and
+rollback plan. Select the highest-ranked pending candidate and execute exactly
+one experiment or permutation group as instructed there.
 
-Create/update the Experiment Catalog experiment, implement and evaluate the
-permutation(s), update the experiment README, append {workspace / 'RESULTS.md'},
-update {workspace / 'BACKLOG.md'} with learning, commit tracked code changes on
-the current branch, then return to the configured base branch if possible. If
-more than one variable changed, label the result inconclusive unless the run is
-intentionally documented as a new baseline.
-
-Commit every non-ignored code/configuration change needed to reproduce the
-experiment. Do not commit {workspace}, any files under it, or any gitignored
-file. Do not use git add -f. Before exiting, run git status --porcelain
---untracked-files=all and leave no non-ignored tracked or untracked changes
-behind; the supervisor will make a final safety commit for any non-ignored
-leftovers and will fail the run if the experiment workspace was tracked.
-
-Stop after one completed, failed, or inconclusive experiment. If the experiment
-is incomplete, make that explicit in RESULTS.md. Do not push, merge, open a PR,
-delete branches, or productize the result.
+Update {workspace / 'RESULTS.md'} and {workspace / 'BACKLOG.md'} with the result
+and learning before exiting.
 """
 
 
@@ -359,10 +366,21 @@ def build_copilot_command(repo: Path, config: Config, experiment: str, prompt: s
     return command
 
 
-def run_worker(command: list[str], log_path: Path, cwd: Path) -> int:
+def run_worker(command: list[str], log_path: Path, cwd: Path, supervisor_log_path: Path) -> int:
     with log_path.open("w", encoding="utf-8") as log:
-        process = subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, text=True)
-        return process.wait()
+        log.write(f"{timestamp()} Worker command: {' '.join(redact_command(command))}\n")
+        log.flush()
+        process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            log.write(line)
+            log.flush()
+        exit_code = process.wait()
+        log.write(f"{timestamp()} Worker exited with code {exit_code}.\n")
+        log.flush()
+    log(supervisor_log_path, f"Finished streaming worker output to {log_path}.")
+    return exit_code
 
 
 def latest_result_label(results_path: Path, experiment: str) -> str | None:
@@ -395,6 +413,18 @@ def load_state(path: Path) -> dict[str, Any]:
 
 def update_state(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def log(path: Path, message: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = f"{timestamp()} {message}"
+    print(line, flush=True)
+    with path.open("a", encoding="utf-8") as file:
+        file.write(line + "\n")
+
+
+def timestamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def git(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:

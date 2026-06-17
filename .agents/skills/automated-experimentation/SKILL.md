@@ -27,12 +27,25 @@ continues until the user-defined goal is met or the failure policy stops it.
 - The script supervises process mechanics; the Copilot worker agent owns
   experiment-specific planning, implementation, evaluation, analysis, and
   documentation.
+- Separation of concerns is strict:
+  - `experiment-loop.py` owns only supervision mechanics: branch creation,
+    config restore, worker launch, logging, final safety commit, result-label
+    detection, and stop/failure policy.
+  - `GOAL.md` owns the durable operating contract: goal, success criteria,
+    baseline isolation, catalog/evaluation procedure, validation gates,
+    artifact-parameter verification requirements, learning loop, and policies.
+  - `BACKLOG.md` owns all experiment-specific hypotheses, runtime parameters,
+    code/config changes, set names, permutation definitions, verification
+    details, evidence, results, and follow-up candidates.
+  - The generated worker prompt must be a small bootstrap that points to
+    `GOAL.md` and `BACKLOG.md`; it must not duplicate individual experiment
+    details.
 - Keep everything local by default: do not push, open PRs, merge, delete
   branches, or productize winning changes.
 - If an experiment is interrupted before completion, record it as incomplete and
   start over with a new experiment name and branch.
 - Each experiment must be baseline-isolated: start from the configured base
-  branch, restore resettable ignored config, choose one hypothesis, and apply
+  branch, restore resettable tracked or gitignored config, choose one hypothesis, and apply
   only the minimum change needed to test that hypothesis. Do not chain
   experiments together, carry over previous experiment commits/config/prompt
   tweaks, or include incidental refactors, cleanup, dependency upgrades, metric
@@ -77,7 +90,7 @@ and propose a default.
 | Inference/evaluation route | Local commands, AML Evaluation Runner modules, or another deterministic route. |
 | Validation commands | Deterministic checks to run before expensive evaluation. |
 | Resource constraints | Concurrency limits, flaky services, rate limits, credentials, or known hazards. |
-| Resettable ignored config files | Repo-relative paths for gitignored config files, such as `.env.local`, that must be restored from backup before each experiment. Ask explicitly; use `[]` if none. |
+| Resettable config files | Repo-relative paths for tracked or gitignored config files, such as `.env.local` or tracked ground-truth `.env` files, that must be restored from backup before each experiment. Ask explicitly; use `[]` if none. |
 
 ## Where Interview Answers Go
 
@@ -93,6 +106,7 @@ Use one interview to populate both files:
 | Experiment Catalog URI/project | `GOAL.md` and `loop.config.json.experiment_catalog`. |
 | Resettable ignored config files | `GOAL.md` with purpose/context and `loop.config.json.reset_config_files` with exact repo-relative paths. |
 | Baseline, metrics, stop rules, validation, evaluation, upload, comparison, constraints, and hazards | `GOAL.md` only. |
+| Candidate hypotheses, runtime parameters, code/config changes, set names, permutation definitions, expected impact, candidate-specific verification, and rollback plans | `BACKLOG.md` only. |
 
 ## Setup Procedure
 
@@ -105,7 +119,7 @@ Use one interview to populate both files:
 3. Create the workspace directory if needed.
 4. Add or confirm a `.gitignore` entry for the workspace. The workspace must
    persist across branch switches and must not be committed by default.
-5. Ask for repo-relative paths of any gitignored config files that must reset
+5. Ask for repo-relative paths of any tracked or gitignored config files that must reset
    before every experiment. Record them in `loop.config.json` as
    `reset_config_files`; use an empty array when there are none.
 6. Copy those config files into `<workspace>/_config-backups/`, preserving their
@@ -145,14 +159,16 @@ to a full path or wrapper command if needed. `reset_config_files` belongs here
 because the supervisor must restore those files before it creates the experiment
 branch and before the worker can read `GOAL.md`; also describe the files and why
 they are reset in `GOAL.md` for the worker's context. Paths must be
-repo-relative, gitignored, and untracked.
+repo-relative and either tracked by git or gitignored.
 
 ## Workspace Files
 
 ### `GOAL.md`
 
-Write a project-specific instruction file that a fresh worker can follow without
-prior conversation context. Include:
+Write a project-specific operating contract that a fresh worker can follow
+without prior conversation context. `GOAL.md` must not contain individual
+experiment hypotheses, specific model choices, permutation set names, or
+candidate-specific code changes. Put those in `BACKLOG.md`. Include:
 
 - goal and motivation;
 - commit/workspace policy;
@@ -163,10 +179,13 @@ prior conversation context. Include:
 - exact validation, inference, evaluation, upload, annotation, and comparison
   commands or AML Evaluation Runner modules;
 - resource constraints and known hazards;
-- resettable ignored config files and what each one controls, matching
+- resettable tracked or gitignored config files and what each one controls, matching
   `loop.config.json`;
 - one-experiment procedure;
 - continuous learning requirements.
+- a rule that workers must read the selected `BACKLOG.md` candidate for exact
+  runtime parameters, command-scoped environment variables, set names, code
+  changes, artifact-parameter verification, and rollback instructions.
 
 Critical rules to include:
 
@@ -211,6 +230,12 @@ Create a ranked backlog with:
 Each candidate should include hypothesis, single-variable change, expected
 impact, isolation boundary, quality risk, metrics to watch, suggested set names,
 evidence, rollback plan, and status.
+
+Each candidate should also include candidate-specific runtime/configuration
+parameters, exact inference/evaluation command environment variables where
+applicable, and any artifact checks needed to prove the run used the intended
+configuration. These details belong in `BACKLOG.md`, not `GOAL.md` or the loop
+prompt.
 
 When an experiment completes, update the candidate with the result, evaluated set
 name, speed/quality summary, observed failure modes, and whether the idea should
@@ -274,7 +299,10 @@ The copied script should:
   `<branch_prefix>/<project-slug>-exp-YYYYMMDD-NN`;
 - create `experiments/<experiment-name>/artifacts/worker-prompt.txt`;
 - launch `copilot -p` in non-interactive mode;
-- log stdout/stderr to `experiments/<experiment-name>/artifacts/copilot-run.log`;
+- print timestamped supervisor progress to the console and
+  `experiments/logs/experiment-loop.log`;
+- stream worker stdout/stderr to both the console and
+  `experiments/<experiment-name>/artifacts/copilot-run.log`;
 - make a final safety commit for any remaining non-ignored changes on the
   experiment branch before returning to the base branch;
 - fail rather than continue if any file under the gitignored experiment
@@ -302,29 +330,18 @@ The worker prompt generated by the script should say:
 ```text
 Follow experiments/GOAL.md. Complete exactly one experiment iteration.
 
-Start by selecting the highest-ranked pending idea from experiments/BACKLOG.md.
-Treat the selected idea as a single-variable hypothesis test: start from the
-configured base branch and original baseline, then make only the smallest
-code/configuration change needed to test that hypothesis. Do not carry forward
-previous experiment changes, prior config edits, prompt tweaks, incidental
-refactors, dependency updates, metric changes, or evaluation input changes
-unless they are the explicit variable being tested and are documented as such.
+Experiment name: <supervisor-provided experiment name>
+Current branch: <supervisor-created branch>
+Experiment Catalog URI: <catalog URI>
+Experiment Catalog project: <catalog project>
 
-Create/update the Experiment Catalog experiment, implement and evaluate the
-permutation(s), update the experiment README, append experiments/RESULTS.md,
-update experiments/BACKLOG.md with learning, commit tracked code changes on the
-current branch, then return to the configured base branch if possible. If more
-than one variable changed, label the result inconclusive unless the run is
-intentionally documented as a new baseline.
+Use experiments/BACKLOG.md as the only source for the selected experiment's
+hypothesis, parameters, set names, code/config changes, verification steps, and
+rollback plan. Select the highest-ranked pending candidate and execute exactly
+one experiment or permutation group as instructed there.
 
-Commit every non-ignored code/configuration change needed to reproduce the
-experiment. Do not commit experiments/, any files under it, or any gitignored
-file. Do not use git add -f. Before exiting, run git status --porcelain
---untracked-files=all and leave no non-ignored tracked or untracked changes
-behind.
-
-Stop after one completed, failed, or inconclusive experiment. Do not push, merge,
-open a PR, delete branches, or productize the result.
+Update experiments/RESULTS.md and experiments/BACKLOG.md with the result and
+learning before exiting.
 ```
 
 ## Validation Before Handoff
