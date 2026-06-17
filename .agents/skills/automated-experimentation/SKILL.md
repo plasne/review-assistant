@@ -11,57 +11,6 @@ GitHub Copilot CLI worker for exactly one experiment, records results in
 Experiment Catalog and `RESULTS.md`, commits the experiment branch locally, then
 continues until the user-defined goal is met or the failure policy stops it.
 
-## Core Decisions
-
-- Experiment Catalog is required. Do not create a CSV, JSONL, SQLite, or
-  local-only fallback result store.
-- `RESULTS.md` is the only local results board. Do not create `results.jsonl`.
-- The skill ships with a reusable `scripts/experiment-loop.py` template. Copy it
-  into the experiment workspace; do not generate a bespoke loop script from
-  scratch unless the user asks for a custom implementation.
-- The copied script infers its workspace from its own directory, so
-  `loop.config.json` does not need a `workspace` field.
-- Interview the user once. Use the same answers to write `GOAL.md` and the
-  small machine-readable `loop.config.json`; do not make the user maintain two
-  separate sources of experiment truth.
-- The script supervises process mechanics; the Copilot worker agent owns
-  experiment-specific planning, implementation, evaluation, analysis, and
-  documentation.
-- Each worker's goal is exactly one clean experiment iteration. The 10% speed /
-  5% quality rule classifies that completed experiment as success/neutral/
-  regression/inconclusive; it is not the worker's completion goal. A `goal-met`
-  classification is the signal for the supervisor to stop the overall loop.
-- Separation of concerns is strict:
-  - `experiment-loop.py` owns only supervision mechanics: branch creation,
-    config restore, worker launch, logging, final safety commit, result-label
-    detection, and stop/failure policy.
-  - `GOAL.md` owns the durable operating contract: goal, success criteria,
-    baseline isolation, catalog/evaluation procedure, validation gates,
-    hypothesis implementation/proof requirements, artifact-parameter
-    verification requirements, learning loop, and policies.
-  - `BACKLOG.md` owns all experiment-specific hypotheses, runtime parameters,
-    code/config changes, set names, permutation definitions, verification
-    details, evidence, results, and follow-up candidates.
-  - The generated worker prompt must be a small bootstrap that points to
-    `GOAL.md` and `BACKLOG.md`; it must not duplicate individual experiment
-    details.
-- Keep everything local by default: do not push, open PRs, merge, delete
-  branches, or productize winning changes.
-- If an experiment is interrupted before completion, record it as incomplete and
-  start over with a new experiment name and branch.
-- Each experiment must be baseline-isolated: start from the configured base
-  branch, restore resettable tracked or gitignored config, choose one hypothesis, and apply
-  only the minimum change needed to test that hypothesis. Do not chain
-  experiments together, carry over previous experiment commits/config/prompt
-  tweaks, or include incidental refactors, cleanup, dependency upgrades, metric
-  changes, or evaluation-input changes that are not part of the hypothesis.
-- If a hypothesis truly requires changing the baseline, ground truth, metric
-  definitions, guardrail thresholds, or evaluation route, call that out
-  explicitly and treat it as a new baseline or a non-comparable experiment rather
-  than mixing it into an otherwise comparable run.
-- Do not carry non-ignored uncommitted changes between branches, and never
-  commit gitignored experiment-control artifacts.
-
 ## Simple Operating Model
 
 1. Interview the user and inspect the repository.
@@ -75,43 +24,75 @@ continues until the user-defined goal is met or the failure policy stops it.
 7. The script checks `RESULTS.md` and/or Experiment Catalog. If the goal is met,
    it stops with a summary; otherwise it starts the next experiment.
 
+Everything is local by default: do not push, open PRs, merge, delete branches,
+or productize winning changes. If an experiment is interrupted before
+completion, record it as incomplete and start over with a new experiment name
+and branch.
+
+Use the shipped `scripts/experiment-loop.py` template. Copy it into the
+experiment workspace; do not generate a bespoke loop script from scratch unless
+the user asks for custom implementation. The copied script infers its workspace
+from its own directory, so `loop.config.json` does not need a `workspace` field.
+
+Each worker's goal is exactly one clean experiment iteration. The user-defined
+speed/quality rule classifies that completed experiment as
+success/neutral/regression/inconclusive; it is not the worker's completion goal.
+A `goal-met` classification is the signal for the supervisor to stop the
+overall loop.
+
+## Separation of Concerns
+
+- `experiment-loop.py` owns only supervision mechanics: branch creation, config
+  restore, worker launch, logging, final safety commit, result-label detection,
+  and stop/failure policy.
+- `GOAL.md` owns the durable operating contract: goal, success criteria,
+  baseline isolation, catalog/evaluation procedure, validation gates, hypothesis
+  implementation/proof requirements, artifact-parameter verification
+  requirements, learning loop, and policies.
+- `BACKLOG.md` owns all experiment-specific hypotheses, runtime parameters,
+  code/config changes, set names, permutation definitions, verification details,
+  evidence, results, and follow-up candidates.
+- The generated worker prompt must be a small bootstrap that points to
+  `GOAL.md` and `BACKLOG.md`; it must not duplicate individual experiment
+  details.
+
 ## Required User Inputs
 
 Collect these before setup. If the user does not know a value, inspect the repo
 and propose a default.
 
-| Field | Purpose |
-| --- | --- |
-| Project/system name | Used for branch and catalog naming. |
-| Experiment workspace | Local folder for ignored experiment-control files; default `experiments/`. |
-| Base branch | Branch each experiment starts from; default `main` unless repo suggests otherwise. |
-| Experiment Catalog URI | API base URI, usually ending in `/api`. |
-| Experiment Catalog project name | Existing or to-be-created catalog project. |
-| Baseline | Catalog baseline experiment/set or project baseline rule. |
-| Goal and stop condition | The final condition that ends the loop. |
-| Interim success rule | How to label useful non-final wins. |
-| Primary metric | Main optimization target. |
-| Guardrail metrics | Metrics that must not regress beyond user-defined thresholds. |
-| Inference/evaluation route | Local commands, AML Evaluation Runner modules, or another deterministic route. |
-| Validation commands | Deterministic checks to run before expensive evaluation. |
-| Resource constraints | Concurrency limits, flaky services, rate limits, credentials, or known hazards. |
-| Resettable config files | Repo-relative paths for tracked or gitignored config files, such as `.env.local` or tracked ground-truth `.env` files, that must be restored from backup before each experiment. Ask explicitly; use `[]` if none. |
+| Field                           | Purpose                                                                                                                                                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Project/system name             | Used for branch and catalog naming.                                                                                                                                                                                |
+| Experiment workspace            | Local folder for ignored experiment-control files; default `experiments/`.                                                                                                                                         |
+| Base branch                     | Branch each experiment starts from; default `main` unless repo suggests otherwise.                                                                                                                                 |
+| Experiment Catalog URI          | API base URI, usually ending in `/api`.                                                                                                                                                                            |
+| Experiment Catalog project name | Existing or to-be-created catalog project.                                                                                                                                                                         |
+| Baseline                        | Catalog baseline experiment/set or project baseline rule.                                                                                                                                                          |
+| Goal and stop condition         | The final condition that ends the loop.                                                                                                                                                                            |
+| Interim success rule            | How to label useful non-final wins.                                                                                                                                                                                |
+| Primary metric                  | Main optimization target.                                                                                                                                                                                          |
+| Guardrail metrics               | Metrics that must not regress beyond user-defined thresholds.                                                                                                                                                      |
+| Inference/evaluation route      | Local commands, AML Evaluation Runner modules, or another deterministic route.                                                                                                                                     |
+| Validation commands             | Deterministic checks to run before expensive evaluation.                                                                                                                                                           |
+| Resource constraints            | Concurrency limits, flaky services, rate limits, credentials, or known hazards.                                                                                                                                    |
+| Resettable config files         | Repo-relative paths for tracked or gitignored config files, such as `.env.local` or tracked ground-truth `.env` files, that must be restored from backup before each experiment. Ask explicitly; use `[]` if none. |
 
 ## Where Interview Answers Go
 
 Use one interview to populate both files:
 
-| Answer | Write to |
-| --- | --- |
-| Project/system name | `GOAL.md`, `loop.config.json.project_name`, and catalog project naming if applicable. |
-| Experiment workspace | Filesystem path only; do not put it in `loop.config.json` because the script infers it. |
-| Base branch | `GOAL.md` and `loop.config.json.base_branch`. |
-| Branch naming preference | `GOAL.md` and `loop.config.json.branch_prefix`; default `experiment`. |
-| Copilot command/path | `loop.config.json.copilot_command`; mention only in `GOAL.md` if workers need to know it. |
-| Experiment Catalog URI/project | `GOAL.md` and `loop.config.json.experiment_catalog`. |
-| Resettable ignored config files | `GOAL.md` with purpose/context and `loop.config.json.reset_config_files` with exact repo-relative paths. |
-| Baseline, metrics, stop rules, validation, evaluation, upload, comparison, constraints, and hazards | `GOAL.md` only. |
-| Candidate hypotheses, runtime parameters, code/config changes, set names, permutation definitions, expected impact, candidate-specific verification, and rollback plans | `BACKLOG.md` only. |
+| Answer                                                                                                                                                                  | Write to                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Project/system name                                                                                                                                                     | `GOAL.md`, `loop.config.json.project_name`, and catalog project naming if applicable.                    |
+| Experiment workspace                                                                                                                                                    | Filesystem path only; do not put it in `loop.config.json` because the script infers it.                  |
+| Base branch                                                                                                                                                             | `GOAL.md` and `loop.config.json.base_branch`.                                                            |
+| Branch naming preference                                                                                                                                                | `GOAL.md` and `loop.config.json.branch_prefix`; default `experiment`.                                    |
+| Copilot command/path                                                                                                                                                    | `loop.config.json.copilot_command`; mention only in `GOAL.md` if workers need to know it.                |
+| Experiment Catalog URI/project                                                                                                                                          | `GOAL.md` and `loop.config.json.experiment_catalog`.                                                     |
+| Resettable config files                                                                                                                                                 | `GOAL.md` with purpose/context and `loop.config.json.reset_config_files` with exact repo-relative paths. |
+| Baseline, metrics, stop rules, validation, evaluation, upload, comparison, constraints, and hazards                                                                     | `GOAL.md` only.                                                                                          |
+| Candidate hypotheses, runtime parameters, code/config changes, set names, permutation definitions, expected impact, candidate-specific verification, and rollback plans | `BACKLOG.md` only.                                                                                       |
 
 ## Setup Procedure
 
@@ -194,10 +175,10 @@ candidate-specific code changes. Put those in `BACKLOG.md`. Include:
   needed to exercise the selected hypothesis, and prove the hypothesis is active
   before expensive evaluation;
 - resource constraints and known hazards;
-- resettable tracked or gitignored config files and what each one controls, matching
-  `loop.config.json`;
+- resettable tracked or gitignored config files and what each one controls,
+  matching `loop.config.json`;
 - one-experiment procedure;
-- continuous learning requirements.
+- continuous learning requirements;
 - a rule that workers must read the selected `BACKLOG.md` candidate for exact
   runtime parameters, the effective config source or command-scoped environment
   variables consumed by the evaluation route, set names, code changes,
@@ -268,7 +249,10 @@ be retried, combined, narrowed, or abandoned.
 
 ### `RESULTS.md`
 
-Create an at-a-glance board. Do not create `results.jsonl`.
+Create an at-a-glance board. `RESULTS.md` is the only local results board; do
+not create `results.jsonl`. Every evaluated run should also be recorded in
+Experiment Catalog. Do not create CSV, JSONL, SQLite, or local-only fallback
+result stores.
 
 Recommended header:
 
@@ -293,7 +277,7 @@ Recommended table:
 
 ```md
 | Experiment | Date | Hypothesis | Result | Best/decisive set | Primary metric delta | Worst guardrail delta | Key learning |
-| --- | --- | --- | --- | --- | --- | --- | --- |
+| ---------- | ---- | ---------- | ------ | ----------------- | -------------------- | --------------------- | ------------ |
 ```
 
 Allowed result labels:
