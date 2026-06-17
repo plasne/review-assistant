@@ -313,10 +313,19 @@ Experiment Catalog URI: {config.catalog_uri}
 Experiment Catalog project: {config.catalog_project_name}
 
 Start by selecting the highest-ranked pending idea from {workspace / 'BACKLOG.md'}.
+Treat the selected idea as a single-variable hypothesis test: start from the
+configured base branch and original baseline, then make only the smallest
+code/configuration change needed to test that hypothesis. Do not carry forward
+previous experiment changes, prior config edits, prompt tweaks, incidental
+refactors, dependency updates, metric changes, or evaluation input changes
+unless they are the explicit variable being tested and are documented as such.
+
 Create/update the Experiment Catalog experiment, implement and evaluate the
 permutation(s), update the experiment README, append {workspace / 'RESULTS.md'},
 update {workspace / 'BACKLOG.md'} with learning, commit tracked code changes on
-the current branch, then return to the configured base branch if possible.
+the current branch, then return to the configured base branch if possible. If
+more than one variable changed, label the result inconclusive unless the run is
+intentionally documented as a new baseline.
 
 Commit every non-ignored code/configuration change needed to reproduce the
 experiment. Do not commit {workspace}, any files under it, or any gitignored

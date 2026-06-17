@@ -81,6 +81,26 @@ class ExperimentLoopTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             experiment_loop.finalize_experiment_branch(self.repo, self.workspace, "bad-exp")
 
+    def test_worker_prompt_requires_baseline_isolated_single_variable_change(self) -> None:
+        config = experiment_loop.Config(
+            base_branch="main",
+            branch_prefix="experiment",
+            project_name="Review Assistant",
+            copilot_command="copilot",
+            catalog_uri="https://catalog.example.invalid/api",
+            catalog_project_name="Review Assistant",
+            max_consecutive_failures=3,
+            reset_config_files=[],
+        )
+
+        prompt = experiment_loop.build_worker_prompt(self.workspace, "review-exp", "experiment/review-exp", config)
+        normalized_prompt = " ".join(prompt.split())
+
+        self.assertIn("single-variable hypothesis test", normalized_prompt)
+        self.assertIn("configured base branch and original baseline", normalized_prompt)
+        self.assertIn("Do not carry forward previous experiment changes", normalized_prompt)
+        self.assertIn("label the result inconclusive", normalized_prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
