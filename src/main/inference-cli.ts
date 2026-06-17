@@ -34,10 +34,12 @@ export const resolveInferenceIterations = (
 export const getInferenceLocalPath = (repoRoot: string): string =>
   path.join(repoRoot, 'ground-truth');
 
-export const resolveInferenceCliConfig = (repoRoot: string): AppConfig => {
+export const resolveInferenceCliConfig = (repoRoot: string, envValues: Record<string, string | undefined> = process.env): AppConfig => {
   const appEnvPath = getInferenceAppEnvPath(repoRoot);
+  const fileValues = readEnvFile(appEnvPath);
   const values = {
-    ...readEnvFile(appEnvPath),
+    ...fileValues,
+    ...(envValues.INFERENCE_RESCUE_STRATEGY ? { INFERENCE_RESCUE_STRATEGY: envValues.INFERENCE_RESCUE_STRATEGY } : {}),
     LOCAL_PATH: getInferenceLocalPath(repoRoot)
   };
   const backendKind = selectBackend(values);
