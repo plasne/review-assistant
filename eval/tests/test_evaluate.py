@@ -1116,6 +1116,64 @@ class EvaluateMetricsTests(unittest.TestCase):
             ],
         )
 
+    def test_evaluate_artifact_keeps_metrics_when_retrieval_path_is_missing(self):
+        artifact = {
+            "ground_truth": {
+                "output": {
+                    "turns": [
+                        {
+                            "answer": "No helicopter movement rule exists.",
+                            "evidence": [],
+                        }
+                    ]
+                },
+                "evaluation": {
+                    "evidence_path": "/turns/0/evidence",
+                    "answer_path": "/turns/0/answer",
+                    "evidence_key": "url",
+                },
+            },
+            "inference": {
+                "ref": "d08",
+                "run_folder": "run",
+                "status": "completed",
+                "elapsed_ms": 1234,
+                "output": {
+                    "turns": [
+                        {
+                            "answer": "No helicopter movement rule exists.",
+                        }
+                    ]
+                },
+                "transcript": [
+                    {"type": "tool-call", "elapsed_ms": 250},
+                    {
+                        "type": "assistant-response",
+                        "elapsed_ms": 800,
+                        "metadata": {"assistantRequestElapsedMs": 900, "cost": 1.0},
+                    },
+                ],
+            },
+        }
+
+        result = evaluate_artifact(artifact, source_blob="run/d08-3.json", fact_judge=equivalent_fact_judge)
+
+        self.assertEqual(result["status"], "evaluated")
+        self.assertNotIn("retrieval_recall", result["metrics"])
+        self.assertEqual(result["metric_errors"]["retrieval_recall"], {
+            "message": "JSON pointer not found: /turns/0/evidence",
+            "type": "ValueError",
+        })
+        self.assertEqual(result["metrics"]["generation_accuracy"]["score"], 1.0)
+        self.assertEqual(result["metrics"]["generation_recall"]["score"], 1.0)
+        self.assertEqual(result["metrics"]["generation_precision"]["score"], 1.0)
+        self.assertEqual(result["metrics"]["output_structure"]["score"], 0.0)
+        self.assertEqual(result["metrics"]["meta_total_elapsed_ms"], 1234)
+        self.assertEqual(result["metrics"]["meta_model_elapsed_ms"], 900)
+        self.assertEqual(result["metrics"]["meta_tool_elapsed_ms"], 250)
+        self.assertEqual(result["metrics"]["meta_tool_call_count"], 1)
+        self.assertEqual(result["metrics"]["meta_inference_cost"], 0.01)
+
     def test_evaluate_artifact_computes_per_turn_generation_macro_average(self):
         def fact_judge(expected_answer, actual_answer):
             is_equivalent = expected_answer == actual_answer

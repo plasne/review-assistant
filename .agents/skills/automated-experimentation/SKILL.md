@@ -204,6 +204,10 @@ Every experiment must use the same ground truth, baseline, metric definitions,
 and guardrail thresholds unless this file explicitly says the baseline changed.
 Do not compare runs that used materially different evaluation inputs as if they
 were equivalent.
+Result counts do not need to exactly match baseline counts. Unequal counts must
+be reported with missing/failed refs and may reduce confidence, but count
+mismatch alone does not make a run inconclusive when the same intended ground
+truth, baseline, metric definitions, and guardrail thresholds were used.
 ```
 
 ```md
