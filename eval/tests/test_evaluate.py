@@ -325,6 +325,7 @@ class EvaluateMetricsTests(unittest.TestCase):
             def __init__(self):
                 self.model = "gpt-5.4-mini"
                 self.used_models = set()
+                self.cost = 225.0
 
             def __call__(self, _expected_answer, _actual_answer):
                 self.used_models.add("gpt-5.4-mini")
@@ -358,6 +359,7 @@ class EvaluateMetricsTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "evaluated")
         self.assertEqual(result["judge"], {"model": "gpt-5.4-mini"})
+        self.assertEqual(result["metrics"]["meta_evaluation_cost"], 2.25)
 
     def test_evaluate_artifact_fails_when_judge_reports_unexpected_model(self):
         class MismatchedFactJudge:
@@ -719,7 +721,12 @@ class EvaluateMetricsTests(unittest.TestCase):
                     {
                         "type": "assistant-response",
                         "elapsed_ms": 800,
-                        "metadata": {"assistantRequestElapsedMs": 900, "firstTokenLatencyMs": 100, "streamElapsedMs": 800},
+                        "metadata": {
+                            "assistantRequestElapsedMs": 900,
+                            "firstTokenLatencyMs": 100,
+                            "streamElapsedMs": 800,
+                            "cost": 150.0,
+                        },
                     },
                     {"type": "tool-call", "elapsed_ms": 50},
                 ],
@@ -730,13 +737,53 @@ class EvaluateMetricsTests(unittest.TestCase):
             metrics,
             {
                 "meta_total_elapsed_ms": 1234,
-                "meta_assistant_request_elapsed_ms": 900,
-                "meta_first_token_latency_ms": 100,
-                "meta_stream_elapsed_ms": 800,
+                "meta_model_elapsed_ms": 900,
                 "meta_tool_elapsed_ms": 300,
-                "meta_unattributed_elapsed_ms": 334,
+                "meta_tool_call_count": 2,
+                "meta_inference_cost": 1.5,
             },
         )
+
+    def test_inference_timing_metrics_supports_configured_fractional_cent_credit_rate(self):
+        with patch.dict(os.environ, {"GITHUB_AI_CREDIT_USD": "0.0005"}, clear=True):
+            metrics = inference_timing_metrics(
+                {
+                    "elapsed_ms": 1234,
+                    "transcript": [
+                        {
+                            "type": "assistant-response",
+                            "elapsed_ms": 800,
+                            "metadata": {
+                                "assistantRequestElapsedMs": 900,
+                                "cost": 3.0,
+                            },
+                        },
+                    ],
+                }
+            )
+
+        self.assertEqual(metrics["meta_inference_cost"], 0.0015)
+
+    def test_inference_timing_metrics_rejects_invalid_configured_credit_rate(self):
+        for rate in ["invalid", "0", "-0.01", "NaN", "Infinity"]:
+            with self.subTest(rate=rate):
+                with patch.dict(os.environ, {"GITHUB_AI_CREDIT_USD": rate}, clear=True):
+                    with self.assertRaisesRegex(ValueError, "GITHUB_AI_CREDIT_USD must be a positive decimal number"):
+                        inference_timing_metrics(
+                            {
+                                "elapsed_ms": 1234,
+                                "transcript": [
+                                    {
+                                        "type": "assistant-response",
+                                        "elapsed_ms": 800,
+                                        "metadata": {
+                                            "assistantRequestElapsedMs": 900,
+                                            "cost": 3.0,
+                                        },
+                                    },
+                                ],
+                            }
+                        )
 
     def test_experiment_catalog_metrics_flatten_scores_and_timing_values(self):
         metrics = experiment_catalog_metrics(
@@ -746,11 +793,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                     "generation_accuracy": {"score": 0.75, "ground_truth_facts": []},
                     "output_structure": {"score": 1.0},
                     "meta_total_elapsed_ms": 1234,
-                    "meta_assistant_request_elapsed_ms": 900,
-                    "meta_first_token_latency_ms": 100,
-                    "meta_stream_elapsed_ms": 800,
+                    "meta_model_elapsed_ms": 900,
                     "meta_tool_elapsed_ms": 250,
-                    "meta_unattributed_elapsed_ms": 334,
+                    "meta_tool_call_count": 2,
+                    "meta_inference_cost": 1.5,
+                    "meta_evaluation_cost": 2.25,
                 }
             }
         )
@@ -762,11 +809,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                 "generation_accuracy": 0.75,
                 "output_structure": 1.0,
                 "meta_total_elapsed_ms": 1234,
-                "meta_assistant_request_elapsed_ms": 900,
-                "meta_first_token_latency_ms": 100,
-                "meta_stream_elapsed_ms": 800,
+                "meta_model_elapsed_ms": 900,
                 "meta_tool_elapsed_ms": 250,
-                "meta_unattributed_elapsed_ms": 334,
+                "meta_tool_call_count": 2,
+                "meta_inference_cost": 1.5,
+                "meta_evaluation_cost": 2.25,
             },
         )
 
@@ -819,11 +866,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                     "metrics": {
                         "generation_accuracy": {"score": 1.0},
                         "meta_total_elapsed_ms": 1234,
-                        "meta_assistant_request_elapsed_ms": 900,
-                        "meta_first_token_latency_ms": 100,
-                        "meta_stream_elapsed_ms": 800,
+                        "meta_model_elapsed_ms": 900,
                         "meta_tool_elapsed_ms": 250,
-                        "meta_unattributed_elapsed_ms": 334,
+                        "meta_tool_call_count": 2,
+                        "meta_inference_cost": 1.5,
+                        "meta_evaluation_cost": 2.25,
                     }
                 },
                 set_name="1700000000000-B",
@@ -849,11 +896,11 @@ class EvaluateMetricsTests(unittest.TestCase):
                 "metrics": {
                     "generation_accuracy": 1.0,
                     "meta_total_elapsed_ms": 1234,
-                    "meta_assistant_request_elapsed_ms": 900,
-                    "meta_first_token_latency_ms": 100,
-                    "meta_stream_elapsed_ms": 800,
+                    "meta_model_elapsed_ms": 900,
                     "meta_tool_elapsed_ms": 250,
-                    "meta_unattributed_elapsed_ms": 334,
+                    "meta_tool_call_count": 2,
+                    "meta_inference_cost": 1.5,
+                    "meta_evaluation_cost": 2.25,
                 },
             },
         )
@@ -988,11 +1035,9 @@ class EvaluateMetricsTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["output_structure"]["score"], 1.0)
         self.assertEqual(result["paths"]["has_output_schema"], True)
         self.assertEqual(result["metrics"]["meta_total_elapsed_ms"], 1234)
-        self.assertEqual(result["metrics"]["meta_assistant_request_elapsed_ms"], 900)
-        self.assertEqual(result["metrics"]["meta_first_token_latency_ms"], 100)
-        self.assertEqual(result["metrics"]["meta_stream_elapsed_ms"], 800)
+        self.assertEqual(result["metrics"]["meta_model_elapsed_ms"], 900)
         self.assertEqual(result["metrics"]["meta_tool_elapsed_ms"], 250)
-        self.assertEqual(result["metrics"]["meta_unattributed_elapsed_ms"], 334)
+        self.assertEqual(result["metrics"]["meta_tool_call_count"], 1)
 
     def test_evaluate_artifact_computes_per_turn_retrieval_recall_macro_average(self):
         artifact = {
@@ -1384,11 +1429,9 @@ class EvaluateMetricsTests(unittest.TestCase):
                 "generation_precision": 0.0,
                 "output_structure": 0.0,
                 "meta_total_elapsed_ms": 4079,
-                "meta_assistant_request_elapsed_ms": 0,
-                "meta_first_token_latency_ms": 0,
-                "meta_stream_elapsed_ms": 0,
+                "meta_model_elapsed_ms": 0,
                 "meta_tool_elapsed_ms": 0,
-                "meta_unattributed_elapsed_ms": 4079,
+                "meta_tool_call_count": 0,
             },
         )
 

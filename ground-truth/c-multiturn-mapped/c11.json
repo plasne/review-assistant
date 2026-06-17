@@ -16,34 +16,34 @@
         "question": "What happens when Dracula moves by sea in Fury of Dracula?",
         "evidence": [
           {
-            "id": "fury-of-dracula-4e-dracula-sea-movement",
-            "title": "Dracula sea movement and sea damage",
-            "url": "fury-of-dracula-4e://rules/dracula-sea-movement",
-            "excerpt": "Dracula may move from a port to an adjacent sea zone or between connected sea zones when legal movement rules allow it. Sea travel is dangerous for Dracula and usually causes sea damage each time he spends the required time at sea, with timing defined by the movement sequence. Sea locations are recorded on the trail like other movement cards, and hunters can deduce likely routes from revealed trail information and timing. If Dracula remains at sea too long, accumulated sea damage can force defensive play or create opportunities for hunters to finish him in combat.",
+            "id": "fury-of-dracula-4e-dracula-movement-restrictions",
+            "title": "Dracula movement restrictions and sea travel",
+            "url": "fury-of-dracula-4e://rules/dracula-movement-restrictions",
+            "excerpt": "Dracula movement is more restricted than hunter movement. He moves by road and sea but does not use rail. He cannot normally move to a location already present on his trail because that would contradict the hidden route, unless a power card or effect permits it. He cannot choose illegal destinations, forbidden spaces, or moves blocked by current effects. Sea travel helps Dracula escape but costs blood: entering a sea zone and continuing through sea zones damages Dracula according to the sea movement rules. Returning from sea to a port places Dracula back on land and may help hunters narrow his location because sea cards and ports constrain his route. Castle Dracula and certain powers can restore Dracula health, but these choices also create deduction clues. If Dracula has no legal move, follow the official forced-resolution procedure for illegal or impossible movement.",
             "score": 0
           },
           {
-            "id": "fury-of-dracula-4e-trail-movement-limits",
-            "title": "Trail limits, legal moves, and repeated location restrictions",
-            "url": "fury-of-dracula-4e://rules/trail-movement-limits",
-            "excerpt": "Dracula movement is constrained by trail legality and special restrictions on repeating locations or using certain power cards. A move is illegal if it violates route connectivity, timing requirements, or trail-based restrictions that prevent immediate reuse of recent locations. At sea, these constraints combine with damage pressure, making repeated sea movement risky even when legal. When choosing a sea route, Dracula must still obey trail updates, reveal rules when discovered, and any card-specific exceptions that modify legal movement.",
+            "id": "fury-of-dracula-4e-trail-hideouts",
+            "title": "Dracula trail, hideouts, lairs, and revealing locations",
+            "url": "fury-of-dracula-4e://rules/trail",
+            "excerpt": "The trail records Dracula recent movement using location cards and power cards. The newest position is added to the front of the trail and older cards slide toward the end. Cards on the trail are hidden until revealed by hunter movement, search, card effects, or Dracula being found. Each city location on the trail may hold an encounter card, creating a hideout. When a trail card advances far enough or is moved by an effect, it can become a lair or leave the trail depending on the edition procedure and card text. When an encounter matures, Dracula resolves the mature effect printed on that encounter, which is one of his main ways to gain influence. If a hunter enters a city on the trail, Dracula must reveal whether the location matches the hunter position when the rules call for it. If Dracula current location is revealed, keep it public until he legally moves or an effect hides him again.",
             "score": 0
           }
         ],
-        "answer": "When Dracula moves by sea, he records sea locations on his trail as normal but typically takes sea damage according to the movement timing rules, so extended sea travel creates real attrition risk. Sea moves must still satisfy route and trail legality, including restrictions on repeating recent locations."
+        "answer": "When Dracula uses sea movement, he is using one of his restricted movement options: he moves by road and sea but not rail, and sea travel helps him escape at a blood cost because entering and continuing through sea zones damages him according to the sea movement rules. Returning from sea to a port can also narrow his possible location because sea cards and ports constrain the route, while normal trail restrictions still limit legal destinations."
       },
       {
         "question": "How can hunters exploit Dracula's sea movement in Fury of Dracula?",
         "evidence": [
           {
-            "id": "fury-of-dracula-4e-hunter-response-sea-trail",
-            "title": "Hunter counterplay to Dracula sea routes",
-            "url": "fury-of-dracula-4e://rules/hunter-counterplay-sea",
-            "excerpt": "When Dracula commits to sea movement, hunters gain actionable information from timing gaps, port access, and probable route branches between connected sea zones. Coordinated hunters can cover likely landfall ports, preserve rail options for rapid interception, and force Dracula into predictable paths where combat is more likely. Because Dracula generally takes pressure from repeated sea travel, delaying actions that keep him offshore can improve hunter odds before direct combat. Search and movement planning should prioritize locations that intersect both the visible trail timeline and the fastest legal return-to-land routes.",
+            "id": "fury-of-dracula-4e-dracula-movement-restrictions",
+            "title": "Dracula movement restrictions and sea travel",
+            "url": "fury-of-dracula-4e://rules/dracula-movement-restrictions",
+            "excerpt": "Dracula movement is more restricted than hunter movement. He moves by road and sea but does not use rail. He cannot normally move to a location already present on his trail because that would contradict the hidden route, unless a power card or effect permits it. He cannot choose illegal destinations, forbidden spaces, or moves blocked by current effects. Sea travel helps Dracula escape but costs blood: entering a sea zone and continuing through sea zones damages Dracula according to the sea movement rules. Returning from sea to a port places Dracula back on land and may help hunters narrow his location because sea cards and ports constrain his route. Castle Dracula and certain powers can restore Dracula health, but these choices also create deduction clues. If Dracula has no legal move, follow the official forced-resolution procedure for illegal or impossible movement.",
             "score": 0
           }
         ],
-        "answer": "Hunters can exploit Dracula sea travel by using route deduction and port coverage: sea paths narrow Dracula's legal landfall options, and coordinated movement can intercept likely return points. Keeping pressure while he remains offshore can also capitalize on sea-travel attrition before combat."
+        "answer": "Hunters can exploit Dracula sea travel by using sea cards, route restrictions, and likely return ports to narrow where he can legally land next. They should coordinate pursuit around those constrained routes and keep pressure on him because sea movement damages Dracula and can create an opening for combat."
       }
     ]
   },

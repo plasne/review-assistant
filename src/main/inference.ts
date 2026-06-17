@@ -77,6 +77,10 @@ export type InferenceTranscriptEntry = {
   error?: InferenceErrorPayload;
 };
 
+type ProviderUsageMetrics = {
+  cost?: number;
+};
+
 export type WrittenInferenceJson = {
   ground_truth: unknown;
   inference: WrittenInferenceCaseDetails;
@@ -401,7 +405,8 @@ const runCase = async (
         metadata: {
           assistantRequestElapsedMs: response.assistantRequestElapsedMs,
           firstTokenLatencyMs: response.firstTokenLatencyMs,
-          streamElapsedMs: response.streamElapsedMs
+          streamElapsedMs: response.streamElapsedMs,
+          ...(response.usage.cost !== undefined ? { cost: response.usage.cost } : {})
         },
         content: response.content
       });
@@ -507,6 +512,7 @@ const runPrompt = async (
 ): Promise<{
   content: string;
   model?: string;
+  usage: ProviderUsageMetrics;
   startedAt: string;
   finishedAt: string;
   elapsedMs: number;
@@ -518,9 +524,11 @@ const runPrompt = async (
   let activeRequestId: string | undefined;
   let firstChunkAt: number | undefined;
   let model: string | undefined;
+  const usage = emptyProviderUsageMetrics();
   return await new Promise<{
     content: string;
     model?: string;
+    usage: ProviderUsageMetrics;
     startedAt: string;
     finishedAt: string;
     elapsedMs: number;
@@ -572,6 +580,7 @@ const runPrompt = async (
             resolve({
               content: chunks.join(''),
               model,
+              usage,
               startedAt: new Date(firstTokenAt).toISOString(),
               finishedAt: new Date(finished).toISOString(),
               elapsedMs: finished - firstTokenAt,
@@ -596,6 +605,7 @@ const runPrompt = async (
             if (typeof usageModel === 'string' && usageModel.trim()) {
               model = usageModel.trim();
             }
+            addProviderUsageMetrics(usage, event.fields);
           }
         },
         tools
@@ -609,6 +619,18 @@ const runPrompt = async (
       });
   });
 };
+
+const emptyProviderUsageMetrics = (): ProviderUsageMetrics => ({});
+
+const addProviderUsageMetrics = (usage: ProviderUsageMetrics, fields: Record<string, unknown>): void => {
+  const cost = nonNegativeNumberField(fields.cost);
+  if (cost !== undefined) {
+    usage.cost = (usage.cost ?? 0) + cost;
+  }
+};
+
+const nonNegativeNumberField = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 
 const createRecordingToolRuntime = (runtime: LocalToolRuntime, recorder: ToolCallRecorder): LocalToolRuntime => ({
   listTools: runtime.listTools,

@@ -1,0 +1,132 @@
+{
+  "ref": "d12",
+  "description": "A feedback-aware multi-turn revision flow where persisted SME ratings weight existing evidence when regenerating the answer; all evidence and ratings are preserved.",
+  "input": {
+    "id": "",
+    "turns": [
+      {
+        "question": "How should hunters respond when Dracula uses sea movement in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-dracula-movement-restrictions",
+            "title": "Dracula movement restrictions and sea travel",
+            "url": "fury-of-dracula-4e://rules/dracula-movement-restrictions",
+            "excerpt": "Dracula movement is more restricted than hunter movement. He moves by road and sea but does not use rail. He cannot normally move to a location already present on his trail because that would contradict the hidden route, unless a power card or effect permits it. He cannot choose illegal destinations, forbidden spaces, or moves blocked by current effects. Sea travel helps Dracula escape but costs blood: entering a sea zone and continuing through sea zones damages Dracula according to the sea movement rules. Returning from sea to a port places Dracula back on land and may help hunters narrow his location because sea cards and ports constrain his route. Castle Dracula and certain powers can restore Dracula health, but these choices also create deduction clues. If Dracula has no legal move, follow the official forced-resolution procedure for illegal or impossible movement.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-damage-health-defeat",
+            "title": "Damage, health, hunter defeat, and Dracula defeat",
+            "url": "fury-of-dracula-4e://rules/damage-health-defeat",
+            "excerpt": "Damage tracks how close a character is to defeat. Hunters suffer damage from combat, sea travel, events, encounters, and Dracula effects. Hunters recover damage through rest, hospitals, items, events, character abilities, and other healing effects. When a hunter is defeated, resolve the defeat procedure: Dracula gains the appropriate benefit, the hunter is removed or delayed as instructed, then returns under the game rules rather than being permanently eliminated in ordinary play. Dracula suffers damage from hunter attacks, sea travel, some powers, events, and special effects. Dracula recovers through Castle Dracula, Feed, cards, and other listed effects. If Dracula reaches his defeat threshold, the hunter side wins. Always apply prevention, resistance, timing, and card text before checking final defeat results.",
+            "score": 0
+          }
+        ],
+        "answer": "Hunters should watch ports and hospitals when Dracula goes to sea."
+      }
+    ],
+    "_feedback_turns__0__evidence__0": [
+      {
+        "feedback": "good",
+        "comment": "This is the evidence to keep; it directly explains port coverage and route deduction.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-11T20:00:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__evidence__1": [
+      {
+        "feedback": "bad",
+        "comment": "Do not use hospital recovery evidence for this answer; it is unrelated to Dracula sea movement.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-11T20:01:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__answer": [
+      {
+        "feedback": "bad",
+        "comment": "Regenerate the answer so it focuses on route deduction, likely landfall ports, and pressure from sea-travel attrition; remove the hospital point.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-11T20:02:00.000Z"
+      }
+    ]
+  },
+  "prompts": [
+    "I rated some content. Regen the answer."
+  ],
+  "output": {
+    "id": "",
+    "turns": [
+      {
+        "question": "How should hunters respond when Dracula uses sea movement in Fury of Dracula?",
+        "evidence": [
+          {
+            "id": "fury-of-dracula-4e-dracula-movement-restrictions",
+            "title": "Dracula movement restrictions and sea travel",
+            "url": "fury-of-dracula-4e://rules/dracula-movement-restrictions",
+            "excerpt": "Dracula movement is more restricted than hunter movement. He moves by road and sea but does not use rail. He cannot normally move to a location already present on his trail because that would contradict the hidden route, unless a power card or effect permits it. He cannot choose illegal destinations, forbidden spaces, or moves blocked by current effects. Sea travel helps Dracula escape but costs blood: entering a sea zone and continuing through sea zones damages Dracula according to the sea movement rules. Returning from sea to a port places Dracula back on land and may help hunters narrow his location because sea cards and ports constrain his route. Castle Dracula and certain powers can restore Dracula health, but these choices also create deduction clues. If Dracula has no legal move, follow the official forced-resolution procedure for illegal or impossible movement.",
+            "score": 0
+          },
+          {
+            "id": "fury-of-dracula-4e-damage-health-defeat",
+            "title": "Damage, health, hunter defeat, and Dracula defeat",
+            "url": "fury-of-dracula-4e://rules/damage-health-defeat",
+            "excerpt": "Damage tracks how close a character is to defeat. Hunters suffer damage from combat, sea travel, events, encounters, and Dracula effects. Hunters recover damage through rest, hospitals, items, events, character abilities, and other healing effects. When a hunter is defeated, resolve the defeat procedure: Dracula gains the appropriate benefit, the hunter is removed or delayed as instructed, then returns under the game rules rather than being permanently eliminated in ordinary play. Dracula suffers damage from hunter attacks, sea travel, some powers, events, and special effects. Dracula recovers through Castle Dracula, Feed, cards, and other listed effects. If Dracula reaches his defeat threshold, the hunter side wins. Always apply prevention, resistance, timing, and card text before checking final defeat results.",
+            "score": 0
+          }
+        ],
+        "answer": "Hunters should respond to Dracula sea movement by using sea cards, route restrictions, and likely return ports to narrow his possible location, then coordinate pursuit around those constrained routes. Keeping pressure while Dracula remains offshore can also exploit the damage risk from entering and continuing through sea zones before hunters force combat."
+      }
+    ],
+    "_feedback_turns__0__evidence__0": [
+      {
+        "feedback": "good",
+        "comment": "This is the evidence to keep; it directly explains port coverage and route deduction.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-11T20:00:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__evidence__1": [
+      {
+        "feedback": "bad",
+        "comment": "Do not use hospital recovery evidence for this answer; it is unrelated to Dracula sea movement.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-11T20:01:00.000Z"
+      }
+    ],
+    "_feedback_turns__0__answer": [
+      {
+        "feedback": "bad",
+        "comment": "Regenerate the answer so it focuses on route deduction, likely landfall ports, and pressure from sea-travel attrition; remove the hospital point.",
+        "username": "sme@example.com",
+        "timestamp": "2026-06-11T20:02:00.000Z"
+      }
+    ]
+  },
+  "evaluation": {
+    "evidence_path": "/turns/0/evidence",
+    "answer_path": "/turns/0/answer",
+    "evidence_key": "url",
+    "ignored_output_structure_issues": [
+      {
+        "path": "/_feedback_turns__0__answer",
+        "keyword": "additionalProperties",
+        "message": "Unexpected property: _feedback_turns__0__answer."
+      },
+      {
+        "path": "/_feedback_turns__0__evidence__0",
+        "keyword": "additionalProperties",
+        "message": "Unexpected property: _feedback_turns__0__evidence__0."
+      },
+      {
+        "path": "/_feedback_turns__0__evidence__1",
+        "keyword": "additionalProperties",
+        "message": "Unexpected property: _feedback_turns__0__evidence__1."
+      }
+    ]
+  },
+  "tags": [
+    "turns:multi",
+    "mapped:false",
+    "state:feedback-aware-revision"
+  ]
+}

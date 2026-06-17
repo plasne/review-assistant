@@ -323,6 +323,7 @@ describe('copilot SDK provider mapping', () => {
         inputTokens: 100,
         outputTokens: 20,
         reasoningTokens: 10,
+        cost: 1.5,
         timeToFirstTokenMs: 1500,
         duration: 59000,
         providerCallId: 'provider-call-1',
@@ -355,6 +356,7 @@ describe('copilot SDK provider mapping', () => {
           inputTokens: 100,
           outputTokens: 20,
           reasoningTokens: 10,
+          cost: 1.5,
           timeToFirstTokenMs: 1500,
           elapsedMs: 59000
         })
