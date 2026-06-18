@@ -143,11 +143,14 @@ the supervisor.
 ```
 
 `copilot_command` defaults to `copilot`. Keep it configurable so users can point
-to a full path or wrapper command if needed. `reset_config_files` belongs here
-because the supervisor must restore those files before it creates the experiment
-branch and before the worker can read `GOAL.md`; also describe the files and why
-they are reset in `GOAL.md` for the worker's context. Paths must be
-repo-relative and either tracked by git or gitignored.
+to a full path or wrapper command if needed. `max_consecutive_failures` limits
+failed or inconclusive attempts for one experiment; when the limit is reached,
+the supervisor abandons that experiment and starts the next one instead of
+exiting. `reset_config_files` belongs here because the supervisor must restore
+those files before it creates the experiment branch and before the worker can
+read `GOAL.md`; also describe the files and why they are reset in `GOAL.md` for
+the worker's context. Paths must be repo-relative and either tracked by git or
+gitignored.
 
 ## Workspace Files
 
@@ -330,7 +333,8 @@ The copied script should:
   workspace becomes tracked or staged;
 - parse `RESULTS.md` or consult Experiment Catalog to detect `goal-met`;
 - mark interrupted attempts incomplete and continue from a new branch/name;
-- stop after `max_consecutive_failures`.
+- after `max_consecutive_failures`, abandon the current experiment and continue
+  with a fresh experiment.
 
 Start it from a terminal:
 

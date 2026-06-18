@@ -71,6 +71,8 @@ export type ChatLogEvent = {
   fields: Record<string, unknown>;
 };
 
+const MAX_WORKER_STDERR_CHARS = 4000;
+
 export type ChatStreamHandlers = {
   chunk: (chunk: ChatStreamChunk) => void;
   complete: (complete: ChatStreamComplete) => void;
@@ -134,6 +136,11 @@ export class AgentRuntime {
     const child = this.forkWorker();
     return await new Promise<AgentStatusSnapshot>((resolve) => {
       let settled = false;
+      let stderr = '';
+      child.stderr?.setEncoding('utf8');
+      child.stderr?.on('data', (chunk: string | Buffer) => {
+        stderr = trimWorkerStderr(`${stderr}${String(chunk)}`);
+      });
       const finish = (status: AgentStatusSnapshot): void => {
         if (settled) {
           return;
@@ -178,14 +185,18 @@ export class AgentRuntime {
         if (settled || signal === 'SIGTERM') {
           return;
         }
-        const message = code === null
-          ? `GitHub Copilot status worker exited before reporting availability with signal ${signal ?? 'unknown'}.`
-          : `GitHub Copilot status worker exited before reporting availability with code ${code}.`;
+        const diagnostic = normalizeWorkerDiagnostic(stderr);
+        const message = diagnostic
+          ? `GitHub Copilot status worker failed before reporting availability: ${diagnostic}`
+          : code === null
+            ? `GitHub Copilot status worker exited before reporting availability with signal ${signal ?? 'unknown'}.`
+            : `GitHub Copilot status worker exited before reporting availability with code ${code}.`;
         logError('review-assistant.agent-status-worker-exited', {
           provider: provider.id,
           requestId,
           code,
           signal,
+          stderr: diagnostic,
           elapsedMs: Date.now() - startedAt
         });
         finish(unavailable(normalizeProviderError(new Error(message)), this.agentSettings));
@@ -384,6 +395,19 @@ export class AgentRuntime {
     this.pending.delete(requestId);
   }
 }
+
+const trimWorkerStderr = (value: string): string => value.length > MAX_WORKER_STDERR_CHARS ? value.slice(-MAX_WORKER_STDERR_CHARS) : value;
+
+const normalizeWorkerDiagnostic = (stderr: string): string | undefined => {
+  const normalized = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized || undefined;
+};
 
 export class AgentRuntimeError extends Error {
   constructor(readonly envelope: AgentErrorEnvelope) {

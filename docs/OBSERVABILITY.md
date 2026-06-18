@@ -1,6 +1,6 @@
 # Observability
 
-Review Assistant uses local console logging with stable event names and key-value fields. Logs must diagnose app startup, storage configuration, agent lifecycle, and local tool calls without exposing secrets or full record payloads.
+Review Assistant uses local console logging and mirrors each launch to `review-assistant.log` in the process launch directory, overwriting that file when the app starts. Logs use stable event names and key-value fields. Logs must diagnose app startup, storage configuration, agent lifecycle, and local tool calls without exposing secrets or full record payloads.
 
 ## Required Event Fields
 
@@ -38,6 +38,7 @@ Long-running chat and tool workflows should also include:
 | Event | Purpose |
 |---|---|
 | `review-assistant.config` | App-level config source, selected backend, and redacted values. |
+| `review-assistant.log-file-started` | Launch log file was initialized, including the path being written for the current run. |
 | `review-assistant.project-config` | Project-level config merge with secrets redacted. |
 | `review-assistant.config-error` | Startup configuration failures that block project browsing. |
 | `review-assistant.storage-lease-renewal-failed` | Azure Blob Storage record lease renewal failed, including `projectId`, `recordId`, and a safe error message. |

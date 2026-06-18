@@ -1,11 +1,21 @@
 type LogFields = Record<string, unknown>;
 
+let logFileWriter: ((line: string) => void) | undefined;
+
+export const setLogFileWriter = (writer: ((line: string) => void) | undefined): void => {
+  logFileWriter = writer;
+};
+
 export const logInfo = (event: string, fields: LogFields = {}): void => {
-  console.info(formatLogLine(event, fields));
+  const line = formatLogLine(event, fields);
+  console.info(line);
+  logFileWriter?.(line);
 };
 
 export const logError = (event: string, fields: LogFields = {}): void => {
-  console.error(formatLogLine(event, fields));
+  const line = formatLogLine(event, fields);
+  console.error(line);
+  logFileWriter?.(line);
 };
 
 export const formatLogLine = (event: string, fields: LogFields = {}): string => {

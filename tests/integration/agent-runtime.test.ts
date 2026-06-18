@@ -431,6 +431,24 @@ describe('agent runtime streaming pipeline', () => {
     });
     expect(error.mock.calls.some(([line]) => String(line).includes('review-assistant.agent-status-timeout'))).toBe(true);
   });
+
+  it('surfaces status worker stderr when the worker exits before reporting availability', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const runtime = new AgentRuntime({
+      workerPath,
+      providerModule: fakeProviderModule,
+      commandEnv: { FAKE_COPILOT_CRASH_STATUS: '1' }
+    });
+
+    await expect(runtime.getStatus()).resolves.toMatchObject({
+      availability: 'unavailable',
+      error: {
+        code: 'PROVIDER_ERROR',
+        message: 'GitHub Copilot status worker failed before reporting availability: Synthetic Copilot status crash details.'
+      }
+    });
+    expect(error.mock.calls.some(([line]) => String(line).includes('stderr="Synthetic Copilot status crash details."'))).toBe(true);
+  });
 });
 
 const createFakeToolRuntime = (toolRequests: string[] = []): LocalToolRuntime => ({

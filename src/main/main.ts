@@ -1,10 +1,11 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain } from 'electron';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { APP_VERSION } from '../generated/version';
-import { logError, logInfo } from '../shared/logging';
+import { logError, logInfo, setLogFileWriter } from '../shared/logging';
 import type { AppBootstrap, ChatAttachmentContent } from '../shared/types';
 import {
   assertChatCancelResult,
@@ -67,6 +68,25 @@ const TEXT_ATTACHMENT_FILTERS = [
     extensions: ['txt', 'md', 'markdown', 'json', 'jsonl', 'yaml', 'yml', 'csv', 'tsv', 'log', 'xml', 'html', 'css', 'js', 'jsx', 'ts', 'tsx', 'py', 'java', 'cs', 'go', 'rs', 'rb', 'php', 'sh', 'sql']
   }
 ];
+const LOG_FILE_NAME = 'review-assistant.log';
+
+const initializeLaunchLogFile = async (): Promise<void> => {
+  const logPath = path.join(process.cwd(), LOG_FILE_NAME);
+  try {
+    await fs.writeFile(logPath, '');
+    setLogFileWriter((line) => {
+      try {
+        fsSync.appendFileSync(logPath, `${line}\n`);
+      } catch (error) {
+        console.error(`Failed to write ${LOG_FILE_NAME}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+    logInfo('review-assistant.log-file-started', { path: logPath });
+  } catch (error) {
+    setLogFileWriter(undefined);
+    console.error(`Failed to initialize ${LOG_FILE_NAME}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
 
 const initializeBackend = async (): Promise<void> => {
   try {
@@ -448,6 +468,7 @@ const registerIpc = (): void => {
 };
 
 app.whenReady().then(async () => {
+  await initializeLaunchLogFile();
   themeStore = new ThemeStore({ userDataPath: app.getPath('userData') });
   await initializeBackend();
   registerIpc();

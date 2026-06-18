@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 
 export const createAgentProvider = ({ providerMetadata, requestTool, normalizeProviderError, agentSettings, sendLog }) => ({
   getStatus: async (requestId) => {
+    if (process.env.FAKE_COPILOT_CRASH_STATUS === '1') {
+      process.stderr.write('Synthetic Copilot status crash details.\n');
+      process.exit(1);
+    }
     if (process.env.FAKE_COPILOT_FAIL === 'auth') {
       return {
         provider: providerMetadata,

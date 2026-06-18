@@ -184,6 +184,59 @@ class ExperimentLoopTests(unittest.TestCase):
         self.assertRegex(experiment, r"review-assistant-exp-\d{8}-\d{2}")
         self.assertEqual(attempt, 1)
 
+    def test_failure_limit_abandons_experiment_without_stopping_supervisor(self) -> None:
+        config = experiment_loop.Config(
+            base_branch="main",
+            branch_prefix="experiment",
+            project_name="review-assistant",
+            copilot_command="copilot",
+            catalog_uri="https://catalog.example.invalid/api",
+            catalog_project_name="review-assistant",
+            max_consecutive_failures=3,
+            max_attempts_per_experiment=5,
+            reset_config_files=[],
+        )
+        state = {
+            "status": "inconclusive",
+            "experiment": "review-assistant-exp-20260618-03",
+            "attempt": 1,
+            "consecutive_failures": 3,
+        }
+
+        self.assertTrue(experiment_loop.should_abandon_experiment(state, config))
+        self.assertFalse(experiment_loop.should_retry_experiment(state, config))
+
+        experiment, attempt = experiment_loop.next_experiment_attempt(self.repo, config, state)
+
+        self.assertNotEqual(experiment, "review-assistant-exp-20260618-03")
+        self.assertRegex(experiment, r"review-assistant-exp-\d{8}-\d{2}")
+        self.assertEqual(attempt, 1)
+
+    def test_max_attempts_defaults_to_consecutive_failure_limit(self) -> None:
+        config_path = self.workspace / "loop.config.json"
+        config_path.write_text(
+            """{
+  "base_branch": "main",
+  "branch_prefix": "experiment",
+  "project_name": "review-assistant",
+  "copilot_command": "copilot",
+  "experiment_catalog": {
+    "uri": "https://catalog.example.invalid/api",
+    "project_name": "review-assistant"
+  },
+  "reset_config_files": [],
+  "max_consecutive_failures": 4
+}
+""",
+            encoding="utf-8",
+        )
+        args = type("Args", (), {"base_branch": None, "project_name": None})()
+
+        config = experiment_loop.load_config(config_path, args)
+
+        self.assertEqual(config.max_consecutive_failures, 4)
+        self.assertEqual(config.max_attempts_per_experiment, 4)
+
 
 if __name__ == "__main__":
     unittest.main()

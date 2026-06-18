@@ -78,9 +78,21 @@ def main() -> int:
     iteration = 0
 
     while args.max_iterations is None or iteration < args.max_iterations:
-        if failures >= config.max_consecutive_failures:
-            log(supervisor_log_path, f"Stopping after {failures} consecutive failed/incomplete attempts.")
-            return 2
+        if should_abandon_experiment(state, config):
+            experiment = str(state["experiment"])
+            log(
+                supervisor_log_path,
+                f"Skipping {experiment} after reaching the failed/incomplete attempt limit; continuing with a fresh experiment.",
+            )
+            failures = 0
+            state = {
+                "status": "abandoned",
+                "experiment": experiment,
+                "attempt": int(state.get("attempt", 1)),
+                "abandoned_at": utc_now(),
+                "consecutive_failures": failures,
+            }
+            update_state(state_path, state)
 
         log(supervisor_log_path, "Checking for a clean worktree before starting next iteration.")
         ensure_clean_versioned_worktree(repo)
@@ -154,32 +166,59 @@ def main() -> int:
 
         if exit_code == 0 and result in ("success", "neutral", "regression", "inconclusive"):
             failures = 0 if result != "inconclusive" else failures + 1
-            update_state(
-                state_path,
-                {
-                    "status": result,
-                    "experiment": experiment,
-                    "branch": branch,
-                    "attempt": attempt,
-                    "completed_at": utc_now(),
-                    "consecutive_failures": failures,
-                },
-            )
+            next_status = result
+            state_data: dict[str, Any] = {
+                "status": next_status,
+                "experiment": experiment,
+                "branch": branch,
+                "attempt": attempt,
+                "completed_at": utc_now(),
+                "consecutive_failures": failures,
+            }
+            if result == "inconclusive" and should_abandon_failure(failures, attempt, config):
+                log(
+                    supervisor_log_path,
+                    f"Skipping {experiment} after reaching the failed/incomplete attempt limit; continuing with a fresh experiment.",
+                )
+                failures = 0
+                state_data.update(
+                    {
+                        "status": "abandoned",
+                        "last_result": result,
+                        "abandoned_at": utc_now(),
+                        "consecutive_failures": failures,
+                    }
+                )
+            state = state_data
+            update_state(state_path, state_data)
         else:
             failures += 1
             mark_incomplete(workspace / "RESULTS.md", experiment, branch, exit_code)
-            update_state(
-                state_path,
-                {
-                    "status": "incomplete",
-                    "experiment": experiment,
-                    "branch": branch,
-                    "attempt": attempt,
-                    "completed_at": utc_now(),
-                    "exit_code": exit_code,
-                    "consecutive_failures": failures,
-                },
-            )
+            state_data = {
+                "status": "incomplete",
+                "experiment": experiment,
+                "branch": branch,
+                "attempt": attempt,
+                "completed_at": utc_now(),
+                "exit_code": exit_code,
+                "consecutive_failures": failures,
+            }
+            if should_abandon_failure(failures, attempt, config):
+                log(
+                    supervisor_log_path,
+                    f"Skipping {experiment} after reaching the failed/incomplete attempt limit; continuing with a fresh experiment.",
+                )
+                failures = 0
+                state_data.update(
+                    {
+                        "status": "abandoned",
+                        "last_result": "incomplete",
+                        "abandoned_at": utc_now(),
+                        "consecutive_failures": failures,
+                    }
+                )
+            state = state_data
+            update_state(state_path, state_data)
 
         ensure_clean_versioned_worktree(repo)
         log(supervisor_log_path, f"Returning to base branch {config.base_branch}.")
@@ -210,7 +249,10 @@ def load_config(path: Path, args: argparse.Namespace) -> Config:
     if missing:
         raise SystemExit(f"Missing required loop.config.json values: {', '.join(missing)}")
     reset_config_files = normalize_reset_config_files(raw.get("reset_config_files", []))
-    max_attempts_per_experiment = int(raw.get("max_attempts_per_experiment", 2))
+    max_consecutive_failures = int(raw.get("max_consecutive_failures", 3))
+    if max_consecutive_failures < 1:
+        raise SystemExit("loop.config.json max_consecutive_failures must be at least 1.")
+    max_attempts_per_experiment = int(raw.get("max_attempts_per_experiment", max_consecutive_failures))
     if max_attempts_per_experiment < 1:
         raise SystemExit("loop.config.json max_attempts_per_experiment must be at least 1.")
     return Config(
@@ -220,7 +262,7 @@ def load_config(path: Path, args: argparse.Namespace) -> Config:
         copilot_command=required["copilot_command"],
         catalog_uri=required["catalog_uri"],
         catalog_project_name=required["catalog_project_name"],
-        max_consecutive_failures=int(raw.get("max_consecutive_failures", 3)),
+        max_consecutive_failures=max_consecutive_failures,
         max_attempts_per_experiment=max_attempts_per_experiment,
         reset_config_files=reset_config_files,
     )
@@ -382,7 +424,22 @@ def should_retry_experiment(state: dict[str, Any], config: Config) -> bool:
         and isinstance(experiment, str)
         and bool(experiment.strip())
         and attempt < config.max_attempts_per_experiment
+        and int(state.get("consecutive_failures", 0)) < config.max_consecutive_failures
     )
+
+
+def should_abandon_experiment(state: dict[str, Any], config: Config) -> bool:
+    status = state.get("status")
+    experiment = state.get("experiment")
+    if status not in {"incomplete", "inconclusive"} or not isinstance(experiment, str) or not experiment.strip():
+        return False
+    attempt = int(state.get("attempt", 1))
+    failures = int(state.get("consecutive_failures", 0))
+    return should_abandon_failure(failures, attempt, config)
+
+
+def should_abandon_failure(failures: int, attempt: int, config: Config) -> bool:
+    return failures >= config.max_consecutive_failures or attempt >= config.max_attempts_per_experiment
 
 
 def experiment_branch(config: Config, experiment: str, attempt: int) -> str:
