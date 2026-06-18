@@ -51,6 +51,7 @@ class ExperimentLoopTests(unittest.TestCase):
         experiment_loop.ensure_reset_config_files_resettable(self.repo, [".env.local"])
         experiment_loop.ensure_config_backups(self.repo, self.workspace, [".env.local"])
         config_path.write_text("TOKEN=mutated\n", encoding="utf-8")
+        experiment_loop.ensure_tracked_config_backups_match_targets(self.repo, self.workspace, [".env.local"])
         experiment_loop.restore_config_files(self.repo, self.workspace, [".env.local"])
 
         self.assertEqual(config_path.read_text(encoding="utf-8"), "TOKEN=base\n")
@@ -63,6 +64,33 @@ class ExperimentLoopTests(unittest.TestCase):
         self.git(["commit", "-m", "track config"])
 
         experiment_loop.ensure_reset_config_files_resettable(self.repo, ["tracked.env"])
+
+    def test_tracked_config_backup_must_match_before_restore(self) -> None:
+        tracked_config = self.repo / "tracked.env"
+        tracked_config.write_text("TOKEN=base\n", encoding="utf-8")
+        self.git(["add", "tracked.env"])
+        self.git(["commit", "-m", "track config"])
+        experiment_loop.ensure_config_backups(self.repo, self.workspace, ["tracked.env"])
+        backup = self.workspace / "_config-backups" / "tracked.env"
+        backup.write_text("TOKEN=stale\n", encoding="utf-8")
+
+        with self.assertRaises(SystemExit):
+            experiment_loop.ensure_tracked_config_backups_match_targets(self.repo, self.workspace, ["tracked.env"])
+
+        self.assertEqual(tracked_config.read_text(encoding="utf-8"), "TOKEN=base\n")
+        self.assertEqual(self.git(["status", "--porcelain", "--untracked-files=all"]), "")
+
+    def test_matching_tracked_config_backup_can_restore(self) -> None:
+        tracked_config = self.repo / "tracked.env"
+        tracked_config.write_text("TOKEN=base\n", encoding="utf-8")
+        self.git(["add", "tracked.env"])
+        self.git(["commit", "-m", "track config"])
+        experiment_loop.ensure_config_backups(self.repo, self.workspace, ["tracked.env"])
+
+        experiment_loop.ensure_tracked_config_backups_match_targets(self.repo, self.workspace, ["tracked.env"])
+        experiment_loop.restore_config_files(self.repo, self.workspace, ["tracked.env"])
+
+        self.assertEqual(self.git(["status", "--porcelain", "--untracked-files=all"]), "")
 
     def test_finalize_commits_non_ignored_leftovers_without_workspace_files(self) -> None:
         self.git(["checkout", "-b", "experiment/sample"])
