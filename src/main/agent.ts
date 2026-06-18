@@ -20,6 +20,7 @@ import type {
   ToolInvocationResponse
 } from '../shared/types';
 import type { LocalToolRuntime } from './tools';
+import { DEFAULT_COPILOT_STATUS_TIMEOUT_MS } from './env';
 
 export type ChatContext = {
   message: string;
@@ -93,6 +94,7 @@ type AgentRuntimeOptions = {
   commandEnv?: NodeJS.ProcessEnv;
   providerModule?: string;
   agentSettings?: AgentSettings;
+  statusTimeoutMs?: number;
 };
 
 const provider: AgentProviderMetadata = {
@@ -103,9 +105,11 @@ const provider: AgentProviderMetadata = {
 export class AgentRuntime {
   private readonly pending = new Map<string, PendingChat>();
   private agentSettings: AgentSettings;
+  private statusTimeoutMs: number;
 
   constructor(private readonly options: AgentRuntimeOptions) {
     this.agentSettings = options.agentSettings ?? {};
+    this.statusTimeoutMs = options.statusTimeoutMs ?? DEFAULT_COPILOT_STATUS_TIMEOUT_MS;
   }
 
   setAgentSettings(agentSettings: AgentSettings): void {
@@ -116,7 +120,15 @@ export class AgentRuntime {
     return this.agentSettings;
   }
 
-  async getStatus(timeoutMs = 5000): Promise<AgentStatusSnapshot> {
+  setStatusTimeoutMs(timeoutMs: number): void {
+    this.statusTimeoutMs = timeoutMs;
+  }
+
+  getStatusTimeoutMs(): number {
+    return this.statusTimeoutMs;
+  }
+
+  async getStatus(timeoutMs = this.statusTimeoutMs): Promise<AgentStatusSnapshot> {
     const requestId = randomUUID();
     const child = this.forkWorker();
     return await new Promise<AgentStatusSnapshot>((resolve) => {

@@ -124,9 +124,10 @@ Set backend location keys in root `.env`. Azure storage also requires `AZURE_STO
 ```bash
 AGENT_MODEL=gpt-5.5
 REASONING_EFFORT=medium
+COPILOT_STATUS_TIMEOUT_SECONDS=30
 ```
 
-`AGENT_MODEL` and `REASONING_EFFORT` are passed to the GitHub Copilot SDK session. Reasoning effort must be `low`, `medium`, `high`, or `xhigh`.
+`AGENT_MODEL` and `REASONING_EFFORT` are passed to the GitHub Copilot SDK session. Reasoning effort must be `low`, `medium`, `high`, or `xhigh`. `COPILOT_STATUS_TIMEOUT_SECONDS` controls the Copilot availability check timeout before chat starts and defaults to `30`.
 
 Claude Sonnet 4.6 was used during testing and was reliable for Review Assistant agent workflows.
 

@@ -7,6 +7,7 @@ import { AgentSettingsError, parseAgentSettingsFromEnvValues } from '../shared/a
 
 const SECRET_KEYS = new Set(['AZURE_STORAGE_ACCOUNT_CONNSTRING']);
 const BACKEND_KEYS = ['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'AZURE_STORAGE_CONTAINER', 'LOCAL_PATH'];
+export const DEFAULT_COPILOT_STATUS_TIMEOUT_MS = 30_000;
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -80,12 +81,13 @@ export const loadAppConfig = (envPath = getAppEnvPath()): AppConfig => {
   const appValues = backendKind === 'local' && path.resolve(appEnvPath) !== sourceEnvPath ? readAppEnvFile(appEnvPath) : {};
   const values = { ...backendValues, ...appValues };
   const agentSettings = parseAgentSettings(values);
+  const copilotStatusTimeoutMs = parseCopilotStatusTimeoutMs(values);
   logInfo('review-assistant.config', {
     source: appEnvPath,
     backendKind,
     values: redactConfig(values)
   });
-  return { backendKind, values, appEnvPath, agentSettings };
+  return { backendKind, values, appEnvPath, agentSettings, copilotStatusTimeoutMs };
 };
 
 const resolveEnvRelativePath = (value: string, envPath: string): string =>
@@ -109,6 +111,18 @@ export const parseAgentSettings = (values: Record<string, string | undefined>) =
     }
     throw error;
   }
+};
+
+export const parseCopilotStatusTimeoutMs = (values: Record<string, string | undefined>): number => {
+  const rawValue = values.COPILOT_STATUS_TIMEOUT_SECONDS?.trim();
+  if (!rawValue) {
+    return DEFAULT_COPILOT_STATUS_TIMEOUT_MS;
+  }
+  const timeoutSeconds = Number(rawValue);
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new ConfigError('COPILOT_STATUS_TIMEOUT_SECONDS must be a positive number of seconds.');
+  }
+  return Math.round(timeoutSeconds * 1000);
 };
 
 export const loadProjectEnv = (projectEnvPath: string, appValues: Record<string, string>, options: { log?: boolean } = {}): Record<string, string> => {

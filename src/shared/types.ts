@@ -5,6 +5,7 @@ export type AppConfig = {
   values: Record<string, string>;
   appEnvPath: string;
   agentSettings?: AgentSettings;
+  copilotStatusTimeoutMs?: number;
 };
 
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';

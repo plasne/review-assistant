@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { localToolResultLogFields, normalizeProviderError } from '../../src/main/agent';
+import { AgentRuntime, localToolResultLogFields, normalizeProviderError } from '../../src/main/agent';
+import { DEFAULT_COPILOT_STATUS_TIMEOUT_MS } from '../../src/main/env';
 
 describe('agent error normalization', () => {
   it('returns stable user-safe errors for provider failures', () => {
@@ -15,6 +16,16 @@ describe('agent error normalization', () => {
       code: 'CONTEXT_TOO_LARGE',
       retryable: false
     });
+  });
+});
+
+describe('agent runtime status timeout configuration', () => {
+  it('defaults Copilot status checks to 30 seconds and accepts an override', () => {
+    const runtime = new AgentRuntime({ workerPath: '/tmp/agent-process.js' });
+    expect(runtime.getStatusTimeoutMs()).toBe(DEFAULT_COPILOT_STATUS_TIMEOUT_MS);
+
+    runtime.setStatusTimeoutMs(45000);
+    expect(runtime.getStatusTimeoutMs()).toBe(45000);
   });
 });
 

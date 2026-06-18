@@ -42,7 +42,7 @@ import {
   assertThemeId,
   assertThemeState
 } from '../shared/validators';
-import { ConfigError, loadAppConfig, parseAgentSettings } from './env';
+import { ConfigError, loadAppConfig, parseAgentSettings, parseCopilotStatusTimeoutMs } from './env';
 import { createStorageAdapter, type StorageAdapter } from './storage';
 import { AgentRuntime, AgentRuntimeError } from './agent';
 import { createLocalToolRuntime } from './tools';
@@ -75,6 +75,7 @@ const initializeBackend = async (): Promise<void> => {
     backendKind = config.backendKind;
     appConfigValues = storage ? await storage.getAppConfig() : config.values;
     agent.setAgentSettings(parseAgentSettings(appConfigValues));
+    agent.setStatusTimeoutMs(parseCopilotStatusTimeoutMs(appConfigValues));
   } catch (error) {
     storage = undefined;
     backendKind = undefined;

@@ -2,7 +2,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadAppConfig, parseAgentSettings, parseEnv, redactConfig, selectBackend } from '../../src/main/env';
+import {
+  DEFAULT_COPILOT_STATUS_TIMEOUT_MS,
+  loadAppConfig,
+  parseAgentSettings,
+  parseCopilotStatusTimeoutMs,
+  parseEnv,
+  redactConfig,
+  selectBackend
+} from '../../src/main/env';
 
 describe('environment config', () => {
   it('parses env files without variable expansion', () => {
@@ -88,6 +96,21 @@ describe('environment config', () => {
       model: 'gpt-5.5',
       reasoningEffort: 'high'
     });
+  });
+
+  it('defaults and parses the Copilot status timeout from app env values', () => {
+    expect(parseCopilotStatusTimeoutMs({})).toBe(DEFAULT_COPILOT_STATUS_TIMEOUT_MS);
+    expect(parseCopilotStatusTimeoutMs({ COPILOT_STATUS_TIMEOUT_SECONDS: '30' })).toBe(30000);
+    expect(parseCopilotStatusTimeoutMs({ COPILOT_STATUS_TIMEOUT_SECONDS: '2.5' })).toBe(2500);
+  });
+
+  it('rejects invalid Copilot status timeout values', () => {
+    expect(() => parseCopilotStatusTimeoutMs({ COPILOT_STATUS_TIMEOUT_SECONDS: '0' })).toThrow(
+      'COPILOT_STATUS_TIMEOUT_SECONDS must be a positive number of seconds.'
+    );
+    expect(() => parseCopilotStatusTimeoutMs({ COPILOT_STATUS_TIMEOUT_SECONDS: 'soon' })).toThrow(
+      'COPILOT_STATUS_TIMEOUT_SECONDS must be a positive number of seconds.'
+    );
   });
 
   it('rejects invalid agent settings with config errors', () => {
