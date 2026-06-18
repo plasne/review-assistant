@@ -130,25 +130,80 @@ export class AgentRuntime {
 
   async getStatus(timeoutMs = this.statusTimeoutMs): Promise<AgentStatusSnapshot> {
     const requestId = randomUUID();
+    const startedAt = Date.now();
     const child = this.forkWorker();
     return await new Promise<AgentStatusSnapshot>((resolve) => {
-      const timeout = setTimeout(() => {
-        child.kill();
-        resolve(unavailable(normalizeProviderError(new Error('Timed out while checking GitHub Copilot availability.')), this.agentSettings));
-      }, timeoutMs);
-      child.once('message', (event: ProviderWorkerEvent) => {
-        clearTimeout(timeout);
-        child.kill();
-        if (event.type === 'status' && event.requestId === requestId) {
-          resolve(event);
+      let settled = false;
+      const finish = (status: AgentStatusSnapshot): void => {
+        if (settled) {
           return;
         }
-        resolve(unavailable(normalizeProviderError(new Error('Invalid GitHub Copilot status response.')), this.agentSettings));
-      });
-      child.once('error', (error) => {
+        settled = true;
         clearTimeout(timeout);
-        resolve(unavailable(normalizeProviderError(error), this.agentSettings));
-      });
+        child.off('message', handleMessage);
+        child.off('error', handleError);
+        child.off('exit', handleExit);
+        child.kill();
+        resolve(status);
+      };
+      const handleMessage = (event: ProviderWorkerEvent): void => {
+        if (event.type === 'log') {
+          const logger = event.level === 'error' ? logError : logInfo;
+          logger(event.event, event.fields);
+          return;
+        }
+        if (event.type === 'status' && event.requestId === requestId) {
+          logInfo('review-assistant.agent-status-completed', {
+            provider: provider.id,
+            requestId,
+            availability: event.availability,
+            code: event.error?.code,
+            elapsedMs: Date.now() - startedAt
+          });
+          finish(event);
+          return;
+        }
+        finish(unavailable(normalizeProviderError(new Error('Invalid GitHub Copilot status response.')), this.agentSettings));
+      };
+      const handleError = (error: Error): void => {
+        logError('review-assistant.agent-status-failed', {
+          provider: provider.id,
+          requestId,
+          message: error.message,
+          elapsedMs: Date.now() - startedAt
+        });
+        finish(unavailable(normalizeProviderError(error), this.agentSettings));
+      };
+      const handleExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+        if (settled || signal === 'SIGTERM') {
+          return;
+        }
+        const message = code === null
+          ? `GitHub Copilot status worker exited before reporting availability with signal ${signal ?? 'unknown'}.`
+          : `GitHub Copilot status worker exited before reporting availability with code ${code}.`;
+        logError('review-assistant.agent-status-worker-exited', {
+          provider: provider.id,
+          requestId,
+          code,
+          signal,
+          elapsedMs: Date.now() - startedAt
+        });
+        finish(unavailable(normalizeProviderError(new Error(message)), this.agentSettings));
+      };
+      const timeout = setTimeout(() => {
+        const error = createStatusTimeoutError(timeoutMs);
+        logError('review-assistant.agent-status-timeout', {
+          provider: provider.id,
+          requestId,
+          timeoutMs,
+          elapsedMs: Date.now() - startedAt
+        });
+        finish(unavailable(error, this.agentSettings));
+      }, timeoutMs);
+      logInfo('review-assistant.agent-status-started', { provider: provider.id, requestId, timeoutMs });
+      child.on('message', handleMessage);
+      child.once('error', handleError);
+      child.once('exit', handleExit);
       child.send({ type: 'status', requestId } satisfies ProviderWorkerRequest);
     });
   }
@@ -399,6 +454,19 @@ export const normalizeProviderError = (error: unknown): AgentErrorEnvelope => {
     retryable: true,
     remediation: 'Check GitHub Copilot availability and try again.'
   };
+};
+
+const createStatusTimeoutError = (timeoutMs: number): AgentErrorEnvelope => ({
+  code: 'STATUS_TIMEOUT',
+  message: `GitHub Copilot status check did not finish within ${formatTimeoutDuration(timeoutMs)}.`,
+  retryable: true,
+  remediation:
+    'The Copilot runtime may be stuck starting, pinging, or checking authentication. Review the application logs for review-assistant.copilot-status-step entries to find the last step that began without completing.'
+});
+
+const formatTimeoutDuration = (timeoutMs: number): string => {
+  const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+  return `${seconds} ${seconds === 1 ? 'second' : 'seconds'}`;
 };
 
 const unavailable = (error: AgentErrorEnvelope, settings: AgentSettings = {}): AgentStatusSnapshot => ({

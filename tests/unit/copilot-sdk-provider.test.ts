@@ -4,6 +4,7 @@ import {
   createPermissionHandler,
   logExternalMcpToolCompleted,
   logExternalMcpToolStarted,
+  logCopilotStatusStep,
   logProviderModelCallFailed,
   logProviderReasoning,
   logProviderTurnCompleted,
@@ -375,6 +376,35 @@ describe('copilot SDK provider mapping', () => {
       }
     ]);
     expect(logs[1]?.fields).not.toMatchObject({ errorMessage: expect.anything() });
+  });
+
+  it('logs Copilot status step diagnostics with timing and authentication metadata only', () => {
+    const logs: Array<{ level: string; event: string; fields?: Record<string, unknown> }> = [];
+
+    logCopilotStatusStep(
+      {
+        sendLog: (level, event, fields) => logs.push({ level, event, fields })
+      },
+      'status-1',
+      'client.getAuthStatus',
+      'end',
+      Date.now() - 25,
+      { isAuthenticated: true }
+    );
+
+    expect(logs).toEqual([
+      {
+        level: 'info',
+        event: 'review-assistant.copilot-status-step',
+        fields: expect.objectContaining({
+          requestId: 'status-1',
+          step: 'client.getAuthStatus',
+          phase: 'end',
+          elapsedMs: expect.any(Number),
+          isAuthenticated: true
+        })
+      }
+    ]);
   });
 });
 

@@ -4,7 +4,7 @@ import { build } from 'esbuild';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AgentRuntime } from '../../src/main/agent';
 import type { ChatStreamChunk } from '../../src/shared/types';
 import type { LocalToolRuntime } from '../../src/main/tools';
@@ -29,6 +29,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await fs.rm(tempRoot, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('agent runtime streaming pipeline', () => {
@@ -395,6 +399,37 @@ describe('agent runtime streaming pipeline', () => {
       availability: 'unavailable',
       error: { code: 'AUTH_REQUIRED' }
     });
+  });
+
+  it('continues waiting for status after worker diagnostic log messages', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const runtime = new AgentRuntime({
+      workerPath,
+      providerModule: fakeProviderModule,
+      commandEnv: { FAKE_COPILOT_LOG_STATUS: '1' }
+    });
+
+    await expect(runtime.getStatus()).resolves.toMatchObject({ availability: 'ready' });
+    expect(info.mock.calls.some(([line]) => String(line).includes('review-assistant.copilot-status-step'))).toBe(true);
+  });
+
+  it('returns an explicit status timeout instead of a generic provider error when the worker hangs', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const runtime = new AgentRuntime({
+      workerPath,
+      providerModule: fakeProviderModule,
+      commandEnv: { FAKE_COPILOT_HANG_STATUS: '1' },
+      statusTimeoutMs: 25
+    });
+
+    await expect(runtime.getStatus()).resolves.toMatchObject({
+      availability: 'unavailable',
+      error: {
+        code: 'STATUS_TIMEOUT',
+        message: 'GitHub Copilot status check did not finish within 1 second.'
+      }
+    });
+    expect(error.mock.calls.some(([line]) => String(line).includes('review-assistant.agent-status-timeout'))).toBe(true);
   });
 });
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-export const createAgentProvider = ({ providerMetadata, requestTool, normalizeProviderError, agentSettings }) => ({
-  getStatus: async () => {
+export const createAgentProvider = ({ providerMetadata, requestTool, normalizeProviderError, agentSettings, sendLog }) => ({
+  getStatus: async (requestId) => {
     if (process.env.FAKE_COPILOT_FAIL === 'auth') {
       return {
         provider: providerMetadata,
@@ -9,6 +9,23 @@ export const createAgentProvider = ({ providerMetadata, requestTool, normalizePr
         error: normalizeProviderError(new Error('Authentication required. Please login to GitHub Copilot.')),
         settings: agentSettings
       };
+    }
+    if (process.env.FAKE_COPILOT_HANG_STATUS === '1') {
+      await new Promise(() => undefined);
+    }
+    if (process.env.FAKE_COPILOT_LOG_STATUS === '1') {
+      sendLog('info', 'review-assistant.copilot-status-step', {
+        requestId,
+        step: 'client.start',
+        phase: 'begin',
+        elapsedMs: 0
+      });
+      sendLog('info', 'review-assistant.copilot-status-step', {
+        requestId,
+        step: 'client.start',
+        phase: 'end',
+        elapsedMs: 1
+      });
     }
     assertAgentSettings(agentSettings);
     return { provider: providerMetadata, availability: 'ready', settings: agentSettings };

@@ -37,13 +37,20 @@ type ProviderTurnStart = {
 };
 
 export const createCopilotSdkProvider = (deps: AgentProviderFactoryDeps): AgentProvider => ({
-  getStatus: async (_requestId) => {
+  getStatus: async (requestId) => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-copilot-status-'));
     const client = createClient(tempDir);
+    const startedAt = Date.now();
     try {
+      logCopilotStatusStep(deps, requestId, 'client.start', 'begin', startedAt);
       await client.start();
+      logCopilotStatusStep(deps, requestId, 'client.start', 'end', startedAt);
+      logCopilotStatusStep(deps, requestId, 'client.ping', 'begin', startedAt);
       await client.ping('review-assistant-status');
+      logCopilotStatusStep(deps, requestId, 'client.ping', 'end', startedAt);
+      logCopilotStatusStep(deps, requestId, 'client.getAuthStatus', 'begin', startedAt);
       const authStatus = await client.getAuthStatus();
+      logCopilotStatusStep(deps, requestId, 'client.getAuthStatus', 'end', startedAt, { isAuthenticated: authStatus.isAuthenticated });
       if (!authStatus.isAuthenticated) {
         return unavailable(
           deps,
@@ -441,6 +448,23 @@ export const logProviderModelCallFailed = (request: ProviderStartRequest, event:
     statusCode: event.data.statusCode,
     elapsedMs: event.data.durationMs,
     errorMessageChars: event.data.errorMessage?.length
+  });
+};
+
+export const logCopilotStatusStep = (
+  deps: Pick<AgentProviderFactoryDeps, 'sendLog'>,
+  requestId: string,
+  step: 'client.start' | 'client.ping' | 'client.getAuthStatus',
+  phase: 'begin' | 'end',
+  startedAt: number,
+  fields: Record<string, unknown> = {}
+): void => {
+  deps.sendLog('info', 'review-assistant.copilot-status-step', {
+    requestId,
+    step,
+    phase,
+    elapsedMs: Date.now() - startedAt,
+    ...fields
   });
 };
 

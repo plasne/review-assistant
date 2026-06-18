@@ -46,7 +46,13 @@ Long-running chat and tool workflows should also include:
 | `review-assistant.agent-request-completed` | Agent runtime completed a chat request. |
 | `review-assistant.agent-request-canceled` | Agent runtime canceled a chat request. |
 | `review-assistant.agent-request-failed` | Agent runtime failed a chat request with a structured error. |
+| `review-assistant.agent-status-started` | Agent runtime started a GitHub Copilot status check, including request ID and timeout. |
+| `review-assistant.agent-status-completed` | Agent runtime received a GitHub Copilot status result, including availability and elapsed time. |
+| `review-assistant.agent-status-failed` | Agent runtime status worker failed before reporting availability. |
+| `review-assistant.agent-status-worker-exited` | Agent status worker exited before reporting availability, including exit code or signal. |
+| `review-assistant.agent-status-timeout` | Agent status check exceeded its timeout before the worker reported availability. |
 | `review-assistant.agent-worker-starting` | Agent worker prepared prompt/tool context and is starting provider transport. |
+| `review-assistant.copilot-status-step` | GitHub Copilot SDK status sequence step began or ended (`client.start`, `client.ping`, `client.getAuthStatus`) with elapsed time. |
 | `review-assistant.agent-provider-spawned` | GitHub Copilot SDK session/runtime was initialized for a chat request. |
 | `review-assistant.agent-provider-turn-started` | SDK agent loop turn started. |
 | `review-assistant.agent-provider-turn-completed` | SDK agent loop turn completed, including elapsed time and reasoning delta counts when available. |
