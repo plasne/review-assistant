@@ -75,6 +75,7 @@ class ExperimentCatalogConfig:
     base_url: str
     project: str
     experiment: str
+    set_name: str | None = None
 
 
 DEFAULT_PATHS = EvaluationPaths(
@@ -156,7 +157,7 @@ def main() -> int:
             if result_status == "evaluated":
                 run_folder = inference_run_folder(source)
                 if run_folder not in experiment_catalog_sets:
-                    experiment_catalog_sets[run_folder] = next_experiment_catalog_set(experiment_catalog, run_folder)
+                    experiment_catalog_sets[run_folder] = experiment_catalog.set_name or next_experiment_catalog_set(experiment_catalog, run_folder)
                 publish_experiment_catalog_result(
                     experiment_catalog,
                     source,
@@ -285,6 +286,7 @@ def create_experiment_catalog_from_env() -> ExperimentCatalogConfig | None:
         base_url=base_url,
         project=require_env("EXPERIMENT_CATALOG_PROJECT"),
         experiment=require_env("EXPERIMENT_CATALOG_EXPERIMENT"),
+        set_name=optional_env("EXPERIMENT_CATALOG_SET"),
     )
 
 

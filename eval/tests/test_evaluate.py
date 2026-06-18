@@ -12,6 +12,7 @@ from eval.evaluate import (
     CopilotSdkFactJudge,
     ExperimentCatalogConfig,
     build_judge_request,
+    create_experiment_catalog_from_env,
     create_fact_judge_from_env,
     evaluate_artifact,
     evaluation_failure_summary,
@@ -223,6 +224,43 @@ class EvaluateMetricsTests(unittest.TestCase):
             "skipped_existing": 0,
         })
         self.assertIn("Evaluation failed: run/a00-1.json - ValueError: missing output\n", stderr.getvalue())
+
+    def test_main_uses_explicit_experiment_catalog_set(self):
+        container = FakeStorageContainer(
+            {
+                "run/a00-0.json": {"inference": {"ref": "ref-a", "run_folder": "run"}},
+                "run/a00-1.json": {"inference": {"ref": "ref-b", "run_folder": "run"}},
+            }
+        )
+        stdout = io.StringIO()
+
+        with (
+            patch("eval.evaluate.parse_args", return_value=SimpleNamespace(latest=False, prefix="run", skip_existing=False)),
+            patch("eval.evaluate.load_default_env"),
+            patch.dict(os.environ, {"INFERENCE_CONTAINER": "inference"}, clear=True),
+            patch("eval.evaluate.create_blob_service_client", return_value=FakeStorageService(container)),
+            patch("eval.evaluate.create_fact_judge_from_env", return_value=equivalent_fact_judge),
+            patch(
+                "eval.evaluate.create_experiment_catalog_from_env",
+                return_value=ExperimentCatalogConfig(
+                    base_url="https://example.com/",
+                    project="review-assistant",
+                    experiment="baseline",
+                    set_name="readable-set",
+                ),
+            ),
+            patch("eval.evaluate.next_experiment_catalog_set") as next_set,
+            patch("eval.evaluate.publish_experiment_catalog_result") as publish,
+            patch("eval.evaluate.evaluate_artifact", return_value={"status": "evaluated", "metrics": {}}),
+            patch("sys.stdout", stdout),
+        ):
+            exit_code = main()
+
+        self.assertEqual(exit_code, 0)
+        next_set.assert_not_called()
+        self.assertEqual(publish.call_count, 2)
+        self.assertEqual(publish.call_args_list[0].kwargs["set_name"], "readable-set")
+        self.assertEqual(publish.call_args_list[1].kwargs["set_name"], "readable-set")
 
     def test_json_pointer_resolves_objects_and_arrays(self):
         value = {"turns": [{"answer": "done"}]}
@@ -863,6 +901,29 @@ class EvaluateMetricsTests(unittest.TestCase):
     def test_experiment_catalog_url_normalizes_to_api_path(self):
         self.assertEqual(experiment_catalog_api_base_url("https://example.com/"), "https://example.com/api/")
         self.assertEqual(experiment_catalog_api_base_url("https://example.com/api"), "https://example.com/api/")
+
+    def test_create_experiment_catalog_from_env_reads_optional_set_name(self):
+        with patch.dict(
+            os.environ,
+            {
+                "EXPERIMENT_CATALOG_URL": "https://example.com/",
+                "EXPERIMENT_CATALOG_PROJECT": "review-assistant",
+                "EXPERIMENT_CATALOG_EXPERIMENT": "baseline",
+                "EXPERIMENT_CATALOG_SET": "readable-set",
+            },
+            clear=True,
+        ):
+            config = create_experiment_catalog_from_env()
+
+        self.assertEqual(
+            config,
+            ExperimentCatalogConfig(
+                base_url="https://example.com/",
+                project="review-assistant",
+                experiment="baseline",
+                set_name="readable-set",
+            ),
+        )
 
     def test_next_suffixed_set_name_uses_next_run_folder_letter(self):
         self.assertEqual(next_suffixed_set_name("1700000000000", []), "1700000000000-A")

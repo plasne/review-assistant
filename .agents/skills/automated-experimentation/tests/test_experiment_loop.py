@@ -125,6 +125,7 @@ class ExperimentLoopTests(unittest.TestCase):
             catalog_uri="https://catalog.example.invalid/api",
             catalog_project_name="Review Assistant",
             max_consecutive_failures=3,
+            max_attempts_per_experiment=2,
             reset_config_files=[],
         )
 
@@ -137,6 +138,51 @@ class ExperimentLoopTests(unittest.TestCase):
         self.assertIn("hypothesis, parameters, set names, code/config changes, verification steps, and rollback plan", normalized_prompt)
         self.assertIn("Update", normalized_prompt)
         self.assertNotIn("single-variable hypothesis test", normalized_prompt)
+
+    def test_inconclusive_experiment_retries_same_name_with_attempt_branch(self) -> None:
+        config = experiment_loop.Config(
+            base_branch="main",
+            branch_prefix="experiment",
+            project_name="review-assistant",
+            copilot_command="copilot",
+            catalog_uri="https://catalog.example.invalid/api",
+            catalog_project_name="review-assistant",
+            max_consecutive_failures=3,
+            max_attempts_per_experiment=2,
+            reset_config_files=[],
+        )
+        state = {"status": "inconclusive", "experiment": "review-assistant-exp-20260618-03", "attempt": 1}
+
+        experiment, attempt = experiment_loop.next_experiment_attempt(self.repo, config, state)
+
+        self.assertEqual(experiment, "review-assistant-exp-20260618-03")
+        self.assertEqual(attempt, 2)
+        self.assertEqual(
+            experiment_loop.experiment_branch(config, experiment, attempt),
+            "experiment/review-assistant-exp-20260618-03-attempt-2",
+        )
+
+    def test_inconclusive_experiment_advances_after_attempt_limit(self) -> None:
+        config = experiment_loop.Config(
+            base_branch="main",
+            branch_prefix="experiment",
+            project_name="review-assistant",
+            copilot_command="copilot",
+            catalog_uri="https://catalog.example.invalid/api",
+            catalog_project_name="review-assistant",
+            max_consecutive_failures=3,
+            max_attempts_per_experiment=2,
+            reset_config_files=[],
+        )
+        self.git(["checkout", "-b", "experiment/review-assistant-exp-20260618-03"])
+        self.git(["checkout", "main"])
+        state = {"status": "inconclusive", "experiment": "review-assistant-exp-20260618-03", "attempt": 2}
+
+        experiment, attempt = experiment_loop.next_experiment_attempt(self.repo, config, state)
+
+        self.assertNotEqual(experiment, "review-assistant-exp-20260618-03")
+        self.assertRegex(experiment, r"review-assistant-exp-\d{8}-\d{2}")
+        self.assertEqual(attempt, 1)
 
 
 if __name__ == "__main__":

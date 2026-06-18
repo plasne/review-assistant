@@ -34,6 +34,7 @@ class Config:
     catalog_uri: str
     catalog_project_name: str
     max_consecutive_failures: int
+    max_attempts_per_experiment: int
     reset_config_files: list[str]
 
 
@@ -64,9 +65,9 @@ def main() -> int:
     log(supervisor_log_path, "Verified config backups.")
 
     if args.dry_run:
-        experiment = next_experiment_name(repo, config.project_name)
-        branch = f"{config.branch_prefix}/{experiment}"
-        prompt = build_worker_prompt(workspace, experiment, branch, config)
+        experiment, attempt = next_experiment_attempt(repo, config, {})
+        branch = experiment_branch(config, experiment, attempt)
+        prompt = build_worker_prompt(workspace, experiment, branch, config, attempt=attempt)
         command = build_copilot_command(repo, config, experiment, prompt)
         print(" ".join(redact_command(command)))
         return 0
@@ -94,9 +95,11 @@ def main() -> int:
         log(supervisor_log_path, "Checking for a clean worktree after config restore.")
         ensure_clean_versioned_worktree(repo)
 
-        experiment = next_experiment_name(repo, config.project_name)
-        branch = f"{config.branch_prefix}/{experiment}"
+        experiment, attempt = next_experiment_attempt(repo, config, state)
+        branch = experiment_branch(config, experiment, attempt)
         experiment_dir = workspace / experiment
+        if attempt > 1:
+            experiment_dir = experiment_dir / f"attempt-{attempt}"
         artifacts_dir = experiment_dir / "artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         log(supervisor_log_path, f"Prepared artifact directory: {artifacts_dir}")
@@ -104,7 +107,7 @@ def main() -> int:
         log(supervisor_log_path, f"Creating experiment branch {branch}.")
         git(["checkout", "-b", branch], cwd=repo)
 
-        prompt = build_worker_prompt(workspace, experiment, branch, config)
+        prompt = build_worker_prompt(workspace, experiment, branch, config, attempt=attempt)
         prompt_path = artifacts_dir / "worker-prompt.txt"
         prompt_path.write_text(prompt, encoding="utf-8")
         log(supervisor_log_path, f"Wrote worker prompt: {prompt_path}")
@@ -119,6 +122,8 @@ def main() -> int:
                 "status": "running",
                 "experiment": experiment,
                 "branch": branch,
+                "attempt": attempt,
+                "max_attempts_per_experiment": config.max_attempts_per_experiment,
                 "started_at": utc_now(),
                 "command": redact_command(command),
                 "consecutive_failures": failures,
@@ -139,6 +144,7 @@ def main() -> int:
                     "status": "goal-met",
                     "experiment": experiment,
                     "branch": branch,
+                    "attempt": attempt,
                     "completed_at": utc_now(),
                     "consecutive_failures": 0,
                 },
@@ -154,6 +160,7 @@ def main() -> int:
                     "status": result,
                     "experiment": experiment,
                     "branch": branch,
+                    "attempt": attempt,
                     "completed_at": utc_now(),
                     "consecutive_failures": failures,
                 },
@@ -167,6 +174,7 @@ def main() -> int:
                     "status": "incomplete",
                     "experiment": experiment,
                     "branch": branch,
+                    "attempt": attempt,
                     "completed_at": utc_now(),
                     "exit_code": exit_code,
                     "consecutive_failures": failures,
@@ -202,6 +210,9 @@ def load_config(path: Path, args: argparse.Namespace) -> Config:
     if missing:
         raise SystemExit(f"Missing required loop.config.json values: {', '.join(missing)}")
     reset_config_files = normalize_reset_config_files(raw.get("reset_config_files", []))
+    max_attempts_per_experiment = int(raw.get("max_attempts_per_experiment", 2))
+    if max_attempts_per_experiment < 1:
+        raise SystemExit("loop.config.json max_attempts_per_experiment must be at least 1.")
     return Config(
         base_branch=required["base_branch"],
         branch_prefix=required["branch_prefix"],
@@ -210,6 +221,7 @@ def load_config(path: Path, args: argparse.Namespace) -> Config:
         catalog_uri=required["catalog_uri"],
         catalog_project_name=required["catalog_project_name"],
         max_consecutive_failures=int(raw.get("max_consecutive_failures", 3)),
+        max_attempts_per_experiment=max_attempts_per_experiment,
         reset_config_files=reset_config_files,
     )
 
@@ -355,11 +367,35 @@ def next_experiment_name(repo: Path, project_name: str) -> str:
     return f"{slug}-exp-{today}-{index:02d}"
 
 
-def build_worker_prompt(workspace: Path, experiment: str, branch: str, config: Config) -> str:
+def next_experiment_attempt(repo: Path, config: Config, state: dict[str, Any]) -> tuple[str, int]:
+    if should_retry_experiment(state, config):
+        return str(state["experiment"]), int(state.get("attempt", 1)) + 1
+    return next_experiment_name(repo, config.project_name), 1
+
+
+def should_retry_experiment(state: dict[str, Any], config: Config) -> bool:
+    status = state.get("status")
+    experiment = state.get("experiment")
+    attempt = int(state.get("attempt", 1))
+    return (
+        status in {"incomplete", "inconclusive"}
+        and isinstance(experiment, str)
+        and bool(experiment.strip())
+        and attempt < config.max_attempts_per_experiment
+    )
+
+
+def experiment_branch(config: Config, experiment: str, attempt: int) -> str:
+    suffix = "" if attempt == 1 else f"-attempt-{attempt}"
+    return f"{config.branch_prefix}/{experiment}{suffix}"
+
+
+def build_worker_prompt(workspace: Path, experiment: str, branch: str, config: Config, *, attempt: int = 1) -> str:
     return f"""Follow {workspace / 'GOAL.md'}. Complete exactly one experiment iteration.
 
 Experiment name: {experiment}
 Current branch: {branch}
+Attempt: {attempt} of {config.max_attempts_per_experiment}
 Experiment Catalog URI: {config.catalog_uri}
 Experiment Catalog project: {config.catalog_project_name}
 
