@@ -325,10 +325,11 @@ class EvaluateMetricsTests(unittest.TestCase):
             def __init__(self):
                 self.model = "gpt-5.4-mini"
                 self.used_models = set()
-                self.cost = 225.0
+                self.cost = 0.0
 
             def __call__(self, _expected_answer, _actual_answer):
                 self.used_models.add("gpt-5.4-mini")
+                self.cost += 225.0
                 return {
                     "schema_version": "review-assistant.fact-judge.v1",
                     "ground_truth_facts": [{"id": "gt-1", "fact": "Dracula advances influence."}],
@@ -360,6 +361,48 @@ class EvaluateMetricsTests(unittest.TestCase):
         self.assertEqual(result["status"], "evaluated")
         self.assertEqual(result["judge"], {"model": "gpt-5.4-mini"})
         self.assertEqual(result["metrics"]["meta_evaluation_cost"], 2.25)
+
+    def test_evaluate_artifact_reports_per_artifact_judge_cost_when_judge_is_reused(self):
+        class IncrementingFactJudge:
+            def __init__(self):
+                self.model = "gpt-5.4-mini"
+                self.used_models = set()
+                self.cost = 0.0
+
+            def __call__(self, _expected_answer, _actual_answer):
+                self.used_models.add("gpt-5.4-mini")
+                self.cost += 47.0
+                return {
+                    "schema_version": "review-assistant.fact-judge.v1",
+                    "ground_truth_facts": [{"id": "gt-1", "fact": "Dracula advances influence."}],
+                    "inference_facts": [{"id": "inf-1", "fact": "Dracula advances influence."}],
+                    "comparisons": [
+                        {
+                            "ground_truth_fact_id": "gt-1",
+                            "inference_fact_ids": ["inf-1"],
+                            "label": "equivalent",
+                            "rationale": "Same fact.",
+                        }
+                    ],
+                }
+
+        artifact = {
+            "ground_truth": {"output": {"answer": "Dracula advances influence."}},
+            "inference": {
+                "status": "completed",
+                "elapsed_ms": 123,
+                "transcript": [],
+                "output": {"answer": "Dracula advances influence."},
+            },
+        }
+        fact_judge = IncrementingFactJudge()
+
+        first = evaluate_artifact(artifact, fact_judge=fact_judge, source_blob="run/ref-a-0.json")
+        second = evaluate_artifact(artifact, fact_judge=fact_judge, source_blob="run/ref-a-1.json")
+
+        self.assertEqual(first["metrics"]["meta_evaluation_cost"], 0.47)
+        self.assertEqual(second["metrics"]["meta_evaluation_cost"], 0.47)
+        self.assertEqual(fact_judge.cost, 94.0)
 
     def test_evaluate_artifact_fails_when_judge_reports_unexpected_model(self):
         class MismatchedFactJudge:

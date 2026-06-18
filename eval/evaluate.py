@@ -343,15 +343,31 @@ def evaluate_artifact(artifact: JsonValue, *, fact_judge: FactJudge, source_blob
         actual_record = actual_output
         metrics: dict[str, JsonValue] = {}
         metric_errors: dict[str, dict[str, str]] = {}
+        judge_cost_before = fact_judge_cost(fact_judge)
         collect_metrics(
             metrics,
             metric_errors,
             "generation",
             lambda: generation_metrics(expected_output, actual_output, paths.answer_path, fact_judge=fact_judge),
         )
+        judge_cost_after = fact_judge_cost(fact_judge)
+        judge_cost_credits = (
+            judge_cost_after - judge_cost_before
+            if judge_cost_before is not None and judge_cost_after is not None
+            else None
+        )
         inference_timing = collect_metrics(metrics, metric_errors, "inference_timing", lambda: inference_timing_metrics(inference))
         if inference_timing:
-            collect_metrics(metrics, metric_errors, "cost", lambda: evaluation_cost_metrics(inference_timing, fact_judge))
+            collect_metrics(
+                metrics,
+                metric_errors,
+                "cost",
+                lambda: evaluation_cost_metrics(
+                    inference_timing,
+                    fact_judge,
+                    judge_cost_credits=judge_cost_credits,
+                ),
+            )
         collect_metrics(metrics, metric_errors, "retrieval_recall", lambda: retrieval_recall_metrics(expected_output, actual_output, paths))
         collect_metrics(
             metrics,
@@ -938,15 +954,27 @@ def evaluation_judge_metadata(fact_judge: FactJudge) -> dict[str, JsonValue]:
     return {"model": model}
 
 
-def evaluation_cost_metrics(inference_metrics: dict[str, int | float], fact_judge: FactJudge) -> dict[str, float]:
+def evaluation_cost_metrics(
+    inference_metrics: dict[str, int | float],
+    fact_judge: FactJudge,
+    *,
+    judge_cost_credits: float | None = None,
+) -> dict[str, float]:
     metrics: dict[str, float] = {}
     inference_cost = inference_metrics.get("meta_inference_cost")
     if isinstance(inference_cost, int | float) and not isinstance(inference_cost, bool):
         metrics["meta_inference_cost"] = float(inference_cost)
-    judge_cost = getattr(fact_judge, "cost", None)
+    judge_cost = judge_cost_credits if judge_cost_credits is not None else getattr(fact_judge, "cost", None)
     if isinstance(judge_cost, int | float) and not isinstance(judge_cost, bool):
         metrics["meta_evaluation_cost"] = github_ai_credits_to_usd(float(judge_cost))
     return metrics
+
+
+def fact_judge_cost(fact_judge: FactJudge) -> float | None:
+    cost = getattr(fact_judge, "cost", None)
+    if isinstance(cost, int | float) and not isinstance(cost, bool):
+        return float(cost)
+    return None
 
 
 def github_ai_credits_to_usd(credits: float) -> float:
