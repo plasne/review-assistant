@@ -85,6 +85,10 @@ def main() -> int:
         ensure_clean_versioned_worktree(repo)
         log(supervisor_log_path, f"Checking out base branch {config.base_branch}.")
         git(["checkout", config.base_branch], cwd=repo)
+        log(supervisor_log_path, "Checking for a clean worktree before config restore.")
+        ensure_clean_versioned_worktree(repo)
+        log(supervisor_log_path, "Verifying tracked resettable config backups.")
+        ensure_tracked_config_backups_match_targets(repo, workspace, config.reset_config_files)
         log(supervisor_log_path, "Restoring resettable config files.")
         restore_config_files(repo, workspace, config.reset_config_files)
         log(supervisor_log_path, "Checking for a clean worktree after config restore.")
@@ -261,6 +265,24 @@ def ensure_config_backups(repo: Path, workspace: Path, reset_config_files: list[
         shutil.copy2(source, backup)
 
 
+def ensure_tracked_config_backups_match_targets(repo: Path, workspace: Path, reset_config_files: list[str]) -> None:
+    backup_root = workspace / "_config-backups"
+    for rel_path in reset_config_files:
+        if not is_tracked_file(repo, rel_path):
+            continue
+        backup = backup_root / rel_path
+        target = repo / rel_path
+        if not backup.is_file():
+            raise SystemExit(f"Missing config backup for {rel_path}: {backup}")
+        if not target.is_file():
+            raise SystemExit(f"Tracked resettable config file does not exist on the checked-out base branch: {rel_path}")
+        if backup.read_bytes() != target.read_bytes():
+            raise SystemExit(
+                "Tracked resettable config backup differs from the checked-out base branch file. "
+                f"Update or remove the backup before continuing: {rel_path}"
+            )
+
+
 def restore_config_files(repo: Path, workspace: Path, reset_config_files: list[str]) -> None:
     backup_root = workspace / "_config-backups"
     for rel_path in reset_config_files:
@@ -276,6 +298,11 @@ def ensure_clean_versioned_worktree(repo: Path) -> None:
     status = git_output(["status", "--porcelain", "--untracked-files=all"], cwd=repo)
     if status.strip():
         raise SystemExit("Versioned working tree changes exist. Commit, stash, or discard them before continuing.")
+
+
+def is_tracked_file(repo: Path, rel_path: str) -> bool:
+    result = subprocess.run(["git", "ls-files", "--error-unmatch", "--", rel_path], cwd=repo, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return result.returncode == 0
 
 
 def finalize_experiment_branch(repo: Path, workspace: Path, experiment: str) -> None:
