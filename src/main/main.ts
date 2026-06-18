@@ -78,13 +78,14 @@ const initializeLaunchLogFile = async (): Promise<void> => {
       try {
         fsSync.appendFileSync(logPath, `${line}\n`);
       } catch (error) {
-        console.error(`Failed to write ${LOG_FILE_NAME}: ${error instanceof Error ? error.message : String(error)}`);
+        setLogFileWriter(undefined);
+        logError('review-assistant.log-file-write-failed', { path: logPath, message: error instanceof Error ? error.message : String(error) });
       }
     });
     logInfo('review-assistant.log-file-started', { path: logPath });
   } catch (error) {
     setLogFileWriter(undefined);
-    console.error(`Failed to initialize ${LOG_FILE_NAME}: ${error instanceof Error ? error.message : String(error)}`);
+    logError('review-assistant.log-file-start-failed', { path: logPath, message: error instanceof Error ? error.message : String(error) });
   }
 };
 

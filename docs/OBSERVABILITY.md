@@ -39,6 +39,8 @@ Long-running chat and tool workflows should also include:
 |---|---|
 | `review-assistant.config` | App-level config source, selected backend, and redacted values. |
 | `review-assistant.log-file-started` | Launch log file was initialized, including the path being written for the current run. |
+| `review-assistant.log-file-start-failed` | Launch log file could not be initialized at the process launch path. |
+| `review-assistant.log-file-write-failed` | Launch log file append failed after initialization. |
 | `review-assistant.project-config` | Project-level config merge with secrets redacted. |
 | `review-assistant.config-error` | Startup configuration failures that block project browsing. |
 | `review-assistant.storage-lease-renewal-failed` | Azure Blob Storage record lease renewal failed, including `projectId`, `recordId`, and a safe error message. |

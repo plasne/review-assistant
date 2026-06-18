@@ -8,14 +8,14 @@ export const setLogFileWriter = (writer: ((line: string) => void) | undefined): 
 
 export const logInfo = (event: string, fields: LogFields = {}): void => {
   const line = formatLogLine(event, fields);
-  console.info(line);
   logFileWriter?.(line);
+  writeConsole(console.info, line);
 };
 
 export const logError = (event: string, fields: LogFields = {}): void => {
   const line = formatLogLine(event, fields);
-  console.error(line);
   logFileWriter?.(line);
+  writeConsole(console.error, line);
 };
 
 export const formatLogLine = (event: string, fields: LogFields = {}): string => {
@@ -39,3 +39,17 @@ const formatLogValue = (value: unknown): string => {
   }
   return JSON.stringify(value);
 };
+
+const writeConsole = (write: (message?: unknown, ...optionalParams: unknown[]) => void, line: string): void => {
+  try {
+    write(line);
+  } catch (error) {
+    if (isDestroyedConsoleStreamError(error)) {
+      return;
+    }
+    throw error;
+  }
+};
+
+const isDestroyedConsoleStreamError = (error: unknown): boolean =>
+  error instanceof Error && 'code' in error && error.code === 'ERR_STREAM_DESTROYED';

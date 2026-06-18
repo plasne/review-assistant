@@ -23,4 +23,20 @@ describe('structured logging file sink', () => {
       error.mockRestore();
     }
   });
+
+  it('does not crash when packaged app console streams are destroyed', () => {
+    const lines: string[] = [];
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {
+      throw Object.assign(new Error('stream destroyed'), { code: 'ERR_STREAM_DESTROYED' });
+    });
+
+    try {
+      setLogFileWriter((line) => lines.push(line));
+      expect(() => logInfo('review-assistant.test-info')).not.toThrow();
+      expect(lines[0]).toContain('review-assistant.test-info');
+    } finally {
+      setLogFileWriter(undefined);
+      info.mockRestore();
+    }
+  });
 });
