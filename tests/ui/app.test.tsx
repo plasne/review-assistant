@@ -1551,6 +1551,60 @@ describe('review UI', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
   });
 
+  it('retries GitHub Copilot status after login while auth state is still propagating', async () => {
+    vi.mocked(api.getBootstrap).mockResolvedValue({
+      backendKind: 'local',
+      projects: [],
+      version: 'v0.1.0-test'
+    });
+    vi.mocked(api.getAgentStatus)
+      .mockResolvedValueOnce({
+        provider: { id: 'github-copilot', name: 'GitHub Copilot' },
+        availability: 'unavailable',
+        error: {
+          code: 'AUTH_REQUIRED',
+          message: 'GitHub Copilot is not signed in.',
+          retryable: true
+        }
+      })
+      .mockResolvedValueOnce({
+        provider: { id: 'github-copilot', name: 'GitHub Copilot' },
+        availability: 'unavailable',
+        error: {
+          code: 'AUTH_REQUIRED',
+          message: 'GitHub Copilot is not signed in yet.',
+          retryable: true
+        }
+      })
+      .mockResolvedValueOnce({
+        provider: { id: 'github-copilot', name: 'GitHub Copilot' },
+        availability: 'ready'
+      });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('GitHub Copilot is not signed in.'));
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        listeners.loginComplete.forEach((listener) => listener({ loginId: 'login-1', success: true }));
+        await Promise.resolve();
+      });
+      expect(api.getAgentStatus).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(api.getAgentStatus).toHaveBeenCalledTimes(3);
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('hides healthy agent status and keeps chat controls in one row', async () => {
     vi.mocked(api.getBootstrap).mockResolvedValue({
       backendKind: 'local',

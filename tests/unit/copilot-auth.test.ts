@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
@@ -63,9 +64,11 @@ describe('Copilot auth helpers', () => {
   it('keeps watching the login process and reports completion after returning the device code', async () => {
     const loginProcess = createLoginProcess();
     const onComplete = vi.fn();
+    const log = vi.fn();
     const spawnProcess: StartCopilotLoginOptions['spawnProcess'] = vi.fn(() => loginProcess);
     const login = startCopilotLogin({
       loginId: 'login-1',
+      log,
       onComplete,
       resolveRuntimePath: () => '/tmp/copilot',
       spawnProcess,
@@ -85,6 +88,25 @@ describe('Copilot auth helpers', () => {
     loginProcess.emit('close', 0, null);
 
     expect(onComplete).toHaveBeenCalledWith({ loginId: 'login-1', success: true });
+    expect(spawnProcess).toHaveBeenCalledWith(
+      '/tmp/copilot',
+      ['login'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          COPILOT_HOME: path.join(os.homedir(), '.copilot'),
+          NO_COLOR: '1'
+        })
+      })
+    );
+    expect(log).toHaveBeenCalledWith(
+      'info',
+      'review-assistant.auth-login-command',
+      expect.objectContaining({
+        loginId: 'login-1',
+        copilotHome: path.join(os.homedir(), '.copilot'),
+        copilotHomeSource: 'default-copilot-home'
+      })
+    );
   });
 });
 

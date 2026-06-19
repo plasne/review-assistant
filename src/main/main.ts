@@ -395,6 +395,13 @@ const registerIpc = (): void => {
     logInfo('review-assistant.auth-login-started', { provider: 'github-copilot' });
     const sender = event.sender;
     const result = await startCopilotLogin({
+      log: (level, name, fields) => {
+        if (level === 'error') {
+          logError(name, fields);
+          return;
+        }
+        logInfo(name, fields);
+      },
       onComplete: (completion) => {
         const validCompletion = assertGitHubLoginCompletion(completion);
         logInfo('review-assistant.auth-login-completed', {

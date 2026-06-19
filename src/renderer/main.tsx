@@ -68,10 +68,16 @@ const NEW_RECORD_ID_BASE = 'new-record';
 const MAX_CHAT_ATTACHMENTS = 5;
 const MAX_TAGS_PER_RECORD = 100;
 const MAX_TAG_LENGTH = 100;
+const POST_LOGIN_STATUS_ATTEMPTS = 10;
+const POST_LOGIN_STATUS_RETRY_DELAY_MS = 2000;
 const NOT_SET_LABEL = '(not set)';
 
 const noVisibleQueueMessagesMessage = (queueName: string): string =>
   `No visible messages are available in '${queueName}'. The queue may be empty or its messages may still be invisible.`;
+
+const delay = async (ms: number): Promise<void> => {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+};
 
 type ThemeDraft = {
   id: string;
@@ -406,7 +412,7 @@ const App = () => {
       }),
       window.reviewAssistant.onGitHubLoginComplete((completion) => {
         if (completion.success) {
-          void refreshAgentStatus();
+          void refreshAgentStatusUntilReady();
         }
         if (activeLoginIdRef.current !== completion.loginId) {
           return;
@@ -445,15 +451,16 @@ const App = () => {
     return () => window.removeEventListener('beforeunload', preventUnload);
   }, []);
 
-  const refreshAgentStatus = async () => {
+  const refreshAgentStatus = async (): Promise<AgentStatusSnapshot> => {
     try {
       const result = await window.reviewAssistant.getAgentStatus();
       setAgentStatus(result);
       if (result.availability === 'ready' && chatState !== 'streaming') {
         setChatState('ready');
       }
+      return result;
     } catch (caught) {
-      setAgentStatus({
+      const unavailable: AgentStatusSnapshot = {
         provider: { id: 'github-copilot', name: 'GitHub Copilot' },
         availability: 'unavailable',
         error: {
@@ -462,7 +469,21 @@ const App = () => {
           retryable: true,
           remediation: 'Check GitHub Copilot availability and try again.'
         }
-      });
+      };
+      setAgentStatus(unavailable);
+      return unavailable;
+    }
+  };
+
+  const refreshAgentStatusUntilReady = async (): Promise<void> => {
+    for (let attempt = 0; attempt < POST_LOGIN_STATUS_ATTEMPTS; attempt += 1) {
+      const result = await refreshAgentStatus();
+      if (result.availability === 'ready' || result.error?.code !== 'AUTH_REQUIRED') {
+        return;
+      }
+      if (attempt + 1 < POST_LOGIN_STATUS_ATTEMPTS) {
+        await delay(POST_LOGIN_STATUS_RETRY_DELAY_MS);
+      }
     }
   };
 

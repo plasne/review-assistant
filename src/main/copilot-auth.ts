@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { ContinueWithGitHubResult, GitHubLoginCompletion } from '../shared/types';
+import { copilotHome, copilotHomeSource } from './copilot-home';
 import { resolveCopilotRuntimePath } from './copilot-runtime';
 
 const LOGIN_CODE_TIMEOUT_MS = 15000;
@@ -24,6 +25,7 @@ type SpawnLoginProcess = (
 
 export type StartCopilotLoginOptions = {
   loginId?: string;
+  log?: (level: 'info' | 'error', event: string, fields?: Record<string, unknown>) => void;
   onComplete?: (completion: GitHubLoginCompletion) => void;
   resolveRuntimePath?: () => string;
   spawnProcess?: SpawnLoginProcess;
@@ -32,13 +34,21 @@ export type StartCopilotLoginOptions = {
 
 export const startCopilotLogin = async (options: StartCopilotLoginOptions = {}): Promise<ContinueWithGitHubResult> => {
   const command = (options.resolveRuntimePath ?? resolveCopilotRuntimePath)();
+  const home = copilotHome();
   const loginId = options.loginId ?? randomUUID();
   const spawnProcess = options.spawnProcess ?? spawnLoginProcess;
   const timeoutMs = options.timeoutMs ?? LOGIN_CODE_TIMEOUT_MS;
+  options.log?.('info', 'review-assistant.auth-login-command', {
+    loginId,
+    command,
+    copilotHome: home,
+    copilotHomeSource: copilotHomeSource(),
+    timeoutMs
+  });
   return await new Promise<ContinueWithGitHubResult>((resolve, reject) => {
     const child = spawnProcess(command, ['login'], {
       detached: true,
-      env: { ...process.env, NO_COLOR: '1' },
+      env: { ...process.env, COPILOT_HOME: home, NO_COLOR: '1' },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let resultSettled = false;
@@ -72,6 +82,12 @@ export const startCopilotLogin = async (options: StartCopilotLoginOptions = {}):
         return;
       }
       completionDelivered = true;
+      options.log?.(completion.success ? 'info' : 'error', 'review-assistant.auth-login-process-completed', {
+        loginId,
+        success: completion.success,
+        outputChars: output.length,
+        errorMessage: completion.errorMessage
+      });
       options.onComplete?.({ loginId, ...completion });
     };
     const appendOutput = (chunk: Buffer): void => {
@@ -91,6 +107,12 @@ export const startCopilotLogin = async (options: StartCopilotLoginOptions = {}):
       fail(error);
     });
     child.once('close', (code) => {
+      options.log?.(code === 0 ? 'info' : 'error', 'review-assistant.auth-login-process-exited', {
+        loginId,
+        code,
+        deviceCodeDelivered,
+        outputChars: output.length
+      });
       if (code === 0) {
         if (deviceCodeDelivered) {
           complete({ success: true });

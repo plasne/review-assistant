@@ -66,10 +66,12 @@ describe('copilot SDK provider mapping', () => {
     );
   });
 
-  it('uses the default Copilot home so SDK status shares auth with copilot login', () => {
+  it('uses Copilot CLI mode and the default Copilot home so SDK status shares auth with copilot login', () => {
     const options = createCopilotClientOptions('/tmp/review-assistant-working-dir', { command: process.execPath });
 
     expect(options).toMatchObject({
+      mode: 'copilot-cli',
+      useLoggedInUser: true,
       workingDirectory: '/tmp/review-assistant-working-dir',
       baseDirectory: path.join(os.homedir(), '.copilot')
     });
