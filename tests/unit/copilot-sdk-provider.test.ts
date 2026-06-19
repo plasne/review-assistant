@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   accumulateReasoningDelta,
+  createRuntimeConnection,
   createPermissionHandler,
   logExternalMcpToolCompleted,
   logExternalMcpToolStarted,
@@ -34,6 +35,24 @@ const tools: LocalToolMetadata[] = [
 ];
 
 describe('copilot SDK provider mapping', () => {
+  it('selects stdio by default except TCP on Windows and supports explicit transports', () => {
+    expect(createRuntimeConnection({ command: '/opt/copilot' }, 'darwin')).toEqual({
+      kind: 'stdio',
+      path: '/opt/copilot',
+      args: []
+    });
+    expect(createRuntimeConnection({ command: 'C:\\Tools\\copilot.exe' }, 'win32')).toEqual({
+      kind: 'tcp',
+      path: 'C:\\Tools\\copilot.exe',
+      args: []
+    });
+    expect(createRuntimeConnection({ transport: 'stdio', command: 'C:\\Tools\\copilot.exe' }, 'win32')).toEqual({
+      kind: 'stdio',
+      path: 'C:\\Tools\\copilot.exe',
+      args: []
+    });
+  });
+
   it('builds an explicit SDK tool allowlist without ambient built-ins', () => {
     expect(toAvailableTools({ tools: [], mcpServers: [] })).toEqual([]);
     expect(toAvailableTools({ tools, mcpServers: [] })).toEqual(['custom:readRecord', 'custom:listTools']);

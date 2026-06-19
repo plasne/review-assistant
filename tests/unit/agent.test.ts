@@ -29,6 +29,26 @@ describe('agent runtime status timeout configuration', () => {
   });
 });
 
+describe('agent runtime Copilot settings', () => {
+  it('stores explicit Copilot runtime settings separately from agent settings', () => {
+    const runtime = new AgentRuntime({
+      workerPath: '/tmp/agent-process.js',
+      copilotRuntimeSettings: {
+        transport: 'tcp',
+        command: '/opt/copilot'
+      }
+    });
+
+    expect(runtime.getCopilotRuntimeSettings()).toEqual({
+      transport: 'tcp',
+      command: '/opt/copilot'
+    });
+
+    runtime.setCopilotRuntimeSettings({ transport: 'stdio', command: '/usr/local/bin/copilot' });
+    expect(runtime.getCopilotRuntimeSettings()).toEqual({ transport: 'stdio', command: '/usr/local/bin/copilot' });
+  });
+});
+
 describe('local tool result log fields', () => {
   it('keeps only safe persistence metadata from successful tool results', () => {
     expect(

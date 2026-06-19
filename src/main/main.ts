@@ -96,6 +96,7 @@ const initializeBackend = async (): Promise<void> => {
     backendKind = config.backendKind;
     appConfigValues = storage ? await storage.getAppConfig() : config.values;
     agent.setAgentSettings(parseAgentSettings(appConfigValues));
+    agent.setCopilotRuntimeSettings(config.copilotRuntimeSettings ?? {});
     agent.setStatusTimeoutMs(parseCopilotStatusTimeoutMs(appConfigValues));
   } catch (error) {
     storage = undefined;

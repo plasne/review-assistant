@@ -34,7 +34,7 @@ import {
 } from '../shared/feedback';
 import { assertNewProjectId, assertProjectId, assertQueueName, assertRecordId } from '../shared/validators';
 import { buildRenderTree, validateRecord } from './schema';
-import { loadProjectEnv, readEnvFile, redactConfig } from './env';
+import { loadProjectEnv, omitCopilotRuntimeSettings, readEnvFile, redactConfig } from './env';
 import { logError } from '../shared/logging';
 import {
   discoverComputedTagPlugins,
@@ -1004,11 +1004,11 @@ export class AzureBlobStorageAdapter implements StorageAdapter {
   }
 
   private mergeAzureAppConfig(appEnv: string | undefined): Record<string, string> {
-    return appEnv ? { ...this.config.values, ...parseAzureConfigEnv(appEnv, 'app config/.env') } : { ...this.config.values };
+    return appEnv ? { ...this.config.values, ...omitCopilotRuntimeSettings(parseAzureConfigEnv(appEnv, 'app config/.env')) } : { ...this.config.values };
   }
 
   private mergeAzureProjectConfig(appConfig: Record<string, string>, projectEnv: string | undefined): Record<string, string> {
-    return projectEnv ? { ...appConfig, ...parseAzureConfigEnv(projectEnv, 'project config/.env') } : { ...appConfig };
+    return projectEnv ? { ...appConfig, ...omitCopilotRuntimeSettings(parseAzureConfigEnv(projectEnv, 'project config/.env')) } : { ...appConfig };
   }
 
   private async readExistingSchemaForSave(
@@ -1357,7 +1357,7 @@ const isAzureStorageServiceError = (error: unknown): error is { statusCode?: num
 };
 
 const readRuntimeEnvValues = (envPath: string): Record<string, string> =>
-  Object.fromEntries(Object.entries(readEnvFile(envPath)).filter(([key]) => !BACKEND_KEYS.has(key)));
+  omitCopilotRuntimeSettings(Object.fromEntries(Object.entries(readEnvFile(envPath)).filter(([key]) => !BACKEND_KEYS.has(key))));
 
 const readOptionalTextFile = async (filePath: string): Promise<string | undefined> => {
   try {

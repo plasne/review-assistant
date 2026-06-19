@@ -109,17 +109,24 @@ describe('inference CLI config', () => {
       AGENT_MODEL: 'gpt-5.4-mini',
       COPILOT_GITHUB_TOKEN: 'token',
       AZURE_STORAGE_ACCOUNT_NAME: 'account',
+      COPILOT_RUNTIME_COMMAND: '/project/config/copilot',
       REASONING_EFFORT: 'high'
     });
-    const options = Reflect.get(agent, 'options') as { agentSettings?: unknown; commandEnv?: Record<string, string> };
+    const options = Reflect.get(agent, 'options') as {
+      agentSettings?: unknown;
+      commandEnv?: Record<string, string>;
+      copilotRuntimeSettings?: unknown;
+    };
 
     expect(options.commandEnv).toEqual({
       AGENT_MODEL: 'gpt-5.4-mini',
       COPILOT_GITHUB_TOKEN: 'token',
       AZURE_STORAGE_ACCOUNT_NAME: 'account',
+      COPILOT_RUNTIME_COMMAND: '/project/config/copilot',
       REASONING_EFFORT: 'high'
     });
     expect(options.agentSettings).toEqual({ model: 'gpt-5.4-mini', reasoningEffort: 'high' });
+    expect(options.copilotRuntimeSettings).toEqual({});
   });
 
   it('reads iterations from inference config values when no shell override is set', () => {

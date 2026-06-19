@@ -16,6 +16,7 @@ import type {
   ChatStreamStartResult,
   ExternalMcpServerConfig,
   LocalToolMetadata,
+  CopilotRuntimeSettings,
   ToolInvocationRequest,
   ToolInvocationResponse
 } from '../shared/types';
@@ -96,6 +97,7 @@ type AgentRuntimeOptions = {
   commandEnv?: NodeJS.ProcessEnv;
   providerModule?: string;
   agentSettings?: AgentSettings;
+  copilotRuntimeSettings?: CopilotRuntimeSettings;
   statusTimeoutMs?: number;
 };
 
@@ -107,10 +109,12 @@ const provider: AgentProviderMetadata = {
 export class AgentRuntime {
   private readonly pending = new Map<string, PendingChat>();
   private agentSettings: AgentSettings;
+  private copilotRuntimeSettings: CopilotRuntimeSettings;
   private statusTimeoutMs: number;
 
   constructor(private readonly options: AgentRuntimeOptions) {
     this.agentSettings = options.agentSettings ?? {};
+    this.copilotRuntimeSettings = options.copilotRuntimeSettings ?? legacyCopilotRuntimeSettings(options);
     this.statusTimeoutMs = options.statusTimeoutMs ?? DEFAULT_COPILOT_STATUS_TIMEOUT_MS;
   }
 
@@ -120,6 +124,14 @@ export class AgentRuntime {
 
   getAgentSettings(): AgentSettings {
     return this.agentSettings;
+  }
+
+  setCopilotRuntimeSettings(copilotRuntimeSettings: CopilotRuntimeSettings): void {
+    this.copilotRuntimeSettings = copilotRuntimeSettings;
+  }
+
+  getCopilotRuntimeSettings(): CopilotRuntimeSettings {
+    return this.copilotRuntimeSettings;
   }
 
   setStatusTimeoutMs(timeoutMs: number): void {
@@ -278,17 +290,14 @@ export class AgentRuntime {
   }
 
   private forkWorker(): ChildProcess {
-    const runtimeCommand = this.options.command ?? process.env.COPILOT_RUNTIME_COMMAND;
-    const runtimeArgs = this.options.commandArgs?.join('\n') ?? process.env.COPILOT_RUNTIME_ARGS;
     const providerModule = this.options.providerModule ?? process.env.AGENT_PROVIDER_MODULE;
     const agentSettings = JSON.stringify(this.agentSettings);
     return fork(this.options.workerPath, [], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
       env: {
-        ...process.env,
-        ...this.options.commandEnv,
-        ...(runtimeCommand ? { COPILOT_RUNTIME_COMMAND: runtimeCommand } : {}),
-        ...(runtimeArgs ? { COPILOT_RUNTIME_ARGS: runtimeArgs } : {}),
+        ...withoutCopilotRuntimeEnv(process.env),
+        ...withoutCopilotRuntimeEnv(this.options.commandEnv ?? {}),
+        ...toCopilotRuntimeEnv(this.copilotRuntimeSettings),
         ...(providerModule ? { AGENT_PROVIDER_MODULE: providerModule } : {}),
         AGENT_SETTINGS: agentSettings
       }
@@ -437,6 +446,22 @@ export const localToolResultLogFields = (response: ToolInvocationResponse): Reco
 const stringField = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 const numberField = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const COPILOT_RUNTIME_ENV_KEYS = new Set(['COPILOT_RUNTIME_COMMAND', 'COPILOT_RUNTIME_ARGS', 'COPILOT_RUNTIME_TRANSPORT']);
+
+const withoutCopilotRuntimeEnv = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
+  Object.fromEntries(Object.entries(env).filter(([key]) => !COPILOT_RUNTIME_ENV_KEYS.has(key)));
+
+const toCopilotRuntimeEnv = (settings: CopilotRuntimeSettings): NodeJS.ProcessEnv => ({
+  ...(settings.command ? { COPILOT_RUNTIME_COMMAND: settings.command } : {}),
+  ...(settings.args && settings.args.length > 0 ? { COPILOT_RUNTIME_ARGS: settings.args.join('\n') } : {}),
+  ...(settings.transport ? { COPILOT_RUNTIME_TRANSPORT: settings.transport } : {})
+});
+
+const legacyCopilotRuntimeSettings = (options: AgentRuntimeOptions): CopilotRuntimeSettings => ({
+  ...(options.command ? { command: options.command } : {}),
+  ...(options.commandArgs && options.commandArgs.length > 0 ? { args: options.commandArgs } : {})
+});
 
 export const normalizeProviderError = (error: unknown): AgentErrorEnvelope => {
   const message = error instanceof Error ? error.message : String(error);

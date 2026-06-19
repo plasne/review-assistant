@@ -119,7 +119,7 @@ The generated request still appends current project/record identifiers, selected
 
 ## Agent settings
 
-Set backend location keys in root `.env`. Azure storage also requires `AZURE_STORAGE_CONTAINER`, the single container that holds root `config/` and project folders. Set optional agent parameters in the app-level `config/.env` (`LOCAL_PATH/config/.env` for local storage, or root `config/.env` inside the Azure container):
+Set backend location keys in root `.env`. Azure storage also requires `AZURE_STORAGE_CONTAINER`, the single container that holds root `config/` and project folders. Set optional model parameters in the app-level `config/.env` (`LOCAL_PATH/config/.env` for local storage, or root `config/.env` inside the Azure container):
 
 ```bash
 AGENT_MODEL=gpt-5.5
@@ -128,6 +128,15 @@ COPILOT_STATUS_TIMEOUT_SECONDS=30
 ```
 
 `AGENT_MODEL` and `REASONING_EFFORT` are passed to the GitHub Copilot SDK session. Reasoning effort must be `low`, `medium`, `high`, or `xhigh`. `COPILOT_STATUS_TIMEOUT_SECONDS` controls the Copilot availability check timeout before chat starts and defaults to `30`.
+
+Set Copilot runtime startup settings only in the root `.env` alongside the app. These are intentionally not read from app `config/.env` or project `config/.env`:
+
+```bash
+COPILOT_RUNTIME_TRANSPORT=tcp # stdio or tcp
+COPILOT_RUNTIME_COMMAND=C:\Tools\copilot.exe
+```
+
+When `COPILOT_RUNTIME_TRANSPORT` is omitted, Review Assistant uses `tcp` on Windows and `stdio` elsewhere.
 
 Claude Sonnet 4.6 was used during testing and was reliable for Review Assistant agent workflows.
 

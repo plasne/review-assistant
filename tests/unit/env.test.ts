@@ -6,6 +6,7 @@ import {
   DEFAULT_COPILOT_STATUS_TIMEOUT_MS,
   loadAppConfig,
   parseAgentSettings,
+  parseCopilotRuntimeSettings,
   parseCopilotStatusTimeoutMs,
   parseEnv,
   redactConfig,
@@ -45,6 +46,32 @@ describe('environment config', () => {
         values: { LOCAL_PATH: localPath, USERNAME: 'app@example.com' },
         appEnvPath: path.join(localPath, 'config', '.env')
       });
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reads Copilot runtime settings only from the root app .env', async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-env-'));
+    try {
+      const localPath = path.join(tempRoot, 'data');
+      const bootstrapEnvPath = path.join(tempRoot, '.env');
+      const appEnvPath = path.join(localPath, 'config', '.env');
+      await fs.mkdir(path.dirname(appEnvPath), { recursive: true });
+      await fs.writeFile(
+        bootstrapEnvPath,
+        ['LOCAL_PATH=data', 'COPILOT_RUNTIME_TRANSPORT=tcp', 'COPILOT_RUNTIME_COMMAND=C:\\Tools\\copilot.exe'].join('\n')
+      );
+      await fs.writeFile(appEnvPath, 'COPILOT_RUNTIME_TRANSPORT=stdio\nCOPILOT_RUNTIME_COMMAND=/wrong/copilot\n');
+
+      const config = loadAppConfig(bootstrapEnvPath);
+
+      expect(config.copilotRuntimeSettings).toEqual({
+        transport: 'tcp',
+        command: 'C:\\Tools\\copilot.exe'
+      });
+      expect(config.values.COPILOT_RUNTIME_TRANSPORT).toBe('tcp');
+      expect(config.values.COPILOT_RUNTIME_COMMAND).toBe('C:\\Tools\\copilot.exe');
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
@@ -110,6 +137,16 @@ describe('environment config', () => {
     );
     expect(() => parseCopilotStatusTimeoutMs({ COPILOT_STATUS_TIMEOUT_SECONDS: 'soon' })).toThrow(
       'COPILOT_STATUS_TIMEOUT_SECONDS must be a positive number of seconds.'
+    );
+  });
+
+  it('parses and validates Copilot runtime transport settings', () => {
+    expect(parseCopilotRuntimeSettings({ COPILOT_RUNTIME_TRANSPORT: 'tcp', COPILOT_RUNTIME_ARGS: '--flag\nvalue' })).toEqual({
+      transport: 'tcp',
+      args: ['--flag', 'value']
+    });
+    expect(() => parseCopilotRuntimeSettings({ COPILOT_RUNTIME_TRANSPORT: 'named-pipe' })).toThrow(
+      'COPILOT_RUNTIME_TRANSPORT must be one of: stdio, tcp.'
     );
   });
 

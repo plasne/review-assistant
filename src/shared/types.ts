@@ -6,6 +6,7 @@ export type AppConfig = {
   appEnvPath: string;
   agentSettings?: AgentSettings;
   copilotStatusTimeoutMs?: number;
+  copilotRuntimeSettings?: CopilotRuntimeSettings;
 };
 
 export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
@@ -13,6 +14,14 @@ export type AgentReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 export type AgentSettings = {
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
+};
+
+export type CopilotRuntimeTransport = 'stdio' | 'tcp';
+
+export type CopilotRuntimeSettings = {
+  transport?: CopilotRuntimeTransport;
+  command?: string;
+  args?: string[];
 };
 
 export type ThemeTokens = {

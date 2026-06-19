@@ -6,11 +6,11 @@ import { AzureBlobStorageAdapter } from '../../src/main/storage';
 describe('azure blob storage adapter', () => {
   it('uses one container with root app config and per-project config folders', async () => {
     const blobs = new Map<string, string>([
-      ['config/.env', 'USERNAME=app@example.com\n'],
+      ['config/.env', 'USERNAME=app@example.com\nCOPILOT_RUNTIME_COMMAND=/wrong/app/copilot\n'],
       ['config/prompt.md', 'App prompt\n'],
       ['config/mcp.json', '{"mcpServers":{"app":{"command":"app-mcp"}}}\n'],
       ['config/tags.json', '[{"name":"app-tag","description":"App tag"}]\n'],
-      ['sample-project/config/.env', 'USERNAME=project@example.com\n'],
+      ['sample-project/config/.env', 'USERNAME=project@example.com\nCOPILOT_RUNTIME_TRANSPORT=stdio\n'],
       ['sample-project/config/schema.json', '{"type":"object","properties":{"answer":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}}}}\n'],
       ['sample-project/config/config.json', '{"properties":{"/tags":{"path":"/tags","target":"Tags","tab":"Main","feedback":"none","comments":false,"mapping":"tags","presentation":"tags"}}}\n'],
       ['sample-project/config/tags.json', '[{"name":"project-tag","description":"Project tag"}]\n'],
@@ -29,10 +29,18 @@ describe('azure blob storage adapter', () => {
     );
 
     await expect(adapter.listProjects()).resolves.toEqual([{ id: 'sample-project', name: 'sample-project' }]);
-    await expect(adapter.getAppConfig()).resolves.toMatchObject({ USERNAME: 'app@example.com' });
+    await expect(adapter.getAppConfig()).resolves.toEqual({
+      AZURE_STORAGE_ACCOUNT_CONNSTRING: 'UseDevelopmentStorage=true',
+      AZURE_STORAGE_CONTAINER: 'review-assistant',
+      USERNAME: 'app@example.com'
+    });
     await expect(adapter.getAppPrompt()).resolves.toBe('App prompt\n');
     await expect(adapter.getAppMcpConfig()).resolves.toContain('"app"');
-    await expect(adapter.getProjectConfig('sample-project')).resolves.toMatchObject({ USERNAME: 'project@example.com' });
+    await expect(adapter.getProjectConfig('sample-project')).resolves.toEqual({
+      AZURE_STORAGE_ACCOUNT_CONNSTRING: 'UseDevelopmentStorage=true',
+      AZURE_STORAGE_CONTAINER: 'review-assistant',
+      USERNAME: 'project@example.com'
+    });
     await expect(adapter.getTagDefinitions('sample-project')).resolves.toEqual([
       { name: 'project-tag', description: 'Project tag' },
       { name: 'app-tag', description: 'App tag' }

@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { logInfo } from '../shared/logging';
-import type { AppConfig, BackendKind } from '../shared/types';
+import type { AppConfig, BackendKind, CopilotRuntimeSettings, CopilotRuntimeTransport } from '../shared/types';
 import { AgentSettingsError, parseAgentSettingsFromEnvValues } from '../shared/agent-settings';
 
 const SECRET_KEYS = new Set(['AZURE_STORAGE_ACCOUNT_CONNSTRING']);
 const BACKEND_KEYS = ['AZURE_STORAGE_ACCOUNT_CONNSTRING', 'AZURE_STORAGE_ACCOUNT_NAME', 'AZURE_STORAGE_CONTAINER', 'LOCAL_PATH'];
+const COPILOT_RUNTIME_KEYS = ['COPILOT_RUNTIME_COMMAND', 'COPILOT_RUNTIME_ARGS', 'COPILOT_RUNTIME_TRANSPORT'];
 export const DEFAULT_COPILOT_STATUS_TIMEOUT_MS = 30_000;
 
 export class ConfigError extends Error {
@@ -36,6 +37,9 @@ export const parseEnv = (content: string): Record<string, string> => {
   }
   return values;
 };
+
+export const omitCopilotRuntimeSettings = (values: Record<string, string>): Record<string, string> =>
+  Object.fromEntries(Object.entries(values).filter(([key]) => !COPILOT_RUNTIME_KEYS.includes(key)));
 
 export const readEnvFile = (envPath: string): Record<string, string> => {
   if (!fs.existsSync(envPath)) {
@@ -82,12 +86,13 @@ export const loadAppConfig = (envPath = getAppEnvPath()): AppConfig => {
   const values = { ...backendValues, ...appValues };
   const agentSettings = parseAgentSettings(values);
   const copilotStatusTimeoutMs = parseCopilotStatusTimeoutMs(values);
+  const copilotRuntimeSettings = parseCopilotRuntimeSettings(bootstrapValues);
   logInfo('review-assistant.config', {
     source: appEnvPath,
     backendKind,
     values: redactConfig(values)
   });
-  return { backendKind, values, appEnvPath, agentSettings, copilotStatusTimeoutMs };
+  return { backendKind, values, appEnvPath, agentSettings, copilotStatusTimeoutMs, copilotRuntimeSettings };
 };
 
 const resolveEnvRelativePath = (value: string, envPath: string): string =>
@@ -99,7 +104,7 @@ const readAppEnvFile = (appEnvPath: string): Record<string, string> => {
   if (backendOverrides.length > 0) {
     throw new ConfigError(`App config/.env cannot override backend selection keys: ${backendOverrides.join(', ')}`);
   }
-  return values;
+  return omitCopilotRuntimeSettings(values);
 };
 
 export const parseAgentSettings = (values: Record<string, string | undefined>) => {
@@ -125,8 +130,41 @@ export const parseCopilotStatusTimeoutMs = (values: Record<string, string | unde
   return Math.round(timeoutSeconds * 1000);
 };
 
+export const parseCopilotRuntimeSettings = (values: Record<string, string | undefined>): CopilotRuntimeSettings => {
+  const transport = parseCopilotRuntimeTransport(values.COPILOT_RUNTIME_TRANSPORT);
+  const command = optionalTrimmedValue(values.COPILOT_RUNTIME_COMMAND);
+  const args = parseCopilotRuntimeArgs(values.COPILOT_RUNTIME_ARGS);
+  return {
+    ...(transport ? { transport } : {}),
+    ...(command ? { command } : {}),
+    ...(args.length > 0 ? { args } : {})
+  };
+};
+
+const parseCopilotRuntimeTransport = (value: string | undefined): CopilotRuntimeTransport | undefined => {
+  const normalized = optionalTrimmedValue(value)?.toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === 'stdio' || normalized === 'tcp') {
+    return normalized;
+  }
+  throw new ConfigError('COPILOT_RUNTIME_TRANSPORT must be one of: stdio, tcp.');
+};
+
+const parseCopilotRuntimeArgs = (value: string | undefined): string[] =>
+  value
+    ?.split('\n')
+    .map((arg) => arg.trim())
+    .filter(Boolean) ?? [];
+
+const optionalTrimmedValue = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+};
+
 export const loadProjectEnv = (projectEnvPath: string, appValues: Record<string, string>, options: { log?: boolean } = {}): Record<string, string> => {
-  const projectValues = readEnvFile(projectEnvPath);
+  const projectValues = omitCopilotRuntimeSettings(readEnvFile(projectEnvPath));
   const backendOverrides = BACKEND_KEYS.filter((key) => key in projectValues);
   if (backendOverrides.length > 0) {
     throw new ConfigError(`Project config/.env cannot override backend selection keys in v0.1.0: ${backendOverrides.join(', ')}`);

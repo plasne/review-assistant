@@ -8,6 +8,7 @@ import { parseAgentSettingsFromEnvValues } from '../shared/agent-settings';
 import type {
   AppConfig,
   ChatMessage,
+  CopilotRuntimeSettings,
   ExternalMcpServerConfig,
   ToolInvocationRequest,
   ToolInvocationResponse
@@ -162,11 +163,15 @@ export type InferenceAgent = {
   cancel: AgentRuntime['cancel'];
 };
 
-export const createInferenceAgent = (appConfigValues: Record<string, string> | undefined): InferenceAgent =>
+export const createInferenceAgent = (
+  appConfigValues: Record<string, string> | undefined,
+  copilotRuntimeSettings: CopilotRuntimeSettings = {}
+): InferenceAgent =>
   new AgentRuntime({
     workerPath: path.join(__dirname, '../agent/agent-process.js'),
     commandEnv: appConfigValues,
-    agentSettings: parseAgentSettingsFromEnvValues(appConfigValues ?? {})
+    agentSettings: parseAgentSettingsFromEnvValues(appConfigValues ?? {}),
+    copilotRuntimeSettings
   });
 
 export type RunInferenceOptions = {

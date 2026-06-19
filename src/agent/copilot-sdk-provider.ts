@@ -19,7 +19,16 @@ import type {
   ToolResultObject
 } from '@github/copilot-sdk';
 import { configuredAgentSettingKeys } from '../shared/agent-settings';
-import type { AgentErrorEnvelope, AgentSettings, AgentStatusSnapshot, ExternalMcpServerConfig, LocalToolMetadata, ToolInvocationResponse } from '../shared/types';
+import type {
+  AgentErrorEnvelope,
+  AgentSettings,
+  AgentStatusSnapshot,
+  CopilotRuntimeSettings,
+  CopilotRuntimeTransport,
+  ExternalMcpServerConfig,
+  LocalToolMetadata,
+  ToolInvocationResponse
+} from '../shared/types';
 import { resolveCopilotRuntimePath } from '../main/copilot-runtime';
 import type { ActiveProviderRun, AgentProvider, AgentProviderFactoryDeps, ChatContext, ProviderStartRequest } from './provider';
 
@@ -474,10 +483,9 @@ const reasoningTurnId = (reasoningId: string): string | undefined => {
 };
 
 const createClient = (tempDir: string): CopilotClient => {
-  const command = process.env.COPILOT_RUNTIME_COMMAND || resolveCopilotRuntimePath();
-  const args = parseRuntimeArgs(process.env.COPILOT_RUNTIME_ARGS ?? '');
+  const runtimeSettings = parseRuntimeSettingsFromEnv(process.env);
   return new CopilotClient({
-    connection: RuntimeConnection.forStdio({ path: command, args }),
+    connection: createRuntimeConnection(runtimeSettings),
     mode: 'empty',
     workingDirectory: tempDir,
     baseDirectory: tempDir,
@@ -490,6 +498,40 @@ const createClient = (tempDir: string): CopilotClient => {
 };
 
 const parseRuntimeArgs = (value: string): string[] => value.split('\n').filter(Boolean);
+
+export const createRuntimeConnection = (
+  settings: CopilotRuntimeSettings,
+  platform: NodeJS.Platform = process.platform
+): ReturnType<(typeof RuntimeConnection)['forStdio']> | ReturnType<(typeof RuntimeConnection)['forTcp']> => {
+  const transport = settings.transport ?? defaultRuntimeTransport(platform);
+  const command = settings.command || resolveCopilotRuntimePath();
+  const args = settings.args ?? [];
+  return transport === 'tcp'
+    ? RuntimeConnection.forTcp({ path: command, args })
+    : RuntimeConnection.forStdio({ path: command, args });
+};
+
+const parseRuntimeSettingsFromEnv = (env: NodeJS.ProcessEnv): CopilotRuntimeSettings => {
+  const transport = parseRuntimeTransport(env.COPILOT_RUNTIME_TRANSPORT);
+  return {
+    ...(transport ? { transport } : {}),
+    ...(env.COPILOT_RUNTIME_COMMAND ? { command: env.COPILOT_RUNTIME_COMMAND } : {}),
+    ...(env.COPILOT_RUNTIME_ARGS ? { args: parseRuntimeArgs(env.COPILOT_RUNTIME_ARGS) } : {})
+  };
+};
+
+const parseRuntimeTransport = (value: string | undefined): CopilotRuntimeTransport | undefined => {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.toLowerCase();
+  if (normalized === 'stdio' || normalized === 'tcp') {
+    return normalized;
+  }
+  throw new Error('COPILOT_RUNTIME_TRANSPORT must be one of: stdio, tcp.');
+};
+
+const defaultRuntimeTransport = (platform: NodeJS.Platform): CopilotRuntimeTransport => (platform === 'win32' ? 'tcp' : 'stdio');
 
 const stopClient = async (client: CopilotClient, deps: AgentProviderFactoryDeps): Promise<void> => {
   const errors = await client.stop();
