@@ -34,10 +34,16 @@ export const listCopilotRuntimeCandidates = (options: Omit<ResolveOptions, 'exis
   const arch = options.arch ?? process.arch;
   const searchPaths = options.searchPaths ?? requireFromHere.resolve.paths('@github/copilot') ?? [];
   return searchPaths.flatMap((basePath) =>
-    copilotPlatformNames(platform).map((platformName) =>
-      path.join(basePath, '@github', `copilot-${platformName}-${arch}`, copilotBinaryName(platform))
+    copilotPlatformNames(platform).flatMap((platformName) =>
+      expandAsarUnpackedCandidate(path.join(basePath, '@github', `copilot-${platformName}-${arch}`, copilotBinaryName(platform)))
     )
   );
+};
+
+const expandAsarUnpackedCandidate = (candidate: string): string[] => {
+  const unpacked = candidate
+    .replace(/([\\/])app\.asar([\\/])/g, '$1app.asar.unpacked$2');
+  return unpacked === candidate ? [candidate] : [unpacked, candidate];
 };
 
 const copilotBinaryName = (platform: NodeJS.Platform): string => (platform === 'win32' ? 'copilot.exe' : 'copilot');

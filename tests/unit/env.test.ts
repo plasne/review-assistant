@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_COPILOT_STATUS_TIMEOUT_MS,
+  appEnvPathDetails,
   loadAppConfig,
   parseAgentSettings,
   parseCopilotRuntimeSettings,
@@ -27,6 +28,32 @@ describe('environment config', () => {
     expect(selectBackend({ AZURE_STORAGE_ACCOUNT_NAME: 'acct', AZURE_STORAGE_ACCOUNT_CONNSTRING: 'secret' })).toBe(
       'azure-connection-string'
     );
+  });
+
+  it('resolves root app env from the packaged executable directory', () => {
+    const details = appEnvPathDetails({
+      cwd: 'C:\\Users\\user',
+      execPath: 'C:\\Users\\user\\AppData\\Local\\Programs\\Review Assistant\\Review Assistant.exe',
+      env: {}
+    });
+
+    expect(details).toEqual({
+      path: 'C:\\Users\\user\\AppData\\Local\\Programs\\Review Assistant\\.env',
+      source: 'executable-directory'
+    });
+  });
+
+  it('keeps REVIEW_ASSISTANT_APP_ENV as the explicit app env override', () => {
+    const details = appEnvPathDetails({
+      cwd: 'C:\\Users\\user',
+      execPath: 'C:\\Users\\user\\AppData\\Local\\Programs\\Review Assistant\\Review Assistant.exe',
+      env: { REVIEW_ASSISTANT_APP_ENV: 'D:\\configs\\review.env' }
+    });
+
+    expect(details).toEqual({
+      path: 'D:\\configs\\review.env',
+      source: 'override'
+    });
   });
 
   it('resolves local app-level config under LOCAL_PATH', async () => {

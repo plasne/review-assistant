@@ -69,8 +69,26 @@ export const selectBackend = (values: Record<string, string>): BackendKind => {
   throw new ConfigError('No supported backend configured. Set AZURE_STORAGE_ACCOUNT_CONNSTRING, AZURE_STORAGE_ACCOUNT_NAME, or LOCAL_PATH.');
 };
 
-export const getAppEnvPath = (): string =>
-  path.resolve(process.env.REVIEW_ASSISTANT_APP_ENV ?? path.join(process.cwd(), '.env'));
+type AppEnvPathOptions = {
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+  execPath?: string;
+};
+
+export const getAppEnvPath = (options: AppEnvPathOptions = {}): string => appEnvPathDetails(options).path;
+
+export const appEnvPathDetails = (options: AppEnvPathOptions = {}): { path: string; source: 'override' | 'executable-directory' | 'cwd' } => {
+  const env = options.env ?? process.env;
+  if (env.REVIEW_ASSISTANT_APP_ENV?.trim()) {
+    return { path: resolvePlatformPath(env.REVIEW_ASSISTANT_APP_ENV), source: 'override' };
+  }
+  const execPath = options.execPath ?? process.execPath;
+  if (isPackagedReviewAssistantExecutable(execPath)) {
+    const pathApi = pathApiFor(execPath);
+    return { path: pathApi.join(pathApi.dirname(execPath), '.env'), source: 'executable-directory' };
+  }
+  return { path: path.resolve(path.join(options.cwd ?? process.cwd(), '.env')), source: 'cwd' };
+};
 
 export const loadAppConfig = (envPath = getAppEnvPath()): AppConfig => {
   const sourceEnvPath = path.resolve(envPath);
@@ -94,6 +112,20 @@ export const loadAppConfig = (envPath = getAppEnvPath()): AppConfig => {
   });
   return { backendKind, values, appEnvPath, agentSettings, copilotStatusTimeoutMs, copilotRuntimeSettings };
 };
+
+const isPackagedReviewAssistantExecutable = (execPath: string): boolean => {
+  const basename = pathApiFor(execPath).basename(execPath).toLowerCase();
+  return basename === 'review assistant.exe' || basename === 'review assistant';
+};
+
+const resolvePlatformPath = (value: string): string => {
+  const pathApi = pathApiFor(value);
+  return pathApi.isAbsolute(value) ? value : path.resolve(value);
+};
+
+const pathApiFor = (value: string): typeof path.win32 | typeof path.posix => (isWindowsPath(value) ? path.win32 : path);
+
+const isWindowsPath = (value: string): boolean => /^[A-Za-z]:[\\/]/.test(value) || value.includes('\\');
 
 const resolveEnvRelativePath = (value: string, envPath: string): string =>
   path.resolve(path.isAbsolute(value) ? value : path.join(path.dirname(envPath), value));

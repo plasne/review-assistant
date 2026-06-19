@@ -43,7 +43,7 @@ import {
   assertThemeId,
   assertThemeState
 } from '../shared/validators';
-import { ConfigError, loadAppConfig, parseAgentSettings, parseCopilotStatusTimeoutMs } from './env';
+import { appEnvPathDetails, ConfigError, loadAppConfig, parseAgentSettings, parseCopilotStatusTimeoutMs } from './env';
 import { createStorageAdapter, type StorageAdapter } from './storage';
 import { AgentRuntime, AgentRuntimeError } from './agent';
 import { createLocalToolRuntime } from './tools';
@@ -70,8 +70,13 @@ const TEXT_ATTACHMENT_FILTERS = [
 ];
 const LOG_FILE_NAME = 'review-assistant.log';
 
+const launchDirectory = (): string => {
+  const appEnv = appEnvPathDetails();
+  return appEnv.source === 'executable-directory' ? path.dirname(appEnv.path) : process.cwd();
+};
+
 const initializeLaunchLogFile = async (): Promise<void> => {
-  const logPath = path.join(process.cwd(), LOG_FILE_NAME);
+  const logPath = path.join(launchDirectory(), LOG_FILE_NAME);
   try {
     await fs.writeFile(logPath, '');
     setLogFileWriter((line) => {
@@ -91,7 +96,16 @@ const initializeLaunchLogFile = async (): Promise<void> => {
 
 const initializeBackend = async (): Promise<void> => {
   try {
-    const config = loadAppConfig();
+    const appEnv = appEnvPathDetails();
+    logInfo('review-assistant.app-env-path', {
+      path: appEnv.path,
+      source: appEnv.source,
+      exists: fsSync.existsSync(appEnv.path),
+      cwd: process.cwd(),
+      execPath: process.execPath,
+      resourcesPath: (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+    });
+    const config = loadAppConfig(appEnv.path);
     storage = createStorageAdapter(config);
     backendKind = config.backendKind;
     appConfigValues = storage ? await storage.getAppConfig() : config.values;

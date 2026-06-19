@@ -18,6 +18,26 @@ describe('Copilot auth helpers', () => {
     expect(command).toBe(path.join(basePath, '@github', 'copilot-darwin-arm64', 'copilot'));
   });
 
+  it('prefers the unpacked native Copilot runtime when resolved from an Electron asar path', () => {
+    const basePath = path.join('C:\\Users\\user\\AppData\\Local\\Programs\\Review Assistant\\resources\\app.asar', 'node_modules');
+    const unpackedRuntime = path.join(
+      'C:\\Users\\user\\AppData\\Local\\Programs\\Review Assistant\\resources\\app.asar.unpacked',
+      'node_modules',
+      '@github',
+      'copilot-win32-x64',
+      'copilot.exe'
+    );
+
+    const command = resolveCopilotRuntimePath({
+      arch: 'x64',
+      platform: 'win32',
+      searchPaths: [basePath],
+      exists: (candidate) => candidate === unpackedRuntime
+    });
+
+    expect(command).toBe(unpackedRuntime);
+  });
+
   it('throws a clear error when the Copilot runtime package is unavailable', () => {
     expect(() =>
       resolveCopilotRuntimePath({
