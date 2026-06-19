@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -29,7 +30,7 @@ import type {
   LocalToolMetadata,
   ToolInvocationResponse
 } from '../shared/types';
-import { resolveCopilotRuntimePath } from '../main/copilot-runtime';
+import { listCopilotRuntimeCandidates, resolveCopilotRuntimePath } from '../main/copilot-runtime';
 import type { ActiveProviderRun, AgentProvider, AgentProviderFactoryDeps, ChatContext, ProviderStartRequest } from './provider';
 
 type ExternalMcpToolStart = {
@@ -48,9 +49,10 @@ type ProviderTurnStart = {
 export const createCopilotSdkProvider = (deps: AgentProviderFactoryDeps): AgentProvider => ({
   getStatus: async (requestId) => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-copilot-status-'));
-    const client = createClient(tempDir);
     const startedAt = Date.now();
+    let client: CopilotClient | undefined;
     try {
+      client = createClient(tempDir, deps, requestId, startedAt, 'status');
       logCopilotStatusStep(deps, requestId, 'client.start', 'begin', startedAt);
       await client.start();
       logCopilotStatusStep(deps, requestId, 'client.start', 'end', startedAt);
@@ -74,7 +76,9 @@ export const createCopilotSdkProvider = (deps: AgentProviderFactoryDeps): AgentP
     } catch (error) {
       return unavailable(deps, deps.normalizeProviderError(error));
     } finally {
-      await stopClient(client, deps);
+      if (client) {
+        await stopClient(client, deps);
+      }
       await cleanupTempDir(tempDir);
     }
   },
@@ -83,7 +87,7 @@ export const createCopilotSdkProvider = (deps: AgentProviderFactoryDeps): AgentP
 
 const startSdkChat = async (deps: AgentProviderFactoryDeps, request: ProviderStartRequest): Promise<ActiveProviderRun> => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'review-assistant-copilot-'));
-  const client = createClient(tempDir);
+  let client: CopilotClient | undefined;
   let session: Awaited<ReturnType<CopilotClient['createSession']>> | undefined;
   const unsubscribers: Array<() => void> = [];
   const externalMcpToolStarts = new Map<string, ExternalMcpToolStart>();
@@ -108,11 +112,14 @@ const startSdkChat = async (deps: AgentProviderFactoryDeps, request: ProviderSta
         });
       }
     }
-    await stopClient(client, deps);
+    if (client) {
+      await stopClient(client, deps);
+    }
     await cleanupTempDir(tempDir);
   };
 
   try {
+    client = createClient(tempDir, deps, request.requestId, request.startedAt, 'chat');
     await client.start();
     const agentSettings = request.context.agentSettings ?? deps.agentSettings;
     session = await client.createSession({
@@ -482,10 +489,28 @@ const reasoningTurnId = (reasoningId: string): string | undefined => {
   return match?.[1];
 };
 
-const createClient = (tempDir: string): CopilotClient => {
+const createClient = (
+  tempDir: string,
+  deps?: Pick<AgentProviderFactoryDeps, 'sendLog'>,
+  requestId?: string,
+  startedAt = Date.now(),
+  purpose: 'status' | 'chat' = 'chat'
+): CopilotClient => {
   const runtimeSettings = parseRuntimeSettingsFromEnv(process.env);
+  return createClientFromSettings(tempDir, runtimeSettings, deps, requestId, startedAt, purpose);
+};
+
+const createClientFromSettings = (
+  tempDir: string,
+  runtimeSettings: CopilotRuntimeSettings,
+  deps?: Pick<AgentProviderFactoryDeps, 'sendLog'>,
+  requestId?: string,
+  startedAt = Date.now(),
+  purpose: 'status' | 'chat' = 'chat'
+): CopilotClient => {
+  const connection = createRuntimeConnection(runtimeSettings, process.platform, deps, requestId, startedAt, purpose, tempDir);
   return new CopilotClient({
-    connection: createRuntimeConnection(runtimeSettings),
+    connection,
     mode: 'empty',
     workingDirectory: tempDir,
     baseDirectory: tempDir,
@@ -501,14 +526,123 @@ const parseRuntimeArgs = (value: string): string[] => value.split('\n').filter(B
 
 export const createRuntimeConnection = (
   settings: CopilotRuntimeSettings,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  deps?: Pick<AgentProviderFactoryDeps, 'sendLog'>,
+  requestId?: string,
+  startedAt = Date.now(),
+  purpose: 'status' | 'chat' = 'chat',
+  tempDir?: string
 ): ReturnType<(typeof RuntimeConnection)['forStdio']> | ReturnType<(typeof RuntimeConnection)['forTcp']> => {
   const transport = settings.transport ?? defaultRuntimeTransport(platform);
-  const command = settings.command || resolveCopilotRuntimePath();
   const args = settings.args ?? [];
+  const commandSource = settings.command ? 'configured' : 'bundled';
+  deps?.sendLog('info', 'review-assistant.copilot-runtime-settings', {
+    requestId,
+    purpose,
+    transport,
+    transportSource: settings.transport ? 'configured' : 'default',
+    commandSource,
+    hasConfiguredCommand: Boolean(settings.command),
+    configuredCommandChars: settings.command?.length,
+    configuredCommandHasQuotes: settings.command ? /["']/.test(settings.command) : undefined,
+    configuredCommandHasWhitespace: settings.command ? /\s/.test(settings.command) : undefined,
+    argCount: args.length,
+    platform,
+    arch: process.arch,
+    cwd: process.cwd(),
+    execPath: process.execPath,
+    resourcesPath: processResourcesPath(),
+    tempDir,
+    elapsedMs: Date.now() - startedAt
+  });
+  const command = resolveRuntimeCommand(settings.command, deps, requestId, startedAt, transport, purpose);
+  deps?.sendLog('info', 'review-assistant.copilot-runtime-selected', {
+    requestId,
+    purpose,
+    transport,
+    transportSource: settings.transport ? 'configured' : 'default',
+    command,
+    commandSource,
+    argCount: args.length,
+    platform,
+    arch: process.arch,
+    tempDir,
+    elapsedMs: Date.now() - startedAt
+  });
   return transport === 'tcp'
     ? RuntimeConnection.forTcp({ path: command, args })
     : RuntimeConnection.forStdio({ path: command, args });
+};
+
+const resolveRuntimeCommand = (
+  configuredCommand: string | undefined,
+  deps: Pick<AgentProviderFactoryDeps, 'sendLog'> | undefined,
+  requestId: string | undefined,
+  startedAt: number,
+  transport: CopilotRuntimeTransport,
+  purpose: 'status' | 'chat'
+): string => {
+  if (!configuredCommand) {
+    try {
+      const candidates = listCopilotRuntimeCandidates();
+      const command = resolveCopilotRuntimePath();
+      deps?.sendLog('info', 'review-assistant.copilot-runtime-resolved', {
+        requestId,
+        purpose,
+        transport,
+        command,
+        commandSource: 'bundled',
+        exists: true,
+        candidateCount: candidates.length,
+        candidates: candidates.join('; '),
+        elapsedMs: Date.now() - startedAt
+      });
+      return command;
+    } catch (error) {
+      const candidates = listCopilotRuntimeCandidates();
+      deps?.sendLog('error', 'review-assistant.copilot-runtime-resolve-failed', {
+        requestId,
+        purpose,
+        transport,
+        commandSource: 'bundled',
+        candidateCount: candidates.length,
+        candidates: candidates.join('; '),
+        message: error instanceof Error ? error.message : String(error),
+        elapsedMs: Date.now() - startedAt
+      });
+      throw error;
+    }
+  }
+  if (!existsSync(configuredCommand)) {
+    deps?.sendLog('error', 'review-assistant.copilot-runtime-resolve-failed', {
+      requestId,
+      purpose,
+      transport,
+      command: configuredCommand,
+      commandSource: 'configured',
+      exists: false,
+      commandChars: configuredCommand.length,
+      commandHasQuotes: /["']/.test(configuredCommand),
+      commandHasWhitespace: /\s/.test(configuredCommand),
+      elapsedMs: Date.now() - startedAt
+    });
+    throw new Error(
+      `Configured Copilot runtime command does not exist: ${configuredCommand}. Set COPILOT_RUNTIME_COMMAND in the root app .env to a directly spawnable Copilot runtime executable.`
+    );
+  }
+  deps?.sendLog('info', 'review-assistant.copilot-runtime-resolved', {
+    requestId,
+    purpose,
+    transport,
+    command: configuredCommand,
+    commandSource: 'configured',
+    exists: true,
+    commandChars: configuredCommand.length,
+    commandHasQuotes: /["']/.test(configuredCommand),
+    commandHasWhitespace: /\s/.test(configuredCommand),
+    elapsedMs: Date.now() - startedAt
+  });
+  return configuredCommand;
 };
 
 const parseRuntimeSettingsFromEnv = (env: NodeJS.ProcessEnv): CopilotRuntimeSettings => {
@@ -532,6 +666,8 @@ const parseRuntimeTransport = (value: string | undefined): CopilotRuntimeTranspo
 };
 
 const defaultRuntimeTransport = (platform: NodeJS.Platform): CopilotRuntimeTransport => (platform === 'win32' ? 'tcp' : 'stdio');
+
+const processResourcesPath = (): string | undefined => (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
 
 const stopClient = async (client: CopilotClient, deps: AgentProviderFactoryDeps): Promise<void> => {
   const errors = await client.stop();

@@ -98,6 +98,19 @@ const initializeBackend = async (): Promise<void> => {
     agent.setAgentSettings(parseAgentSettings(appConfigValues));
     agent.setCopilotRuntimeSettings(config.copilotRuntimeSettings ?? {});
     agent.setStatusTimeoutMs(parseCopilotStatusTimeoutMs(appConfigValues));
+    logInfo('review-assistant.copilot-runtime-config', {
+      transport: config.copilotRuntimeSettings?.transport ?? (process.platform === 'win32' ? 'tcp' : 'stdio'),
+      transportSource: config.copilotRuntimeSettings?.transport ? 'root-env' : 'default',
+      commandSource: config.copilotRuntimeSettings?.command ? 'root-env' : 'bundled',
+      command: config.copilotRuntimeSettings?.command,
+      commandChars: config.copilotRuntimeSettings?.command?.length,
+      commandHasQuotes: config.copilotRuntimeSettings?.command ? /["']/.test(config.copilotRuntimeSettings.command) : undefined,
+      commandHasWhitespace: config.copilotRuntimeSettings?.command ? /\s/.test(config.copilotRuntimeSettings.command) : undefined,
+      argCount: config.copilotRuntimeSettings?.args?.length ?? 0,
+      platform: process.platform,
+      arch: process.arch,
+      appEnvPath: config.appEnvPath
+    });
   } catch (error) {
     storage = undefined;
     backendKind = undefined;

@@ -396,7 +396,7 @@ const normalizeProviderError = (error: unknown): AgentErrorEnvelope => {
       code: 'BINARY_NOT_FOUND',
       message: 'GitHub Copilot runtime was not found.',
       retryable: true,
-      remediation: 'Install the Review Assistant dependencies or configure a valid GitHub Copilot SDK runtime, then check agent status again.'
+      remediation: binaryNotFoundRemediation(message)
     };
   }
   if (normalized.includes('auth') || normalized.includes('login') || normalized.includes('sign in') || normalized.includes('unauthorized')) {
@@ -434,5 +434,12 @@ const isCopilotRuntimeBinaryNotFound = (normalizedMessage: string): boolean =>
   normalizedMessage.includes('enoent') ||
   normalizedMessage.includes('cannot find module') ||
   normalizedMessage.includes('no such file') ||
+  normalizedMessage.includes('configured copilot runtime command does not exist') ||
   normalizedMessage.includes('copilot cli not found at') ||
   normalizedMessage.includes('github copilot runtime was not found');
+
+const binaryNotFoundRemediation = (message: string): string =>
+  [
+    'Install the Review Assistant dependencies or set COPILOT_RUNTIME_COMMAND in the root app .env to a directly spawnable Copilot runtime executable.',
+    `Diagnostic: ${message}`
+  ].join(' ');

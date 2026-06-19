@@ -6,11 +6,13 @@ describe('agent error normalization', () => {
   it('returns stable user-safe errors for provider failures', () => {
     expect(normalizeProviderError(new Error('spawn copilot ENOENT'))).toMatchObject({
       code: 'BINARY_NOT_FOUND',
-      retryable: true
+      retryable: true,
+      remediation: expect.stringContaining('Diagnostic: spawn copilot ENOENT')
     });
     expect(normalizeProviderError(new Error('Copilot CLI not found at C:\\Tools\\copilot.exe.'))).toMatchObject({
       code: 'BINARY_NOT_FOUND',
-      retryable: true
+      retryable: true,
+      remediation: expect.stringContaining('Diagnostic: Copilot CLI not found at C:\\Tools\\copilot.exe.')
     });
     expect(normalizeProviderError(new Error('Authentication required; please login'))).toMatchObject({
       code: 'AUTH_REQUIRED',

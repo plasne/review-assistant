@@ -36,21 +36,84 @@ const tools: LocalToolMetadata[] = [
 
 describe('copilot SDK provider mapping', () => {
   it('selects stdio by default except TCP on Windows and supports explicit transports', () => {
-    expect(createRuntimeConnection({ command: '/opt/copilot' }, 'darwin')).toEqual({
+    expect(createRuntimeConnection({ command: process.execPath }, 'darwin')).toEqual({
       kind: 'stdio',
-      path: '/opt/copilot',
+      path: process.execPath,
       args: []
     });
-    expect(createRuntimeConnection({ command: 'C:\\Tools\\copilot.exe' }, 'win32')).toEqual({
+    expect(createRuntimeConnection({ command: process.execPath }, 'win32')).toEqual({
       kind: 'tcp',
-      path: 'C:\\Tools\\copilot.exe',
+      path: process.execPath,
       args: []
     });
-    expect(createRuntimeConnection({ transport: 'stdio', command: 'C:\\Tools\\copilot.exe' }, 'win32')).toEqual({
+    expect(createRuntimeConnection({ transport: 'stdio', command: process.execPath }, 'win32')).toEqual({
       kind: 'stdio',
-      path: 'C:\\Tools\\copilot.exe',
+      path: process.execPath,
       args: []
     });
+  });
+
+  it('fails fast when an explicit Copilot runtime command path does not exist', () => {
+    expect(() => createRuntimeConnection({ command: '/missing/copilot' }, 'darwin')).toThrow(
+      'Configured Copilot runtime command does not exist: /missing/copilot.'
+    );
+  });
+
+  it('logs explicit Copilot runtime command resolution details', () => {
+    const logs: Array<{ level: string; event: string; fields?: Record<string, unknown> }> = [];
+
+    createRuntimeConnection(
+      { transport: 'stdio', command: process.execPath, args: ['--version'] },
+      'win32',
+      {
+        sendLog: (level, event, fields) => logs.push({ level, event, fields })
+      },
+      'request-1',
+      Date.now()
+    );
+
+    expect(logs).toEqual([
+      {
+        level: 'info',
+        event: 'review-assistant.copilot-runtime-settings',
+        fields: expect.objectContaining({
+          requestId: 'request-1',
+          transport: 'stdio',
+          transportSource: 'configured',
+          commandSource: 'configured',
+          hasConfiguredCommand: true,
+          configuredCommandChars: process.execPath.length,
+          configuredCommandHasQuotes: false,
+          configuredCommandHasWhitespace: false,
+          argCount: 1,
+          platform: 'win32',
+          execPath: process.execPath
+        })
+      },
+      {
+        level: 'info',
+        event: 'review-assistant.copilot-runtime-resolved',
+        fields: expect.objectContaining({
+          requestId: 'request-1',
+          transport: 'stdio',
+          command: process.execPath,
+          commandSource: 'configured',
+          exists: true
+        })
+      },
+      {
+        level: 'info',
+        event: 'review-assistant.copilot-runtime-selected',
+        fields: expect.objectContaining({
+          requestId: 'request-1',
+          transport: 'stdio',
+          command: process.execPath,
+          commandSource: 'configured',
+          argCount: 1,
+          platform: 'win32'
+        })
+      }
+    ]);
   });
 
   it('builds an explicit SDK tool allowlist without ambient built-ins', () => {

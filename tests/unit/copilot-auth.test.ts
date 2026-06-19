@@ -26,7 +26,9 @@ describe('Copilot auth helpers', () => {
         searchPaths: [path.join('/tmp', 'node_modules')],
         exists: () => false
       })
-    ).toThrow('GitHub Copilot runtime was not found.');
+    ).toThrow(
+      'GitHub Copilot runtime was not found for darwin/x64. Searched: /tmp/node_modules/@github/copilot-darwin-x64/copilot.'
+    );
   });
 
   it('parses the Copilot device login code and verification URL from CLI output', () => {

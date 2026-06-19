@@ -15,18 +15,29 @@ export const resolveCopilotRuntimePath = (options: ResolveOptions = {}): string 
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
   const exists = options.exists ?? existsSync;
-  const searchPaths = options.searchPaths ?? requireFromHere.resolve.paths('@github/copilot') ?? [];
+  const candidates = listCopilotRuntimeCandidates({ platform, arch, searchPaths: options.searchPaths });
 
-  for (const basePath of searchPaths) {
-    for (const platformName of copilotPlatformNames(platform)) {
-      const binary = path.join(basePath, '@github', `copilot-${platformName}-${arch}`, copilotBinaryName(platform));
-      if (exists(binary)) {
-        return binary;
-      }
+  for (const binary of candidates) {
+    if (exists(binary)) {
+      return binary;
     }
   }
 
-  throw new Error('GitHub Copilot runtime was not found. Ensure @github/copilot is installed with its platform runtime package.');
+  const searched = candidates.length > 0 ? candidates.join('; ') : 'no package search paths were available';
+  throw new Error(
+    `GitHub Copilot runtime was not found for ${platform}/${arch}. Searched: ${searched}. Ensure @github/copilot is installed with its platform runtime package or set COPILOT_RUNTIME_COMMAND in the root app .env.`
+  );
+};
+
+export const listCopilotRuntimeCandidates = (options: Omit<ResolveOptions, 'exists'> = {}): string[] => {
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const searchPaths = options.searchPaths ?? requireFromHere.resolve.paths('@github/copilot') ?? [];
+  return searchPaths.flatMap((basePath) =>
+    copilotPlatformNames(platform).map((platformName) =>
+      path.join(basePath, '@github', `copilot-${platformName}-${arch}`, copilotBinaryName(platform))
+    )
+  );
 };
 
 const copilotBinaryName = (platform: NodeJS.Platform): string => (platform === 'win32' ? 'copilot.exe' : 'copilot');
