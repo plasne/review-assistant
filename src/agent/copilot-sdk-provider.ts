@@ -508,18 +508,28 @@ const createClientFromSettings = (
   startedAt = Date.now(),
   purpose: 'status' | 'chat' = 'chat'
 ): CopilotClient => {
+  return new CopilotClient(createCopilotClientOptions(tempDir, runtimeSettings, deps, requestId, startedAt, purpose));
+};
+
+export const createCopilotClientOptions = (
+  tempDir: string,
+  runtimeSettings: CopilotRuntimeSettings,
+  deps?: Pick<AgentProviderFactoryDeps, 'sendLog'>,
+  requestId?: string,
+  startedAt = Date.now(),
+  purpose: 'status' | 'chat' = 'chat'
+): ConstructorParameters<typeof CopilotClient>[0] => {
   const connection = createRuntimeConnection(runtimeSettings, process.platform, deps, requestId, startedAt, purpose, tempDir);
-  return new CopilotClient({
+  return {
     connection,
     mode: 'empty',
     workingDirectory: tempDir,
-    baseDirectory: tempDir,
     logLevel: 'error',
     env: {
       ...process.env,
       NO_COLOR: '1'
     }
-  });
+  };
 };
 
 const parseRuntimeArgs = (value: string): string[] => value.split('\n').filter(Boolean);
@@ -553,6 +563,7 @@ export const createRuntimeConnection = (
     execPath: process.execPath,
     resourcesPath: processResourcesPath(),
     tempDir,
+    baseDirectorySource: 'default-copilot-home',
     elapsedMs: Date.now() - startedAt
   });
   const command = resolveRuntimeCommand(settings.command, deps, requestId, startedAt, transport, purpose);
@@ -567,6 +578,7 @@ export const createRuntimeConnection = (
     platform,
     arch: process.arch,
     tempDir,
+    baseDirectorySource: 'default-copilot-home',
     elapsedMs: Date.now() - startedAt
   });
   return transport === 'tcp'

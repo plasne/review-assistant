@@ -1749,15 +1749,23 @@ pre {
 }
 
 .agent-status {
-  align-items: center;
+  align-items: flex-start;
   background: color-mix(in srgb, var(--danger) 35%, var(--bg-2));
   border: 1px solid var(--danger);
   border-radius: 0.5rem;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
-  justify-content: space-between;
+  justify-content: flex-start;
   margin-bottom: 1rem;
   padding: 0.75rem;
+}
+
+.agent-status > span {
+  flex: 1 1 16rem;
+  line-height: 1.45;
+  min-width: min(100%, 16rem);
+  overflow-wrap: anywhere;
 }
 
 .agent-status .secondary-button,

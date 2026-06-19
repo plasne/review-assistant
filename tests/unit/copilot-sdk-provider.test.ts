@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   accumulateReasoningDelta,
+  createCopilotClientOptions,
   createRuntimeConnection,
   createPermissionHandler,
   logExternalMcpToolCompleted,
@@ -57,6 +58,15 @@ describe('copilot SDK provider mapping', () => {
     expect(() => createRuntimeConnection({ command: '/missing/copilot' }, 'darwin')).toThrow(
       'Configured Copilot runtime command does not exist: /missing/copilot.'
     );
+  });
+
+  it('uses the default Copilot home so SDK status shares auth with copilot login', () => {
+    const options = createCopilotClientOptions('/tmp/review-assistant-working-dir', { command: process.execPath });
+
+    expect(options).toMatchObject({
+      workingDirectory: '/tmp/review-assistant-working-dir'
+    });
+    expect(Object.prototype.hasOwnProperty.call(options, 'baseDirectory')).toBe(false);
   });
 
   it('logs explicit Copilot runtime command resolution details', () => {
