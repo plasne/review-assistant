@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   accumulateReasoningDelta,
   createCopilotClientOptions,
@@ -36,6 +38,10 @@ const tools: LocalToolMetadata[] = [
 ];
 
 describe('copilot SDK provider mapping', () => {
+  afterEach(() => {
+    delete process.env.COPILOT_HOME;
+  });
+
   it('selects stdio by default except TCP on Windows and supports explicit transports', () => {
     expect(createRuntimeConnection({ command: process.execPath }, 'darwin')).toEqual({
       kind: 'stdio',
@@ -64,9 +70,19 @@ describe('copilot SDK provider mapping', () => {
     const options = createCopilotClientOptions('/tmp/review-assistant-working-dir', { command: process.execPath });
 
     expect(options).toMatchObject({
-      workingDirectory: '/tmp/review-assistant-working-dir'
+      workingDirectory: '/tmp/review-assistant-working-dir',
+      baseDirectory: path.join(os.homedir(), '.copilot')
     });
-    expect(Object.prototype.hasOwnProperty.call(options, 'baseDirectory')).toBe(false);
+  });
+
+  it('preserves an explicit COPILOT_HOME when creating the SDK client', () => {
+    process.env.COPILOT_HOME = '/tmp/copilot-home';
+
+    const options = createCopilotClientOptions('/tmp/review-assistant-working-dir', { command: process.execPath });
+
+    expect(options).toMatchObject({
+      baseDirectory: '/tmp/copilot-home'
+    });
   });
 
   it('logs explicit Copilot runtime command resolution details', () => {

@@ -519,11 +519,13 @@ export const createCopilotClientOptions = (
   startedAt = Date.now(),
   purpose: 'status' | 'chat' = 'chat'
 ): ConstructorParameters<typeof CopilotClient>[0] => {
+  const baseDirectory = defaultCopilotHome();
   const connection = createRuntimeConnection(runtimeSettings, process.platform, deps, requestId, startedAt, purpose, tempDir);
   return {
     connection,
     mode: 'empty',
     workingDirectory: tempDir,
+    baseDirectory,
     logLevel: 'error',
     env: {
       ...process.env,
@@ -563,7 +565,7 @@ export const createRuntimeConnection = (
     execPath: process.execPath,
     resourcesPath: processResourcesPath(),
     tempDir,
-    baseDirectorySource: 'default-copilot-home',
+    baseDirectorySource: process.env.COPILOT_HOME ? 'env' : 'default-copilot-home',
     elapsedMs: Date.now() - startedAt
   });
   const command = resolveRuntimeCommand(settings.command, deps, requestId, startedAt, transport, purpose);
@@ -578,7 +580,7 @@ export const createRuntimeConnection = (
     platform,
     arch: process.arch,
     tempDir,
-    baseDirectorySource: 'default-copilot-home',
+    baseDirectorySource: process.env.COPILOT_HOME ? 'env' : 'default-copilot-home',
     elapsedMs: Date.now() - startedAt
   });
   return transport === 'tcp'
@@ -678,6 +680,8 @@ const parseRuntimeTransport = (value: string | undefined): CopilotRuntimeTranspo
 };
 
 const defaultRuntimeTransport = (platform: NodeJS.Platform): CopilotRuntimeTransport => (platform === 'win32' ? 'tcp' : 'stdio');
+
+const defaultCopilotHome = (): string => process.env.COPILOT_HOME ?? path.join(os.homedir(), '.copilot');
 
 const processResourcesPath = (): string | undefined => (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
 
