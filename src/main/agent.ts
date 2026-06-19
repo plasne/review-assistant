@@ -466,7 +466,7 @@ const legacyCopilotRuntimeSettings = (options: AgentRuntimeOptions): CopilotRunt
 export const normalizeProviderError = (error: unknown): AgentErrorEnvelope => {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
-  if (normalized.includes('enoent') || normalized.includes('not found')) {
+  if (isCopilotRuntimeBinaryNotFound(normalized)) {
     return {
       code: 'BINARY_NOT_FOUND',
       message: 'GitHub Copilot runtime was not found.',
@@ -504,6 +504,13 @@ export const normalizeProviderError = (error: unknown): AgentErrorEnvelope => {
     remediation: 'Check GitHub Copilot availability and try again.'
   };
 };
+
+const isCopilotRuntimeBinaryNotFound = (normalizedMessage: string): boolean =>
+  normalizedMessage.includes('enoent') ||
+  normalizedMessage.includes('cannot find module') ||
+  normalizedMessage.includes('no such file') ||
+  normalizedMessage.includes('copilot cli not found at') ||
+  normalizedMessage.includes('github copilot runtime was not found');
 
 const createStatusTimeoutError = (timeoutMs: number): AgentErrorEnvelope => ({
   code: 'STATUS_TIMEOUT',

@@ -413,6 +413,22 @@ describe('agent runtime streaming pipeline', () => {
     expect(info.mock.calls.some(([line]) => String(line).includes('review-assistant.copilot-status-step'))).toBe(true);
   });
 
+  it('does not report TCP startup diagnostics as a missing Copilot runtime', async () => {
+    const runtime = new AgentRuntime({
+      workerPath,
+      providerModule: fakeProviderModule,
+      commandEnv: { FAKE_COPILOT_FAIL: 'tcp-start' }
+    });
+
+    await expect(runtime.getStatus()).resolves.toMatchObject({
+      availability: 'unavailable',
+      error: {
+        code: 'PROVIDER_ERROR',
+        message: 'Copilot runtime started but server port not found in startup output.'
+      }
+    });
+  });
+
   it('returns an explicit status timeout instead of a generic provider error when the worker hangs', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const runtime = new AgentRuntime({

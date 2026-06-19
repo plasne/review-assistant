@@ -8,6 +8,10 @@ describe('agent error normalization', () => {
       code: 'BINARY_NOT_FOUND',
       retryable: true
     });
+    expect(normalizeProviderError(new Error('Copilot CLI not found at C:\\Tools\\copilot.exe.'))).toMatchObject({
+      code: 'BINARY_NOT_FOUND',
+      retryable: true
+    });
     expect(normalizeProviderError(new Error('Authentication required; please login'))).toMatchObject({
       code: 'AUTH_REQUIRED',
       retryable: true
@@ -15,6 +19,14 @@ describe('agent error normalization', () => {
     expect(normalizeProviderError(new Error('Context too large for GitHub Copilot request.'))).toMatchObject({
       code: 'CONTEXT_TOO_LARGE',
       retryable: false
+    });
+  });
+
+  it('does not misclassify TCP startup diagnostics containing not found as a missing runtime binary', () => {
+    expect(normalizeProviderError(new Error('Copilot runtime started but server port not found in startup output.'))).toMatchObject({
+      code: 'PROVIDER_ERROR',
+      message: 'Copilot runtime started but server port not found in startup output.',
+      retryable: true
     });
   });
 });

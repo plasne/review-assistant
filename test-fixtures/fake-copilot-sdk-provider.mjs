@@ -14,6 +14,14 @@ export const createAgentProvider = ({ providerMetadata, requestTool, normalizePr
         settings: agentSettings
       };
     }
+    if (process.env.FAKE_COPILOT_FAIL === 'tcp-start') {
+      return {
+        provider: providerMetadata,
+        availability: 'unavailable',
+        error: normalizeProviderError(new Error('Copilot runtime started but server port not found in startup output.')),
+        settings: agentSettings
+      };
+    }
     if (process.env.FAKE_COPILOT_HANG_STATUS === '1') {
       await new Promise(() => undefined);
     }
